@@ -633,3 +633,159 @@ the RC-030 commit intact only after checking the dependency order. The
 additive analytics projection has no migration rollback. The disposable local
 fixture database and temporary CLI outputs are recoverable local artifacts and
 must only be removed after confirming no local process uses them.
+
+## LinkedIn producer reliability follow-up after RC-027
+
+Date: 2026-09-09
+
+Worktree: `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth`
+
+Branch: `temp/rc-a-observability-growth`
+
+Combined baseline ancestry verified: `5cd2ece533e4e7615a8b6a7b08516014d5b82748`
+
+Implementation commit: `9ac2ab4182c66d1aecdb6150574fdce6012153ca`
+
+Status: **implementation verified offline; RC-027 live acceptance remains
+pending**. The current host pilot is not reclassified as complete and no live
+request was made in this follow-up. C still owns integration, shared request
+accounting, and the next combined pilot.
+
+### Actual pilot diagnosis
+
+The RC-027 receipt and the persisted producer database were reviewed without
+changing the host. The four LinkedIn companies produced two partial scans each,
+all with `PARTIAL_SUSPICIOUS_EMPTY`. The persisted producer state contained 8
+runs, 8 company scans, 111 search cards, 20 producer jobs and 20 producer job
+observations. The integrated receipt separately reports 22 transport
+observations and 21 canonical jobs; that is an aggregation difference between
+the producer state and the integrated staging database, not evidence that the
+producer state was changed here.
+
+The page evidence shows valid cards before later suspicious pages: helmag had
+complete pages through starts 0-40, while NOVENTI and Vincenz had a complete
+page at start 0; MALZERS had no persisted cards. Later pages were recorded as
+`SUSPICIOUS_EMPTY`. The producer stores page status, body hash and a bounded
+classification, but not the response body. Host journal queries also supplied
+no acquisition entries, and the response bodies could not be copied because
+the evidence files are root-only. Therefore the exact historical split between
+source blocking, legitimate empty results, and a short malformed response is
+not provable from RC-027 alone. It must not be relabelled as a parser failure
+or a confirmed empty result.
+
+The persisted detail state does establish the budget effect. Across the
+producer runs, successful details were followed by `RETRY`/`BUDGET_EXHAUSTED`
+rows: helmag had 35 cycle-1 and 43 cycle-2 detail failures, and NOVENTI had 5
+cycle-2 failures. The receipt measured 190/200 cumulative attempts (135 in
+cycle 1, 55 in cycle 2); provider credits and cost were reported as unknown by
+transport, never zero. No lifecycle events were created for the partial scans,
+and the integrated tasks remained `valid_snapshot=0`, `closure_safe=0`; no
+publication occurred.
+
+Disposition of the investigated causes:
+
+| Area | Finding and disposition |
+| --- | --- |
+| Company filtering | `build_search_url` retains `f_C`, Germany `location`, and `geoId`; ownership still requires the card/detail company URL to resolve to the manifest group. Existing source-gate tests pass. |
+| Pagination | No historical pagination defect can be proved without bodies. Offline replay now proves that multiple nonempty pages continue and only explicit empty termination completes; cap/saturation remains partial. |
+| Suspicious-empty classification | A demonstrated defect was fixed: a short 200 fragment containing a valid card was previously marked suspicious before parsing. It is now parsed first; short cardless/non-no-result responses remain suspicious. Historical suspicious pages remain unresolved. |
+| Detail extraction | Apply fallback to the LinkedIn job URL was removed; an absent apply CTA is now blank at producer level and `unknown` at the observation boundary. Posted text now requires date-like evidence or a `time` element, so company text cannot become a posted date. Existing criteria, location, description, employment, workplace, applicant and external URL extraction remain covered. |
+| Detail failure/budget | Retry and provider budget outcomes remain explicit. A failed attempt does not create a job or reset cached freshness. |
+| Cache and resume | Pilot cycles reuse durable completed detail without issuing another detail request. Pending detail is transferred to the current run with its attempt count, due time and last error, rather than receiving a fresh budget; the old queue row is marked `TRANSFERRED`. |
+| Closure/publication | Existing lifecycle gates were preserved: only complete scan statuses reconcile absence. Partial, blocked, suspicious and budget-exhausted scans cannot close jobs or produce a valid zero snapshot. |
+| Cost accounting | `WebshareTransport` now exposes actual attempt counts by kind, including retries; logical calls remain separately observable. Provider credits/cost remain unknown when the transport does not report them. |
+| Wrapper/eligibility | `scripts/run_manifested_linkedin.py` was inspected and unchanged. It defaults to the dual-source pilot and requires `--include-single-source` for expansion; no employer producer or shared contract was edited. |
+
+### Exact changed files
+
+Commit `9ac2ab4182c66d1aecdb6150574fdce6012153ca` changes only:
+
+- `scripts/master_linkedin_jobs_catalog.py`
+- `tests/test_master_linkedin_jobs_catalog.py`
+- `tests/test_producer_adapters.py`
+- `tests/fixtures/linkedin_job_search_compact_valid.html`
+
+No deployment, migration, backend shared contract, employer producer, VPS,
+Turso, R2, provider account, or production data was changed.
+
+### Offline commands and results
+
+All Python commands used the repository interpreter required by `AGENTS.md`:
+
+`C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe`
+
+```text
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' --version
+Python 3.12.7
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest tests/test_master_linkedin_jobs_catalog.py tests/test_producer_adapters.py -q
+67 passed in 12.61s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest tests/test_master_linkedin_jobs_catalog.py tests/test_producer_adapters.py tests/test_rc009_normalization_publication.py tests/test_source_eligibility_manifest.py tests/test_rc010_first_acquisition_slice.py tests/test_acquisition_quality.py -q
+89 passed in 16.77s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m ruff check scripts/master_linkedin_jobs_catalog.py backend/acquisition/producer_adapters.py tests/test_master_linkedin_jobs_catalog.py tests/test_producer_adapters.py
+All checks passed!
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m py_compile scripts/master_linkedin_jobs_catalog.py backend/acquisition/producer_adapters.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+The focused tests cover company/Germany URL scope, multi-page completion,
+compact valid cards, detail fields and missing apply/date evidence, adapter
+field preservation, retry-inclusive request caps, pilot cache reuse, pending
+detail adoption, budget quarantine, and partial-scan lifecycle protection.
+They replay sanitized fixture behavior and persisted-state classifications;
+they do not reproduce the unavailable raw RC-027 response bodies.
+
+### Acceptance mapping
+
+| Requested proof | Result | Boundary |
+| --- | --- | --- |
+| Company filtering and pagination completion | Satisfied offline | C must verify page starts, terminal evidence and `f_C` on the next bounded live run. |
+| Detail extraction, missing fields, supported fields and application URLs | Satisfied offline | C must verify the actual current guest markup and preserve response classification/raw evidence within the approved evidence policy. |
+| Current-cycle cache attribution | Satisfied offline | Verify run/scan IDs in the next integrated state. |
+| Pending detail resumes without repeating completed work | Satisfied offline | Verify queue transfer and attempt counts after a deliberately interrupted bounded run. |
+| Retry/discovery/detail limits and explicit budget exhaustion | Satisfied offline for producer transport | C remains authoritative for the combined source/provider/browser cap. Cost is unknown unless the provider transport reports it. |
+| Partial/blocked scans cannot close existing jobs | Satisfied offline and observed in RC-027 integrated state | No publication or closure may be inferred from successful cards inside a partial scan. |
+| Complete status requires completion evidence | Satisfied offline | Historical RC-027 statuses remain partial. |
+
+### Smallest live verification for C
+
+After integrating `9ac2ab4182c66d1aecdb6150574fdce6012153ca`, C should run one
+manifest-approved LinkedIn company for one bounded cycle under the existing
+combined accounting owner: one worker/browser, retry limit 1, the existing
+per-company attempt ceiling, and an explicitly recorded cumulative request and
+cost cap. Do not expand eligibility or purchase/top up a provider.
+
+The receipt should retain, without credentials, the request kind and actual
+attempt count (including retries), each search start and classification, card
+count, detail success/failure/pending counts, provider credit/cost or
+`unknown`, scan status, lifecycle/closure decision, and publication decision.
+The minimum pass is: every search URL retains the manifest company filter and
+Germany filters; completion has explicit empty/validated-terminal evidence;
+valid cards are not suspicious solely because the body is short; failed or
+budget-exhausted detail work remains pending/partial; and no partial or blocked
+scan closes or publishes existing jobs. A second bounded cycle on the same
+company should verify completed detail cache reuse and pending-detail transfer
+separately. This is the next live verification, not performed by A.
+
+### Handoff and rollback
+
+C may cherry-pick/integrate the immutable commit
+`9ac2ab4182c66d1aecdb6150574fdce6012153ca` after checking for newer shared
+work. Do not amend or rebase it. B remains the owner for employer/runtime
+changes, and C remains the owner for shared contracts, deployment, VPS
+mutations, and live request accounting.
+
+RC-027 remains blocked on source-complete evidence, integrated runtime
+verification, and C's acceptance decision; no later expansion should treat
+this offline repair as live operational acceptance. To roll back only this
+lane, review descendants and run `git revert
+9ac2ab4182c66d1aecdb6150574fdce6012153ca` on the integration branch. Do not
+reset, clean, or restore whole files. The revert removes only the producer
+repair, focused tests, and sanitized fixture; it does not touch prior
+analytics/expansion work or any host/provider state.
