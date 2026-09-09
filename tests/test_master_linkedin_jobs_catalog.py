@@ -50,6 +50,7 @@ from scripts.master_linkedin_jobs_catalog import (
     parse_job_detail,
     parse_search_page,
     read_current_catalog_generation,
+    is_suspicious_empty_body,
     detail_refresh_required,
     detail_refresh_decision,
     union_job_ids,
@@ -297,6 +298,14 @@ def test_search_parser_recognizes_explicit_no_results_and_rejects_http_200_chall
     assert challenge.blocked_reason == "login_or_challenge"
 
 
+def test_compact_valid_card_is_not_misclassified_as_suspicious_empty() -> None:
+    body = (FIXTURES / "linkedin_job_search_compact_valid.html").read_text(encoding="utf-8")
+
+    assert len(body) < 200
+    assert not is_suspicious_empty_body(body)
+    assert parse_search_page(body).cards[0].linkedin_job_id == "77"
+
+
 def test_detail_parser_extracts_detail_fields_and_apply_metadata() -> None:
     detail = parse_job_detail("1234567890", (FIXTURES / "linkedin_job_detail.html").read_text())
 
@@ -311,6 +320,26 @@ def test_detail_parser_extracts_detail_fields_and_apply_metadata() -> None:
     assert detail.applicant_count == "12"
     assert detail.employment_type == "Full-time"
     assert detail.workplace_type == "Hybrid"
+
+
+def test_detail_parser_does_not_invent_apply_url_or_posted_date() -> None:
+    detail = parse_job_detail(
+        "77",
+        """
+        <h1 class="top-card-layout__title">Engineer</h1>
+        <div class="top-card-layout__second-subline"><a href="https://www.linkedin.com/company/acme">Acme</a></div>
+        <div class="top-card-layout__first-subline"><span>Berlin, Germany</span></div>
+        <div class="top-card-layout__entity-info"><span>Acme</span><span>7 applicants</span></div>
+        <a href="https://www.linkedin.com/jobs/view/77">Engineer</a>
+        <div class="description__text">Description.</div>
+        """,
+    )
+
+    assert detail.apply_url_raw == ""
+    assert detail.apply_url_canonical == ""
+    assert detail.apply_url_source == ""
+    assert detail.posted_text == ""
+    assert detail.applicant_count == "7"
 
 
 def test_card_and_detail_urls_must_both_match_group() -> None:
@@ -717,6 +746,41 @@ def test_webshare_reuses_worker_proxy_sessions_and_closes_them(monkeypatch: pyte
     assert all("http" not in str(row) for row in transport.proxy_health_snapshot())
 
 
+def test_webshare_request_cap_counts_retry_attempts_by_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = [503, 200]
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.trust_env = True
+
+        def get(self, _url: str, **_kwargs: object) -> object:
+            status = responses.pop(0)
+            return type("FakeResponse", (), {"status_code": status, "text": "temporary" if status == 503 else "ok"})()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(catalog_module.requests, "Session", FakeSession)
+    transport = WebshareTransport(
+        (
+            WebshareProxy("proxy-1:8080", "http://proxy-1:8080"),
+            WebshareProxy("proxy-2:8080", "http://proxy-2:8080"),
+        ),
+        retry_limit=1,
+        max_requests=2,
+        sleep=lambda _seconds: None,
+        request_limiter=AdaptiveConcurrency(initial=2, minimum=1, maximum=2),
+    )
+
+    response = transport.get("https://example.test/search", kind="search")
+
+    assert response.status_code == 200
+    assert transport._request_count == 2
+    assert transport.request_counts_by_kind == {"search": 2}
+    transport.close()
+
+
 def test_proxy_health_records_cooldowns_and_persists_without_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     responses = [429, 200]
 
@@ -963,6 +1027,52 @@ def test_runner_publishes_only_detail_verified_company_jobs_and_keeps_query_scop
     state.close()
 
 
+def test_runner_completes_multiple_pages_only_after_explicit_empty_termination(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, [{
+        "canonical_CompanyID": "C-001",
+        "company_name": "Acme",
+        "linkedin_company_url": "https://www.linkedin.com/company/acme",
+        "linkedin_slug": "acme",
+        "linkedin_company_id": "22",
+    }])
+    pagination = tmp_path / "pagination.json"
+    pagination.write_text(
+        json.dumps({
+            "endpoint": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+            "page_step": 10,
+            "full_card_count": 4,
+            "max_start": 30,
+        }),
+        encoding="utf-8",
+    )
+    first_page = (FIXTURES / "linkedin_job_search_valid.html").read_text(encoding="utf-8")
+    second_page = first_page.replace("1234567890", "2000000000").replace("1234567891", "2000000001")
+    empty = (FIXTURES / "linkedin_job_search_no_results.html").read_text(encoding="utf-8")
+    transport = SearchBodyTransport({"0": first_page, "10": second_page, "20": empty, "30": empty})
+
+    metrics = CatalogRunner(
+        RunnerConfig(
+            input_csv=source,
+            output_dir=tmp_path / "output",
+            pagination_report=pagination,
+            mode="smoke",
+            max_companies=1,
+        ),
+        transport=transport,
+    ).run()
+
+    assert metrics["companies_completed"] == 1
+    assert metrics["run_outcome"] == "COMPLETE"
+    assert {url.split("start=")[1].split("&")[0] for url, kind in transport.urls if kind == "search"} == {"0", "10", "20", "30"}
+    state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    page_rows = state.connection.execute(
+        "SELECT page_start, status FROM search_pages ORDER BY page_start"
+    ).fetchall()
+    assert [tuple(row) for row in page_rows] == [(0, "COMPLETE"), (10, "COMPLETE"), (20, "COMPLETE"), (30, "COMPLETE")]
+    state.close()
+
+
 def test_runner_rejects_detail_company_mismatch_and_does_not_publish_it(tmp_path: Path) -> None:
     source = tmp_path / "companies.csv"
     write_source_csv(
@@ -1113,6 +1223,78 @@ def test_default_daily_refresh_reuses_durable_detail_and_marks_volatile_fields_s
     assert row["volatile_fields_status"] == "STALE"
     assert row["applicant_count_observed_at"] == "2026-08-31T08:00:00Z"
     assert row["detail_last_refreshed_at"] == "2026-08-31T08:00:00Z"
+    state.close()
+
+
+def test_pilot_cycle_reuses_completed_detail_without_repeating_requests(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, [{
+        "canonical_CompanyID": "C-001",
+        "company_name": "Acme",
+        "linkedin_company_url": "https://www.linkedin.com/company/acme",
+        "linkedin_slug": "acme",
+        "linkedin_company_id": "22",
+    }])
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+    body = (FIXTURES / "linkedin_job_search_valid.html").read_text(encoding="utf-8")
+    CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="pilot", max_companies=1),
+        transport=ScriptedTransport(search_body=body),
+        now=lambda: "2026-08-31T08:00:00Z",
+    ).run()
+    second_transport = ScriptedTransport(search_body=body)
+
+    second = CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="pilot", max_companies=1),
+        transport=second_transport,
+        now=lambda: "2026-08-31T12:00:00Z",
+    ).run()
+
+    assert second["detail_successes"] == 0
+    assert second["detail_cache_hits"] == 2
+    assert second["detail_avoided_requests"] == 2
+    assert not any(kind == "detail" for _, kind in second_transport.urls)
+
+
+def test_pending_detail_is_adopted_with_attempt_history_instead_of_resetting_budget(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, [{
+        "canonical_CompanyID": "C-001",
+        "company_name": "Acme",
+        "linkedin_company_url": "https://www.linkedin.com/company/acme",
+        "linkedin_slug": "acme",
+        "linkedin_company_id": "22",
+    }])
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+    body = (FIXTURES / "linkedin_job_search_valid.html").read_text(encoding="utf-8")
+    first = CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="full", max_companies=1),
+        transport=DetailFailureTransport(search_body=body),
+        now=lambda: "2026-08-31T08:00:00Z",
+    ).run()
+    pending_state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    with pending_state.connection:
+        pending_state.connection.execute(
+            "UPDATE detail_queue SET next_attempt_at='' WHERE run_id=? AND status='RETRY'",
+            (first["run_id"],),
+        )
+    pending_state.close()
+    second_transport = ScriptedTransport(search_body=body)
+    second = CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="pilot", max_companies=1),
+        transport=second_transport,
+        now=lambda: "2026-08-31T10:00:00Z",
+    ).run()
+
+    assert first["run_outcome"] == "PARTIAL"
+    assert second["detail_resumed"] == 2
+    assert second["detail_successes"] == 2
+    assert sum(kind == "detail" for _, kind in second_transport.urls) == 2
+    state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    assert state.connection.execute("SELECT COUNT(*) FROM detail_queue WHERE status='TRANSFERRED'").fetchone()[0] == 2
+    assert state.connection.execute("SELECT COUNT(*) FROM detail_queue WHERE status='DONE' AND attempt_count=1").fetchone()[0] == 2
     state.close()
 
 
@@ -1490,6 +1672,39 @@ def test_suspicious_empty_pages_remain_partial_for_empty_first_and_after_nonempt
     state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
     assert state.connection.execute("SELECT status FROM company_scans").fetchone()[0] == "PARTIAL_SUSPICIOUS_EMPTY"
     assert state.connection.execute("SELECT COUNT(*) FROM search_pages WHERE status='SUSPICIOUS_EMPTY'").fetchone()[0] >= 1
+    state.close()
+
+
+def test_partial_suspicious_rescan_does_not_close_existing_jobs_or_refresh_success_time(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, [{
+        "canonical_CompanyID": "C-001",
+        "company_name": "Acme",
+        "linkedin_company_url": "https://www.linkedin.com/company/acme",
+        "linkedin_slug": "acme",
+        "linkedin_company_id": "22",
+    }])
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+    valid = (FIXTURES / "linkedin_job_search_valid.html").read_text(encoding="utf-8")
+    CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="full", max_companies=1),
+        transport=ScriptedTransport(search_body=valid),
+        now=lambda: "2026-08-31T08:00:00Z",
+    ).run()
+    suspicious = (FIXTURES / "linkedin_job_search_suspicious_empty.html").read_text(encoding="utf-8")
+    CatalogRunner(
+        RunnerConfig(input_csv=source, output_dir=tmp_path / "output", pagination_report=pagination, mode="pilot", max_companies=1),
+        transport=SearchBodyTransport({"0": suspicious, "10": suspicious}),
+        now=lambda: "2026-09-01T08:00:00Z",
+    ).run()
+
+    state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    row = state.get_catalog_row("22", "1234567890")
+    assert row["lifecycle_status"] == "active"
+    assert row["absence_count"] == "0"
+    assert row["last_successful_company_scan_at"] == "2026-08-31T08:00:00Z"
+    assert state.connection.execute("SELECT COUNT(*) FROM lifecycle_events").fetchone()[0] == 2
     state.close()
 
 

@@ -702,7 +702,11 @@ def is_suspicious_empty_body(body: object) -> bool:
         return False
     if re.search(r"jobs-search-no-results|no jobs found", value, flags=re.IGNORECASE):
         return False
-    return len(value) < 200
+    # The guest endpoint can return a compact HTML fragment containing valid
+    # cards.  Length alone is not evidence of a suspicious empty response;
+    # parse the fragment before applying the short-body heuristic.
+    parsed = parse_search_page(value)
+    return not parsed.cards and not parsed.is_no_results and len(value) < 200
 
 
 def redact_proxy_url(proxy_url: object) -> str:
@@ -853,6 +857,7 @@ class WebshareTransport:
         self.cooldown_base_seconds = max(0.1, float(cooldown_base_seconds))
         self._next_proxy = 0
         self._request_count = 0
+        self._request_counts_by_kind: dict[str, int] = {}
         self._lock = threading.Lock()
         self._session_lock = threading.Lock()
         self._sessions: dict[tuple[int, str], requests.Session] = {}
@@ -951,12 +956,21 @@ class WebshareTransport:
         with self._lock:
             return tuple(dict(value) for value in self._proxy_health.values())
 
+    @property
+    def request_counts_by_kind(self) -> dict[str, int]:
+        """Return actual provider attempts, including retries, by request kind."""
+
+        with self._lock:
+            return dict(self._request_counts_by_kind)
+
     def get(self, url: str, *, kind: str) -> ResponseEnvelope:
         last = ResponseEnvelope(0, "", "", 0.0, "request_budget_exhausted")
         for attempt in range(self.retry_limit + 1):
             proxy = self._take_proxy()
             if proxy is None:
                 return last
+            with self._lock:
+                self._request_counts_by_kind[kind] = self._request_counts_by_kind.get(kind, 0) + 1
             started = time.monotonic()
             with self._proxy_locks[proxy.identifier]:
                 self.request_limiter.acquire(self.provider)
@@ -1092,6 +1106,42 @@ def _detail_location(soup: BeautifulSoup) -> str:
     return candidates[0] if candidates else ""
 
 
+_POSTED_TEXT_RE = re.compile(
+    r"\b(?:just now|today|yesterday|hours?|days?|weeks?|months?|years?|ago|reposted)\b"
+    r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _detail_posted_fields(soup: BeautifulSoup, applicant_text: str) -> tuple[str, str]:
+    """Extract posted evidence without treating company text as a date."""
+
+    time_node = soup.select_one("time")
+    if time_node:
+        posted_text = _clean(time_node.get_text(" ", strip=True))
+        if posted_text:
+            return posted_text, _clean(time_node.get("datetime"))
+    for node in soup.select(
+        ".top-card-layout__entity-info [data-test-posted-date], "
+        ".top-card-layout__entity-info .posted-date, "
+        ".top-card-layout__entity-info span"
+    ):
+        candidate = _clean(node.get_text(" ", strip=True))
+        if candidate and candidate != applicant_text and _POSTED_TEXT_RE.search(candidate):
+            return candidate, _clean(node.get("data-datetime") or node.get("datetime"))
+    return "", ""
+
+
+def _is_apply_anchor(anchor) -> bool:
+    href = _clean(anchor.get("href"))
+    if not href or href.startswith(("#", "javascript:", "mailto:")):
+        return False
+    tracking = _clean(anchor.get("data-tracking-control-name")).lower()
+    text = _clean(anchor.get_text(" ", strip=True)).lower()
+    return any(signal in value for value in (tracking, href.lower(), text) for signal in ("apply", "bewerben"))
+
+
 def parse_job_detail(linkedin_job_id: str, body: str) -> DetailRecord:
     soup = BeautifulSoup(str(body or ""), "html.parser")
     title = _first_text(soup, (".top-card-layout__title", "h1"))
@@ -1099,27 +1149,31 @@ def parse_job_detail(linkedin_job_id: str, body: str) -> DetailRecord:
     company_url = canonical_company_url(company_anchor.get("href")) if company_anchor else ""
     company_name = _clean(company_anchor.get_text(" ", strip=True)) if company_anchor else ""
     description = _first_text(soup, (".show-more-less-html__markup", ".description__text", ".description__text--rich"))
-    apply_anchor = None
-    for anchor in soup.select("a[href]"):
-        href = _clean(anchor.get("href"))
-        tracking = _clean(anchor.get("data-tracking-control-name"))
-        if "apply" in tracking.lower() or "apply" in href.lower() or "/jobs/view/" in href.lower():
-            apply_anchor = anchor
-            if "offsite" in tracking.lower() or (urlsplit(href).hostname or "").lower() not in {"linkedin.com", "www.linkedin.com"}:
-                break
-    raw_apply = _clean(apply_anchor.get("href")) if apply_anchor else f"https://www.linkedin.com/jobs/view/{linkedin_job_id}"
+    apply_anchors = [anchor for anchor in soup.select("a[href]") if _is_apply_anchor(anchor)]
+    # Prefer a real off-site destination when both an internal CTA and an
+    # external application link are present.  A job detail URL by itself is
+    # not an application URL and must remain explicitly missing.
+    apply_anchor = next(
+        (
+            anchor
+            for anchor in apply_anchors
+            if (urlsplit(_clean(anchor.get("href"))).hostname or "").lower()
+            not in {"", "linkedin.com", "www.linkedin.com"}
+        ),
+        apply_anchors[0] if apply_anchors else None,
+    )
+    raw_apply = _clean(apply_anchor.get("href")) if apply_anchor else ""
     host = (urlsplit(raw_apply).hostname or "").lower()
     if host and not host.endswith("linkedin.com"):
         apply_source = "external"
     elif apply_anchor:
         apply_source = "linkedin"
     else:
-        apply_source = "linkedin_fallback"
+        apply_source = ""
     info_text = _clean(soup.select_one(".top-card-layout__entity-info").get_text(" ", strip=True) if soup.select_one(".top-card-layout__entity-info") else "")
     applicant_match = re.search(r"([0-9][0-9,]*)\s+applicants?", info_text, flags=re.IGNORECASE)
-    posted_text = _first_text(soup, (".top-card-layout__entity-info span", "time"))
-    if applicant_match and posted_text == applicant_match.group(0):
-        posted_text = ""
+    applicant_text = applicant_match.group(0) if applicant_match else ""
+    posted_text, posted_at_estimated = _detail_posted_fields(soup, applicant_text)
     criteria: dict[str, str] = {}
     for item in soup.select(".description__job-criteria-list li"):
         label = _first_text(item, ("h3", "dt")).lower()
@@ -1144,6 +1198,7 @@ def parse_job_detail(linkedin_job_id: str, body: str) -> DetailRecord:
         apply_url_canonical=canonical_apply_url(raw_apply),
         apply_url_source=apply_source,
         posted_text=posted_text,
+        posted_at_estimated=posted_at_estimated,
         applicant_count=applicant_match.group(1).replace(",", "") if applicant_match else "",
         easy_apply_status=easy_apply,
         employment_type=criteria.get("employment type", ""),
@@ -2261,6 +2316,66 @@ class StateStore:
             )
             return cursor.rowcount == 1
 
+    def adopt_pending_detail(
+        self,
+        run_id: str,
+        company_scan_id: str,
+        linkedin_company_id: str,
+        linkedin_job_id: str,
+        *,
+        refresh_reason: str = "resumed_pending_detail",
+    ) -> bool:
+        """Move one unfinished detail task into the current scan exactly once.
+
+        A queue row is scoped to its run for resumability, but pending work must
+        not be recreated with a fresh attempt budget on the next cycle.  The
+        source row is marked transferred after the current-run row is inserted,
+        preserving attempt count, due time, and the last failure classification.
+        """
+
+        with self._write_transaction():
+            current = self.connection.execute(
+                "SELECT 1 FROM detail_queue WHERE run_id=? AND linkedin_job_id=?",
+                (str(run_id), str(linkedin_job_id)),
+            ).fetchone()
+            if current is not None:
+                return False
+            source = self.connection.execute(
+                """SELECT * FROM detail_queue
+                   WHERE run_id<>? AND linkedin_company_id=? AND linkedin_job_id=?
+                     AND (status='PENDING' OR (status='RETRY' AND attempt_count < max_attempts))
+                   ORDER BY last_attempt_at DESC, run_id DESC
+                   LIMIT 1""",
+                (str(run_id), str(linkedin_company_id), str(linkedin_job_id)),
+            ).fetchone()
+            if source is None:
+                return False
+            self.connection.execute(
+                """INSERT INTO detail_queue(
+                       run_id, linkedin_job_id, linkedin_company_id, company_scan_id,
+                       status, next_attempt_at, attempt_count, max_attempts,
+                       last_attempt_at, last_error_class, terminal_status, refresh_reason
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)""",
+                (
+                    str(run_id),
+                    str(linkedin_job_id),
+                    str(linkedin_company_id),
+                    str(company_scan_id),
+                    str(source["status"]),
+                    str(source["next_attempt_at"] or ""),
+                    int(source["attempt_count"] or 0),
+                    int(source["max_attempts"] or DEFAULT_DETAIL_ATTEMPT_BUDGET),
+                    str(source["last_attempt_at"] or ""),
+                    str(source["last_error_class"] or ""),
+                    str(refresh_reason or "resumed_pending_detail"),
+                ),
+            )
+            self.connection.execute(
+                "UPDATE detail_queue SET status='TRANSFERRED', next_attempt_at='', terminal_status=? WHERE run_id=? AND linkedin_job_id=?",
+                (f"RESUMED_IN:{run_id}", str(source["run_id"]), str(linkedin_job_id)),
+            )
+            return True
+
     def pending_detail_job_ids(self, run_id: str | None = None) -> tuple[str, ...]:
         now = _utc_now()
         query = """SELECT DISTINCT linkedin_job_id FROM detail_queue
@@ -2728,6 +2843,7 @@ class CatalogRunner:
             "companies_failed": 0,
             "companies_zero_confirmed": 0,
             "requests": 0,
+            "requests_by_kind": {},
             "proxy_count": 0,
             "proxy_health_rows": 0,
             "account_peak_in_flight": 0,
@@ -2841,6 +2957,10 @@ class CatalogRunner:
     def _get(self, url: str, *, kind: str) -> ResponseEnvelope:
         response = self.transport.get(url, kind=kind)
         self._increment("requests")
+        with self._metric_lock:
+            requests_by_kind = self.metrics.setdefault("logical_requests_by_kind", {})
+            if isinstance(requests_by_kind, dict):
+                requests_by_kind[kind] = int(requests_by_kind.get(kind, 0)) + 1
         if kind == "detail":
             self._increment("detail_requests")
         if response.status_code == 429:
@@ -2873,7 +2993,8 @@ class CatalogRunner:
             self._persist_exclusion(context.group.linkedin_company_id, card.linkedin_job_id, decision.reason, card.__dict__)
             return
         refresh_reason = "new_job"
-        if self.config.mode == "daily" or self.config.resume_run_id:
+        cache_enabled = self.config.mode in {"daily", "pilot"} or bool(self.config.resume_run_id)
+        if cache_enabled:
             try:
                 previous = self.store.get_catalog_row(context.group.linkedin_company_id, card.linkedin_job_id)
             except KeyError:
@@ -2908,6 +3029,17 @@ class CatalogRunner:
                     return
             elif previous and previous.get("lifecycle_status") == "inactive":
                 refresh_reason = "reactivated_job"
+        if self.store.adopt_pending_detail(
+            str(self.metrics["run_id"]),
+            context.scan_id,
+            context.group.linkedin_company_id,
+            card.linkedin_job_id,
+            refresh_reason="resumed_pending_detail",
+        ):
+            self._increment("detail_resumed")
+            self._increment("detail_refresh_requests")
+            self._record_refresh_reason("resumed_pending_detail")
+            return
         self._increment("detail_refresh_requests")
         self._record_refresh_reason(refresh_reason)
         self.store.enqueue_detail(
@@ -3452,6 +3584,9 @@ class CatalogRunner:
             self._persist_proxy_health()
             self.store.export_catalog_csv(generation_dir / "master_linkedin_jobs.csv")
             self.metrics["requests"] = getattr(self.transport, "_request_count", self.metrics["requests"])
+            request_counts_by_kind = getattr(self.transport, "request_counts_by_kind", None)
+            if isinstance(request_counts_by_kind, Mapping):
+                self.metrics["requests_by_kind"] = dict(request_counts_by_kind)
             self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
             self._capture_detail_provider_usage()
             self.store.finish_run(run_id, run_status, self.now())
