@@ -2,10 +2,11 @@
 
 Status: RC-023 offline preparation and producer state/export correction are
 complete on B. RC-024 offline implementation and fixture rehearsal are
-complete on B. The authorized host phase was attempted against INT-1's
-accepted candidate but is access-blocked before mutation; deployed/full VPS,
-historical-source and off-host backup/restore acceptance remain pending.
-RC-026 and conditional RC-031 remain gated.
+complete on B. RC-026 offline benchmark implementation and comparable local
+state evidence are complete on B. The authorized host phase was attempted
+against INT-1's accepted candidate but is access-blocked before mutation;
+deployed/full VPS, off-host backup/restore acceptance, and the authorized
+staging benchmark remain pending. Conditional RC-031 remains gated.
 
 ## Identity and worktree
 
@@ -28,8 +29,8 @@ host command, provider request, or live request was performed.
 | --- | --- | --- |
 | RC-023 | Offline preparation plus producer state/export correction complete; full acceptance pending | Runtime contract, acquisition isolation, setup pinning, resource/log controls, separate producer state/export paths, and focused tests. Requires C's accepted integrated SHA plus authorized clean-host setup/restart/port/synthetic-task evidence. |
 | RC-024 | Offline implementation and fixture rehearsal complete; full acceptance pending | `scripts/acquisition_state_backup.py` uses SQLite Online Backup, manifest-last S3/R2 preservation, isolated restore, measured local budget and epoch-fenced single-writer leases. Fixture proof passes; historical source, approved bucket/lifecycle, replacement-host restore/reboot and service-account evidence remain required. |
-| RC-025 | A-owned, not changed | Required before RC-026. |
-| RC-026 | Not started / gated | Requires RC-012/014/015/021/024/025 and comparable measured state; no capacity/cost claim made. |
+| RC-025 | A-owned and accepted in C's integrated history; not changed | C records A's `6ab6f31bec0977b6db2435920942a7d885ead66d` integration and the later candidate; B did not modify A's files. |
+| RC-026 | Offline benchmark/evidence complete; full acceptance pending | `docs/RC026_BENCHMARK.md`, `scripts/benchmark_acquisition_full_state.py`, and `tests/test_rc026_benchmark.py`. Both RC-024 historical checkpoint copies, bounded employer matrix, customer warm path, resource metrics, request accounting, and unknown-cost model were measured offline. Production/VPS/Turso/provider capacity remains unverified. |
 | RC-031 | Conditional, not started | Requires trigger evidence after RC-024/026/028. |
 
 ## Changed files
@@ -53,6 +54,8 @@ Runtime code/config:
 - `scripts/run_manifested_employer.py`
 - `deploy/acquisition-data-manifest.json`
 - `scripts/acquisition_state_backup.py`
+- `scripts/benchmark_acquisition_full_state.py`
+- `scripts/benchmark_personalized_jobs.py`
 
 Evidence/tests:
 
@@ -62,6 +65,8 @@ Evidence/tests:
 - `docs/RC_B_HANDOFF.md`
 - `tests/test_rc024_backup_restore.py`
 - `docs/RC024_BACKUP_RESTORE.md`
+- `tests/test_rc026_benchmark.py`
+- `docs/RC026_BENCHMARK.md`
 
 No secrets, mutable state databases, browser profiles, historical exports,
 provider logs, or large datasets are included.
@@ -186,6 +191,31 @@ historical-source/algorithm results only: no source was moved or deleted, no
 S3/R2 upload was attempted, and no VPS/replacement-host/reboot/service-account
 acceptance is claimed.
 
+## RC-026 benchmark and cost evidence
+
+The complete offline benchmark is recorded in
+`docs/RC026_BENCHMARK.md`. It measured both verified RC-024 state copies, the
+bounded employer worker matrix at 1/2/4 company workers, the existing 1,000-job
+customer warm path, checkpoint/export wall time, peak RSS/workspace bytes, and
+request/cost accounting. The final run used the disposable
+`C:\Users\ahmed\AppData\Local\Temp\runr-rc026-benchmark-20260909-v3` root.
+
+Results: LinkedIn 3,479,191,552 B copied in 5.2050s and streamed to a
+775,613,386 B CSV in 137.6890s; Employer 83,841,024 B copied in 0.1157s and
+exported 2,612 jobs in 4.9885s to 78,134,553 B of CSV/JSONL/metrics. The
+fixture matrix preserved 5/5 companies/jobs at every tested concurrency and
+observed zero network attempts. Customer replay p50/p95 were 287.28/751.50ms
+for Jobs and 63.32/210.37ms for Company detail. External prices, Turso
+contention/billing, host headroom, active-acquisition customer overlap, and
+provider retry behavior remain unknown by design; no uncapped provider
+benchmark or capacity claim was made.
+
+The large LinkedIn export used a read-only row-at-a-time equivalent of
+`StateStore.export_catalog_csv` because reopening the full historical copy
+entered an unbounded legacy repair scan. The source remained unchanged and no
+final artifact was promoted by that stopped attempt. This reopen-path issue is
+explicitly retained as an integrated/staging follow-up.
+
 ## Commands and results
 
 Executed from the B worktree:
@@ -271,8 +301,12 @@ or completed preflight.
    task. Record deployed commit separately from this branch.
 4. C must integrate the scoped RC-024 tip and rerun the combined suites. Only
    after RC-015/016/023 are integrated and the actual backup/restore drill is
-   accepted may RC-024 be marked fully verified. RC-026 waits for A's RC-025
-   and all plan dependencies. RC-031 stays conditional.
+   accepted may RC-024 be marked fully verified.
+5. Integrate the scoped RC-026 benchmark/evidence commits and rerun the
+   combined matrix before staging execution. RC-026 remains fully pending
+   until the authorized staging benchmark measures the real provider/browser
+   workload, customer overlap, Turso billing/contention, and cost scenarios.
+   RC-031 stays conditional and must not be started from this offline result.
 
 ## RC-024 rollback and next action
 
@@ -309,5 +343,6 @@ over newer customer writes.
 Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
 RC-024 implementation/evidence SHA: `6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`.
+RC-026 implementation/evidence SHA: record after the scoped commit below.
 Final B handoff tip: this documentation commit; verify its immutable SHA with
 `git rev-parse HEAD` and report it with the implementation SHA.
