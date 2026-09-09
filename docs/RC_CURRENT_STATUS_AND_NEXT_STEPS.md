@@ -4,6 +4,18 @@ Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
+## Repair-candidate live verification amendment - 2026-09-09
+
+The final A/B repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3`
+was staged in an isolated VPS release directory. LinkedIn cycle 1 used 60
+attempts on the frozen four-company selection and remained partial:
+`PARTIAL_SUSPICIOUS_EMPTY` for all four, 61 valid cards, 45 detail successes,
+16 pending retries and 45 jobs written. Employer used 40 attempts, but its
+`--limit 0` invocation processed all 1,574 eligible rows rather than the
+frozen four, so that result is diagnostic only (1,573 partial, one
+source-failed, zero jobs). New usage is 100/200 attempts; no Turso write,
+migration, R2 write or publication occurred, and acquisition remains disabled.
+
 ## Producer repair integration amendment - 2026-09-09
 
 A final tip `5c100043d51e616e2de4fb595f362d951d70e30d` and implementation

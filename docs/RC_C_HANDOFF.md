@@ -1,5 +1,23 @@
 # RC-C release and integration handoff
 
+## Repair-candidate live verification amendment - 2026-09-09
+
+Candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was staged in the
+separate VPS release directory `/opt/runr/releases/rc027-466541b3`. The
+repaired LinkedIn producer ran cycle 1 for the frozen four-company selection
+at 60/60 attempts: 61 valid cards, 45 detail successes, 16 pending detail
+retries, 45 jobs written, and all four scans `PARTIAL_SUSPICIOUS_EMPTY`. No
+valid snapshot, closure or publication resulted.
+
+The employer diagnostic used 40 attempts but is not frozen-cohort acceptance:
+the wrapper's `--limit 0` selects all 1,574 eligible rows. It processed the
+full manifest under budget, recorded 1,573 partial and one source-failed
+status, zero jobs and zero publication. This invocation is retained as
+diagnostic evidence and must not be described as the required four-company
+cycle. New live usage is 100/200 attempts, with 100 remaining; the earlier
+pilot's 190/200 remains a separate historical allowance. No Turso write,
+migration, R2 object write or customer service change was made.
+
 ## Producer repair integration amendment - 2026-09-09
 
 The supplied final producer tips were verified clean and merged into C with

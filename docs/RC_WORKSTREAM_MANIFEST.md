@@ -16,8 +16,18 @@ documentation-only commits. The merges preserve A/B ancestry and C's
 operational evidence. The exact backend gate passed 427 tests with only the
 two unchanged baseline tracker failures; Ruff, compilation and diff checks
 passed. The target frontend passed 170 tests and the Vite build was stamped
-with candidate `3882806d...`. No repair lane consumed new live budget or
+with candidate `466541b3...`. No repair lane consumed new live budget or
 changed VPS state.
+
+## Repair-candidate live verification amendment - 2026-09-09
+
+Candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was staged on the VPS and
+used for bounded diagnostic source runs. LinkedIn consumed 60 attempts on the
+frozen four-company selection and remained `PARTIAL_SUSPICIOUS_EMPTY` for all
+four; employer consumed 40 attempts but `--limit 0` selected all 1,574 rows,
+so it is not frozen-cohort evidence. New usage is 100/200, no publication or
+Turso write occurred, and acquisition remains disabled. This status is
+recorded here so the manifest does not imply RC-027 acceptance.
 
 ## Current reconciliation amendment — 2026-09-09
 

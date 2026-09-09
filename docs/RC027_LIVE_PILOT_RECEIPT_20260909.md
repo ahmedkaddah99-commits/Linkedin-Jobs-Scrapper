@@ -1,5 +1,40 @@
 # RC-027 bounded real-source pilot receipt
 
+## Repair-candidate live verification amendment - 2026-09-09
+
+The final A/B repair candidate was staged as release
+`466541b3ee4a57a89f83c583f5e497b36fccdbe3` under
+`/opt/runr/releases/rc027-466541b3` on `runr-vps`. A no-network manifest
+preflight passed for LinkedIn after the external pagination/filter evidence
+paths were supplied explicitly. The first live attempt failed before any
+request because the acquisition environment lacked Webshare configuration; a
+separate protected `/opt/runr/.env.acquisition.provider` was then installed
+with only the existing Webshare API/username/password entries. No customer
+`.env` was made readable by the acquisition role.
+
+The repaired LinkedIn cycle 1 used **60/60** newly authorized attempts for
+the frozen four-company selection. It wrote 61 valid cards, 45 detail
+successes and 16 pending detail retries; all four scans remained
+`PARTIAL_SUSPICIOUS_EMPTY`, with 45 jobs written and no valid/closure-safe
+snapshot. Provider cost was not reported. Its metrics are preserved at:
+
+`/srv/runr/exports/rc027-repair-466541b3/cycle-1-live-3/linkedin/metrics.json`
+
+The employer cycle invocation used the candidate repair but was **not valid
+frozen-cohort evidence**: `--limit 0` selects all eligible companies in this
+wrapper, so it processed all 1,574 manifest rows under a 40-attempt cap rather
+than only MALZERS, St. Vincenz, NOVENTI and helmag. It recorded 1,573 partial
+and one source-failed company status, zero jobs, 40 direct attempts and no
+provider cost; no publication was promoted. Its output is preserved at:
+
+`/srv/runr/exports/rc027-repair-466541b3/cycle-1-live-3/employer/`
+
+This run is retained as a bounded diagnostic, not acceptance. New verification
+usage is **100/200** attempts (60 LinkedIn + 40 employer), separate from the
+earlier historical pilot's 190/200. No Turso write, migration, R2 object write
+or customer service change was made by this amendment. The acquisition service
+remains disabled.
+
 Date: 2026-09-09
 Integration branch: `deployment/render-turso-r2`
 Persistent target checkout: `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview`
