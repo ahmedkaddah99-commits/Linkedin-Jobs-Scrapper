@@ -12,6 +12,7 @@ request was made in this pass.
 | Integrated code candidate for a future pilot | `d326726acab7fffbbf59e294629b8ef002437566` |
 | C integration branch | `temp/rc-c-release-integration` |
 | Persistent target branch | `deployment/render-turso-r2` |
+| Persistent target after verified local fast-forward | `06cfae6fea0b2be196b032c0a716aacf2106c814` |
 | A frozen tip integrated | `764e292a1c090cad7a8af8ba7828b299cb50af41` |
 | B frozen tip integrated | `9e1df3420efa89f8d28b06b6184d86124fd58e66` |
 | Integrated merge tips | A: `8b03e8d771c5b3c9e91b5d0aaeac1e55d216b1d4`; B: `a7683dc40cda20e35d121b0c0f5668f89b47a18b` |
@@ -44,6 +45,18 @@ browser origin was available for live verification.
 The only integration correction in this pass is the RC-026 resource sampler's
 handling of transient SQLite journal/WAL removal (`d326726a`). It does not
 create pilot data or authorize external requests.
+
+### RC-027 rollback
+
+No staging database, provider state, R2 object, publication, migration or host
+change was created. If this offline integration is rejected, preserve the
+target checkout and use reviewed `git revert` operations for the exact
+documentation commits (`06cfae6f`, `dc1670ab`) and the sampler correction
+(`d326726a`) only after checking dependent ancestry. Do not reset, clean, or
+restore over the integrated A/B merges. Any later pilot rollback must first
+disable new acquisition claims, retain the newest verified publication and
+checkpoint, and restore only a compatible release; never delete or overwrite
+the historical source state.
 
 Status: offline RC-022/023/024/025/026 integration and RC-027 gate review.
 This handoff does not claim Docker image builds, host provisioning,
