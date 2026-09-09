@@ -65,7 +65,7 @@
       "manifest_hash": "6bfcba5c01985402d2d1278e8b726baa8e4ac3332e6527be40bc433ab663e447",
       "committed_in_git": false,
       "restore_separately": true,
-      "source_path": "C:/Users/ahmed/Projects_Local/runr-admin-linkedin-preview/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json",
       "startup_validation": "schema runr_source_eligibility_manifest_v1, manifest hash, sidecar hash, and unresolved ownership gate"
     },
     {
@@ -78,14 +78,14 @@
       "rows": 17601,
       "committed_in_git": false,
       "restore_separately": true,
-      "source_path": "C:/Users/ahmed/Projects_Local/runr-admin-linkedin-preview/SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/shared/inputs/SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl",
       "startup_validation": "sidecar schema runr_source_eligibility_raw_sidecar_v1 and exact SHA-256"
     }
   ],
   "state_snapshots": [
     {
       "logical_name": "linkedin_authoritative_state",
-      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/master linkedin jobs url/master_linkedin_jobs_state.db",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/master linkedin jobs url/master_linkedin_jobs_state.db",
       "server_path": "/srv/runr/state/linkedin/master_linkedin_jobs_state.db",
       "bytes": 3479191552,
       "sha256": "26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317",
@@ -117,7 +117,7 @@
     },
     {
       "logical_name": "employer_state",
-      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/master linkedin jobs url/master_employer_jobs_state.db",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/master linkedin jobs url/master_employer_jobs_state.db",
       "server_path": "/srv/runr/state/employer/master_employer_jobs_state.db",
       "bytes": 83841024,
       "sha256": "b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737",
@@ -130,7 +130,7 @@
     },
     {
       "logical_name": "linkedin_legacy_archive",
-      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/archive/2026-08-21/linkedin_germany_discovery_state_pre_v2.db",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/archive/2026-08-21/linkedin_germany_discovery_state_pre_v2.db",
       "server_path": "/srv/runr/backups/linkedin/linkedin_germany_discovery_state_pre_v2.db",
       "bytes": 2038747136,
       "sha256": "01559b47d6ca0e0e1c8186e8d3de0ebd6fa2214149043c1bfb42f58ceaf9304d",
@@ -143,7 +143,7 @@
     },
     {
       "logical_name": "linkedin_id_resolution_state",
-      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Company-Urls/Master-Company-Url/cleaned/linkedin_company_enrichment_state/linkedin_id_resolution/linkedin_id_resolution.sqlite3",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/state/enrichment/linkedin_id_resolution.sqlite3",
       "server_path": "/srv/runr/state/enrichment/linkedin_id_resolution.sqlite3",
       "bytes": 413691904,
       "sha256": "4da05480f291dbdf47c4bbd7988d1da8b79206cb2310332f3f5a32dfba627f2e",
@@ -156,7 +156,7 @@
     },
     {
       "logical_name": "linkedin_legacy_v2_state",
-      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/linkedin_germany_discovery_state_v2.db",
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/linkedin_germany_discovery_state_v2.db",
       "server_path": "/srv/runr/backups/linkedin/linkedin_germany_discovery_state_v2.db",
       "bytes": 116367360,
       "sha256": "6e39e6f0733337533a1e78be90dc856d59f43ab242e0c5f0fa79a6722aba2ce5",

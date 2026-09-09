@@ -171,19 +171,19 @@ outside the disposable worktrees in the locations recorded by
 
 - `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\Company-Urls\...`
   for source inputs and enrichment evidence (confirmed present);
-- `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.backend_data\...`
-  for persistent local application runtime data (confirmed present, not
-  treated as the authoritative 14-table LinkedIn producer state);
+- `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\...`
+  for the verified 147-file Jobs-Urls preservation copy, including the
+  authoritative LinkedIn and employer state;
 - `C:\Users\ahmed\Projects_Local\runr-release-evidence\...` for the recorded
   Turso restore-verification artifact (confirmed present).
 
-The inventory's documented
-`C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\Jobs-Urls\...`
-location for the approximately 3.48 GB LinkedIn state, employer state and
-historical state was not found during this setup. The target checkout's
-`Jobs-Urls` directory contains only `webshare_linkedin_benchmark.py`. This is
-an explicit unresolved restore/data-preservation blocker for RC-024 and any
-acquisition resume; no disposable worktree is being treated as its source.
+The previously documented source-worktree path was stale. The preservation
+copy has 147 files, 9,611,859,565 bytes and zero hash mismatches according to
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved-verification.csv`.
+The original moved directory remains under
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-source-quarantine\`.
+The authoritative database files are still external restore inputs: they have
+not been copied into the target or any disposable worktree.
 
 No active SQLite database was copied during setup. Future copies must stop or
 quiesce the owning writer and use the SQLite Online Backup API or an equivalent

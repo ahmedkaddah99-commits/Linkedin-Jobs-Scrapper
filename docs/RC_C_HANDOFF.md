@@ -12,18 +12,19 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 | C branch | `temp/rc-c-release-integration` |
 | C starting launch commit | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 | C accepted release candidate before this documentation amendment | `96869170a4d5e173b08c4fb0868a7c3c5503c32f` |
+| C integration tip after RC-025 merge | `6ab6f31bec0977b6db2435920942a7d885ead66d` |
 | Persistent integration target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
 | Persistent target branch | `deployment/render-turso-r2` |
 | Persistent target before this slice | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
 | Shared launch base | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 
 C was created from the exact S0 launch commit, then fast-forwarded over the
-target's documentation-only manifest commits so an accepted C commit can
-fast-forward the persistent target. A remains based at the shared launch
-commit but has a visible, uncommitted `backend/acquisition/analytics.py` RC-A
-change. B remains based at the shared launch commit but has visible,
-uncommitted RC-023 runtime files. Neither lane has supplied a clean freeze tip,
-and neither is merged by this handoff.
+target's documentation-only manifest commits. A supplied clean tip
+`c5b57777785e98ebfa4b2b0a0a4f466907cb7ee7`; C merged it as
+`6ab6f31bec0977b6db2435920942a7d885ead66d` after its focused regressions
+passed. B supplied clean tip `030f47d6fa440d7db31c7de010acd902cc6e3aaa`,
+but C holds it out of the accepted integration because the runtime safety review
+found issues recorded below. No uncommitted lane files were copied.
 
 ## RC-022 verification
 
@@ -68,9 +69,47 @@ Still environment-gated:
 - Render/CI path-filter execution in the provider environment;
 - isolated mixed-version staging with separate queues, object keys, secrets and
   databases/namespaces;
-- host restore of the authoritative acquisition state, because the documented
-  producer-state artifact is not present in the current local checkout;
+- host restore of the authoritative acquisition state: the immutable restore
+  source is now verified offline below, but no host transfer or restore has been
+  performed;
 - any provider, live acquisition, R2, Turso or production migration action.
+
+## RC-025 integration
+
+A's clean RC-025 tip `c5b57777785e98ebfa4b2b0a0a4f466907cb7ee7` was merged
+sequentially into C as `6ab6f31bec0977b6db2435920942a7d885ead66d`.
+The supplied evidence passed `27` focused backend tests and `10` frontend
+acquisition-operations tests. The change is an additive read-only coverage and
+health projection; it does not claim live coverage, provider health, host
+capacity, or RC-026 benchmark evidence.
+
+## Reconciled acquisition-state restore source
+
+The prior source-worktree path in the manifest was stale, not evidence of data
+loss. The verified offline restore source is:
+
+```text
+C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\
+```
+
+The preservation evidence records 147 files, 9,611,859,565 bytes and zero
+hash mismatches in:
+
+```text
+C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved-verification.csv
+```
+
+The selected authoritative files were rehashed read-only during this pass:
+
+| Artifact | Verified source | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| LinkedIn 14-table state | `...\Jobs-Urls\master linkedin jobs url\master_linkedin_jobs_state.db` | 3,479,191,552 | `26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317` |
+| Employer state | `...\Jobs-Urls\master linkedin jobs url\master_employer_jobs_state.db` | 83,841,024 | `b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737` |
+
+The original moved source directory remains separately retained at
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-source-quarantine\`.
+The target checkout does not contain either authoritative database. No state
+was recreated, moved, uploaded or restored by C.
 
 ## Exact runtime commands and roles
 
@@ -157,6 +196,27 @@ current split-root claim. C does not rewrite the producer in this release-only
 slice or silently use a symlink. RC-024 host verification is blocked until the
 owner accepts one option and supplies a committed regression.
 
+## B runtime safety review and FIX-B boundary
+
+B's clean tip `030f47d6fa440d7db31c7de010acd902cc6e3aaa` contains the offline
+RC-023 systemd preparation, but it is not merged or accepted by C yet:
+
+- `deploy/setup.sh` installs `.env.acquisition` as `root:runr` mode `0640`,
+  allowing the customer/API `runr` account to read acquisition credentials;
+- `deploy/deploy.sh` restarts `runr.target`, whose `Wants` includes API,
+  customer worker, frontend and acquisition worker, so it is not an
+  acquisition-only start path;
+- the setup script's continued `install` command requires correction before an
+  authorized host run; and
+- the B tip does not yet contain the narrow producer state/export correction:
+  both manifested wrappers still expose only `--output-dir`, while the runtime
+  contract claims separate state and export roots.
+
+FIX-B must correct these interfaces in B's owned files and return a new clean
+tip. C will then review the exact diff, merge it sequentially, and rerun the
+combined runtime/release regressions. C does not implement a competing VPS or
+producer fix.
+
 ## Version compatibility and staging isolation
 
 The compatibility contract is `runr-contract-v1`; metadata is
@@ -201,6 +261,15 @@ and rejection of `runr-contract-v0` before any task claim. No result is claimed
 until the external staging environment exists and the exact candidate/image
 digests are recorded.
 
+## Render deployment status
+
+`render.yaml` declares `autoDeployTrigger: commit` for the frontend, API and
+worker services. A read-only Render API service query was attempted with the
+available `RENDER_API_KEY` and returned HTTP `401 Unauthorized`; therefore the
+current deployed SHA is **unknown**. Local historical reports mention
+`dc19cc05298e7d69e4548793798030d3bc059eac`, but that record was not treated as
+current deployment proof. No deployment was triggered by C.
+
 ## Dependency checkpoints and integration procedure
 
 - RC-023/024/025 must be accepted before RC-026; RC-026 must be accepted before
@@ -227,8 +296,8 @@ committed C documentation/integration slice is reversed with a reviewed
 removed only after clean status and commit preservation are verified, without
 `--force`.
 
-Current blockers are the unavailable Docker Linux daemon, the absent documented
-approximately 3.48 GB 14-table LinkedIn state, the producer state/output
-separation decision, and the absence of authorized staging namespaces,
-credentials, R2 CORS, host or live-pilot infrastructure. No external
-infrastructure was created.
+Current blockers are the unavailable Docker Linux daemon, pending B FIX-B
+runtime/producer corrections, the unperformed host restore, the producer
+state/output separation decision, and the absence of authorized staging
+namespaces, credentials, R2 CORS, host or live-pilot infrastructure. No
+external infrastructure was created.

@@ -24,6 +24,17 @@ and duplicate backups are not normal Git inputs.  They are preserved at their
 current source paths and must be copied only as immutable, checksummed restore
 artifacts.
 
+## Verified current preservation source
+
+The historical source-worktree path for the Jobs-Urls data is not the current
+restore location. The verified immutable preservation source is
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\`.
+Its evidence records 147 files, 9,611,859,565 bytes and zero hash mismatches in
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved-verification.csv`.
+The original moved directory remains in the sibling
+`jobs-urls-source-quarantine` directory. No restore copy has been made into a
+worktree or VPS.
+
 ## Authoritative seed inputs
 
 | Logical name | Current/source path | Bytes | SHA-256 | Rows/shape | Git/VPS decision |
@@ -55,11 +66,11 @@ LinkedIn state, employer state, archived state, and legacy v2 state.
 
 | Logical artifact | Current/source path | Bytes | SHA-256 | Schema/rows | Git/VPS decision |
 | --- | --- | ---: | --- | --- | --- |
-| LinkedIn authoritative state | `Jobs-Urls/master linkedin jobs url/master_linkedin_jobs_state.db` | 3,479,191,552 | `26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317` | exact 14-table model; `runs` 2, `jobs` 188,206, `search_pages` 52,386, `search_cards` 198,491, `detail_attempts` 198,493, `lifecycle_events` 187,415, `ownership_exclusions` 8,689; integrity `ok` | external immutable restore to `/srv/runr/state/linkedin/master_linkedin_jobs_state.db`; required before acquisition resume |
-| Employer state | `Jobs-Urls/master linkedin jobs url/master_employer_jobs_state.db` | 83,841,024 | `b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737` | tables `companies` 428, `jobs` 2,612; integrity `ok` | external immutable restore to `/srv/runr/state/employer/master_employer_jobs_state.db` |
-| Archived legacy LinkedIn state | `Jobs-Urls/archive/2026-08-21/linkedin_germany_discovery_state_pre_v2.db` | 2,038,747,136 | `01559b47d6ca0e0e1c8186e8d3de0ebd6fa2214149043c1bfb42f58ceaf9304d` | legacy tables including `query_nodes` 4,675,135; integrity `ok` | external backup only: `/srv/runr/backups/linkedin/` |
+| LinkedIn authoritative state | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\master linkedin jobs url\master_linkedin_jobs_state.db` | 3,479,191,552 | `26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317` | exact 14-table model; `runs` 2, `jobs` 188,206, `search_pages` 52,386, `search_cards` 198,491, `detail_attempts` 198,493, `lifecycle_events` 187,415, `ownership_exclusions` 8,689; integrity `ok` | external immutable restore to `/srv/runr/state/linkedin/master_linkedin_jobs_state.db`; required before acquisition resume |
+| Employer state | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\master linkedin jobs url\master_employer_jobs_state.db` | 83,841,024 | `b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737` | tables `companies` 428, `jobs` 2,612; integrity `ok` | external immutable restore to `/srv/runr/state/employer/master_employer_jobs_state.db` |
+| Archived legacy LinkedIn state | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\archive\2026-08-21\linkedin_germany_discovery_state_pre_v2.db` | 2,038,747,136 | `01559b47d6ca0e0e1c8186e8d3de0ebd6fa2214149043c1bfb42f58ceaf9304d` | legacy tables including `query_nodes` 4,675,135; integrity `ok` | external backup only: `/srv/runr/backups/linkedin/` |
 | LinkedIn ID-resolution state | `Company-Urls/.../linkedin_id_resolution.sqlite3` | 413,691,904 | `4da05480f291dbdf47c4bbd7988d1da8b79206cb2310332f3f5a32dfba627f2e` | mutable enrichment state; not used for first acquisition start | external restore to `/srv/runr/state/enrichment/`; RC-006b remains pending |
-| Legacy v2 state | `Jobs-Urls/linkedin_germany_discovery_state_v2.db` | 116,367,360 | `6e39e6f0733337533a1e78be90dc856d59f43ab242e0c5f0fa79a6722aba2ce5` | legacy 12-table state; integrity `ok` | external historical backup only |
+| Legacy v2 state | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc023-20260908\feature-worktree-recovery\jobs-urls-preserved\Jobs-Urls\linkedin_germany_discovery_state_v2.db` | 116,367,360 | `6e39e6f0733337533a1e78be90dc856d59f43ab242e0c5f0fa79a6722aba2ce5` | legacy 12-table state; integrity `ok` | external historical backup only |
 
 Large generated outputs were also found and checksummed: LinkedIn CSV
 774,860,470 bytes (`4adc35fa34cad684deb0d6dcac7f29cbf5a5548c7d7ab2fefe7855a20a898532`),
