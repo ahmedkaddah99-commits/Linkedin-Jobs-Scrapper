@@ -24,6 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory containing the durable SQLite state; defaults to --output-dir",
+    )
+    parser.add_argument(
         "--include-single-source",
         action="store_true",
         help="opt into website-only/LinkedIn-only expansion tasks; default is the dual-source pilot",
@@ -45,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-run-id")
     parser.add_argument("--max-companies", type=int)
     parser.add_argument("--fresh", action="store_true")
+    parser.add_argument(
+        "--require-existing-state",
+        action="store_true",
+        help="fail instead of creating a missing restored state database",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -54,11 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     pilot_only = not args.include_single_source
     manifest, tasks = require_eligibility_manifest(args.manifest, SOURCE_LINKEDIN, pilot_only=pilot_only)
     output_dir = args.output_dir.resolve()
+    state_dir = args.state_dir.resolve() if args.state_dir is not None else None
     staged_input = output_dir / ".manifest_inputs" / f"{manifest['manifest_id']}-linkedin.csv"
     staged = materialize_source_input(manifest, SOURCE_LINKEDIN, staged_input, pilot_only=pilot_only)
     config = RunnerConfig(
         input_csv=staged_input,
         output_dir=output_dir,
+        state_dir=state_dir,
         pagination_report=args.pagination_report,
         filters_report=args.filters_report,
         mode=args.mode,
@@ -75,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         company_id=args.company_id,
         resume_run_id=args.resume_run_id,
         fresh=args.fresh,
+        require_existing_state=args.require_existing_state,
         dry_run=args.dry_run,
         max_companies=args.max_companies,
     )

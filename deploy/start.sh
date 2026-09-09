@@ -36,7 +36,7 @@ case "$role" in
       --storage "$storage_backend" \
       --log-level "$log_level" \
       serve-api \
-      --host 0.0.0.0 \
+      --host "${RUNR_API_HOST:-0.0.0.0}" \
       --port "${PORT:-8000}" \
       "$@"
     ;;

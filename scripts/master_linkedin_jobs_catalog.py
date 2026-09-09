@@ -374,6 +374,7 @@ class WebshareProxy:
 class RunnerConfig:
     input_csv: Path = Path("Company-Urls/Master-Company-Url/cleaned/Master-Company-Url-canonical_cleaned_linkedin_ids.csv")
     output_dir: Path = Path("Jobs-Urls/master linkedin jobs url")
+    state_dir: Path | None = None
     pagination_report: Path = Path("Jobs-Urls/linkedin_endpoint_pagination_validation.json")
     filters_report: Path = Path("Jobs-Urls/linkedin_guest_endpoint_filter_validation.json")
     mode: str = "full"
@@ -390,6 +391,7 @@ class RunnerConfig:
     company_id: str | None = None
     resume_run_id: str | None = None
     fresh: bool = False
+    require_existing_state: bool = False
     dry_run: bool = False
     max_companies: int | None = None
 
@@ -2628,11 +2630,16 @@ class StateStore:
             self.connection.close()
 
 
-def backup_existing_artifacts(output_dir: str | Path) -> tuple[Path, ...]:
+def backup_existing_artifacts(
+    output_dir: str | Path,
+    *,
+    state_db_path: str | Path | None = None,
+) -> tuple[Path, ...]:
     """Copy existing catalog artifacts before a requested rebuild."""
 
     directory = Path(output_dir)
-    if not directory.exists():
+    state_path = Path(state_db_path) if state_db_path is not None else directory / "master_linkedin_jobs_state.db"
+    if not directory.exists() and not state_path.exists():
         return ()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backed_up: list[Path] = []
@@ -2642,10 +2649,11 @@ def backup_existing_artifacts(output_dir: str | Path) -> tuple[Path, ...]:
         "master_linkedin_jobs_state.db",
         "master_linkedin_jobs_metrics.json",
     ):
-        source = directory / name
+        source = state_path if name == "master_linkedin_jobs_state.db" else directory / name
         if not source.exists():
             continue
-        target = directory / f"{name}.backup_{stamp}"
+        target_dir = source.parent if name == "master_linkedin_jobs_state.db" else directory
+        target = target_dir / f"{name}.backup_{stamp}"
         shutil.copy2(source, target)
         backed_up.append(target)
     return tuple(backed_up)
@@ -2756,6 +2764,19 @@ class CatalogRunner:
             "recoverable": True,
         }
         self._metric_lock = threading.Lock()
+
+    def _state_db_path(self, output_dir: Path) -> Path:
+        state_root = Path(self.config.state_dir) if self.config.state_dir is not None else output_dir
+        return state_root / "master_linkedin_jobs_state.db"
+
+    def _validate_required_state(self, output_dir: Path) -> Path:
+        state_path = self._state_db_path(output_dir)
+        if self.config.require_existing_state and not state_path.is_file():
+            raise FileNotFoundError(f"LinkedIn state database not found: {state_path}")
+        return state_path
+
+    def _open_state(self, output_dir: Path) -> StateStore:
+        return StateStore(self._validate_required_state(output_dir))
 
     def _increment(self, key: str, amount: int = 1) -> None:
         with self._metric_lock:
@@ -3284,6 +3305,7 @@ class CatalogRunner:
         input_path = Path(self.config.input_csv)
         output_dir = Path(self.config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        self._validate_required_state(output_dir)
         if not input_path.exists():
             raise FileNotFoundError(input_path)
         self.groups, source_stats = load_source_company_groups(input_path, self.config.company_id)
@@ -3321,7 +3343,7 @@ class CatalogRunner:
         if self.config.dry_run or self.config.mode in {"validate", "reconcile"}:
             try:
                 if self.config.mode == "reconcile":
-                    self.store = StateStore(output_dir / "master_linkedin_jobs_state.db")
+                    self.store = self._open_state(output_dir)
                     audit = self.store.audit_legacy_consistency()
                     self.store.export_catalog_csv(output_dir / "master_linkedin_jobs.csv")
                     (output_dir / "master_linkedin_jobs_legacy_audit.json").write_text(
@@ -3336,11 +3358,14 @@ class CatalogRunner:
             finally:
                 self._close_transport()
         if self.config.fresh:
-            backup_existing_artifacts(output_dir)
-            for name in ("master_linkedin_jobs_state.db", "master_linkedin_jobs.csv", "master_linkedin_jobs.jsonl", "master_linkedin_jobs_metrics.json"):
+            state_path = self._state_db_path(output_dir)
+            backup_existing_artifacts(output_dir, state_db_path=state_path)
+            for name in ("master_linkedin_jobs.csv", "master_linkedin_jobs.jsonl", "master_linkedin_jobs_metrics.json"):
                 target = output_dir / name
                 if target.exists():
                     target.unlink()
+            if state_path.exists():
+                state_path.unlink()
         input_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
         run_id = self.config.resume_run_id or datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%S%fZ")
         self.metrics["run_id"] = run_id
@@ -3350,7 +3375,7 @@ class CatalogRunner:
         self._generation_dir = generation_dir
         self.metrics["generation_id"] = generation_id
         self._event_journal = JsonlEventJournal(generation_dir / "master_linkedin_jobs.jsonl")
-        self.store = StateStore(output_dir / "master_linkedin_jobs_state.db")
+        self.store = self._open_state(output_dir)
         self.store.start_run(run_id, mode=self.config.mode, input_sha256=input_hash)
         try:
             if selected:
@@ -3486,6 +3511,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect Germany-scoped LinkedIn jobs by verified company ID.")
     parser.add_argument("--input-csv", type=Path, default=RunnerConfig.input_csv)
     parser.add_argument("--output-dir", type=Path, default=RunnerConfig.output_dir)
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory containing the durable SQLite state; defaults to --output-dir",
+    )
     parser.add_argument("--pagination-report", type=Path, default=RunnerConfig.pagination_report)
     parser.add_argument("--filters-report", type=Path, default=RunnerConfig.filters_report)
     parser.add_argument("--mode", choices=("validate", "smoke", "pilot", "full", "daily", "reconcile"), default="full")
@@ -3503,6 +3533,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-run-id")
     parser.add_argument("--max-companies", type=int)
     parser.add_argument("--fresh", action="store_true")
+    parser.add_argument(
+        "--require-existing-state",
+        action="store_true",
+        help="fail instead of creating a missing restored state database",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -3511,6 +3546,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
     return RunnerConfig(
         input_csv=args.input_csv,
         output_dir=args.output_dir,
+        state_dir=args.state_dir,
         pagination_report=args.pagination_report,
         filters_report=args.filters_report,
         mode=args.mode,
@@ -3527,6 +3563,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         company_id=args.company_id,
         resume_run_id=args.resume_run_id,
         fresh=args.fresh,
+        require_existing_state=args.require_existing_state,
         dry_run=args.dry_run,
         max_companies=args.max_companies,
     )

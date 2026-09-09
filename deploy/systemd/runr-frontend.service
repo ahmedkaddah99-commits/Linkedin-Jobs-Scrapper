@@ -1,13 +1,32 @@
 [Unit]
 Description=Runr frontend static server
-After=network.target
+After=network-online.target time-sync.target
+Wants=network-online.target
 PartOf=runr.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/runr
-EnvironmentFile=/opt/runr/.env
+User=runr
+Group=runr
+UMask=0077
 ExecStart=/opt/runr/.venv/bin/python backend/static_server.py
 Restart=always
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CPUAccounting=true
+CPUQuota=100%
+MemoryAccounting=true
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=128
 

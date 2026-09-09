@@ -172,7 +172,7 @@
     {
       "path": "scripts/master_linkedin_jobs_catalog.py",
       "classification": "canonical_producer",
-      "runtime_command": "python scripts/master_linkedin_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/linkedin",
+      "runtime_command": "python scripts/master_linkedin_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state",
       "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
       "required_state_databases": ["linkedin_authoritative_state"],
       "required_output_directories": ["/srv/runr/exports/linkedin"],
@@ -185,7 +185,7 @@
     {
       "path": "scripts/master_employer_jobs_catalog.py",
       "classification": "canonical_producer",
-      "runtime_command": "python scripts/master_employer_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/employer",
+      "runtime_command": "python scripts/master_employer_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
       "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
       "required_state_databases": ["employer_state"],
       "required_output_directories": ["/srv/runr/exports/employer"],
@@ -211,7 +211,7 @@
     {
       "path": "scripts/run_manifested_linkedin.py",
       "classification": "production_wrapper",
-      "runtime_command": "python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin",
+      "runtime_command": "python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state",
       "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
       "required_state_databases": ["linkedin_authoritative_state"],
       "required_output_directories": ["/srv/runr/exports/linkedin"],
@@ -224,7 +224,7 @@
     {
       "path": "scripts/run_manifested_employer.py",
       "classification": "production_wrapper",
-      "runtime_command": "python scripts/run_manifested_employer.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/employer",
+      "runtime_command": "python scripts/run_manifested_employer.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
       "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
       "required_state_databases": ["employer_state"],
       "required_output_directories": ["/srv/runr/exports/employer"],

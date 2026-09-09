@@ -1,0 +1,76 @@
+{
+  "schema_version": "runr.vps-runtime.v1",
+  "primary_mechanism": "systemd",
+  "release": {
+    "branch": "deployment/render-turso-r2",
+    "commit": "record-the-approved-commit-at-deployment",
+    "compatibility_contract": "runr-contract-v1",
+    "migration_owner": "api-pre-deploy-only",
+    "dependency_lock": "requirements-linux.txt"
+  },
+  "host_policy": {
+    "os": "Ubuntu 24.04 LTS (record provider image identifier before purchase)",
+    "python_version": "3.12.7",
+    "python_binary": "/opt/runr/.venv/bin/python",
+    "service_users": {
+      "api": "runr",
+      "customer": "runr",
+      "acquisition": "runr-acquisition"
+    },
+    "time_sync": "chrony",
+    "public_scraper_api": false,
+    "inbound_ports": []
+  },
+  "resource_policy": {
+    "ram_headroom_percent": 25,
+    "checkpoint_max_age_hours": 6,
+    "memory_guardrail": "systemd MemoryHigh/MemoryMax are deployment guardrails, not measured capacity",
+    "disk_budget": "state + exports + one verified backup + temporary peak space + outage buffer",
+    "provider_region": "select near the Turso region and record the provider region before authorization",
+    "monthly_price_eur": null,
+    "provider_limits": null
+  },
+  "runtime_paths": {
+    "application": "/opt/runr",
+    "state": "/var/lib/runr",
+    "inputs": "/srv/runr/shared/inputs",
+    "exports": "/srv/runr/exports",
+    "backups": "/srv/runr/backups",
+    "logs": "journald with deploy/systemd/runr-journald.conf"
+  },
+  "roles": {
+    "api": {
+      "unit": "runr-api.service",
+      "environment_file": "/opt/runr/.env",
+      "bind_address": "127.0.0.1"
+    },
+    "customer": {
+      "unit": "runr-worker.service",
+      "worker_role": "customer",
+      "environment_file": "/opt/runr/.env"
+    },
+    "acquisition": {
+      "unit": "runr-acquisition-worker.service",
+      "service_user": "runr-acquisition",
+      "worker_role": "acquisition",
+      "environment_file": "/opt/runr/.env.acquisition",
+      "forbidden_secret_families": [
+        "CLERK_",
+        "CREEM_",
+        "TRACKER_GOOGLE_OAUTH_",
+        "DEEPSEEK_"
+      ]
+    }
+  },
+  "credential_granularity": {
+    "environment_boundary": "verified offline",
+    "provider_database_permissions": "must be verified on the authorized host; shared full-database credentials remain a documented residual risk until then"
+  },
+  "retention": {
+    "journald_max_use": "1G",
+    "journald_runtime_max_use": "256M",
+    "journald_max_retention": "14day",
+    "mutable_state_in_git": false,
+    "browser_profiles_in_backup": false
+  }
+}
