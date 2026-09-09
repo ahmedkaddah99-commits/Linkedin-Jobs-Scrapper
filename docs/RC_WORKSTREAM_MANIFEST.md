@@ -18,6 +18,7 @@ copying uncommitted work:
 | A merge commit in C | `4fed31be0f8d6315fecbd768fd2e69073f82519a` |
 | B merge commit in C | `6d9620d19359770f0b119d2d8654445734bc96b4` |
 | Combined implementation tip before this amendment | `5cd2ece533e4e7615a8b6a7b08516014d5b82748` |
+| Current clean C/target tip with reconciliation evidence | `628e63afbec4425989467251d77d405d3a7064a7` |
 
 Both lane worktrees were clean at their frozen tips. A and B are now
 required to create their next repair commits from the resulting clean C

@@ -14,6 +14,11 @@ owns LinkedIn producer repairs; B owns employer producer repairs; C owns
 shared scheduler, publication, API, configuration, migration, release and
 staging contracts.
 
+The current clean C and persistent-target tip, including the reconciliation
+evidence below, is `628e63afbec4425989467251d77d405d3a7064a7`. A and B remain
+clean at `e28aa5f2e065848679d2302841dbe1bde36be8cd` until they hand off actual
+producer repair commits; no uncommitted lane files were copied.
+
 The combined regression passed **310 tests, 22 subtests** after the RC-029
 fixture was corrected to use the canonical `employer_site` source name. The
 only excluded tests are the two tracker/API failures reproduced unchanged on
@@ -315,7 +320,7 @@ deployment, provider authorization, data approval, and live acceptance.
 | RC-021 | Verified offline/current | Storage tests, selected API tests, frontend signed-URL test, 167 frontend tests, successful production build | R2 CORS, deployed browser behavior, empty-cache host, and external object-store evidence remain pending. |
 | RC-022 | Implemented offline; final acceptance pending | `docs/RC022_BUILD_RELEASE_STAGING.md`, `tests/test_rc022_build_release_contract.py`, separate Dockerfiles, Render filters, CI image jobs; focused suite passed 6/6 | Docker daemon image builds, path-filter execution, and mixed-version isolated staging remain pending. No deploy or RC-006b prerequisite was required. |
 | RC-023 | Host/runtime portion verified; full acceptance pending | `docs/RC027_LIVE_STAGING_EVIDENCE.md`; Python 3.12.7 host, clean setup, systemd services, permissions, migration head, port/health checks, synthetic task, restart and controlled failure evidence | External resource/cost selection, replacement-host restore, full backup receipt, and any remaining operational evidence still require the separate RC-024/026 gates and authorized provider resources. |
-| RC-024 | Offline implementation/fixture rehearsal integrated; full acceptance pending | `docs/RC024_BACKUP_RESTORE.md`, `scripts/acquisition_state_backup.py`, `tests/test_rc024_backup_restore.py`; focused tests pass | Off-host receipt, replacement-host restore, reboot/outage and historical state acceptance still require authorized host/storage. |
+| RC-024 | Bounded pilot-state checkpoint and local/R2 restore verified; full acceptance pending | `docs/RC024_BACKUP_RESTORE.md`; SQLite Online Backup checkpoint `linkedin-20260909T201035631862Z-e6d35734a371`, local restore, R2 restore and integrity/schema validation passed | Replacement-host service resume, outage/reboot acceptance and restoration of the preserved approximately 3.48 GB historical state remain pending. |
 | RC-025 | Offline dashboard/read-model slice integrated; live acceptance pending | A handoff and focused dashboard/API evidence integrated; combined tests pass | Verify actual worker/cycle metadata and live dashboard only after runtime/staging exists. |
 | RC-026 | Offline benchmark/cost preparation integrated; full acceptance pending | `docs/RC026_BENCHMARK.md`, benchmark scripts/tests; focused tests pass | VPS capacity, Turso contention/billing, provider retry/cost and authorized staging sample remain unmeasured. |
 | RC-027 | Real-source two-cycle producer/transport run complete; acceptance pending | `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`, `docs/RC027_LIVE_STAGING_EVIDENCE.md`; four frozen IDs; 190/200 measured attempts; partial/failure persistence; no false publication; R2 signed range receipt | Requires valid/closure-safe source results, authenticated UI/publication proof, browser CORS/direct-download proof, recovery/restart drill on the integrated staging app, and isolated Turso/dedicated R2 scope if retained by the release gate. |

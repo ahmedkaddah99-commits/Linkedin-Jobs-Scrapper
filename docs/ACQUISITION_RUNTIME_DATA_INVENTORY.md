@@ -1,8 +1,11 @@
 # Acquisition runtime data inventory
 
-Status: offline reconciliation recorded 2026-09-08.  No live acquisition,
-provider request, production migration, database upload, or deployment was
-performed.
+Status: inventory reconciliation recorded 2026-09-08 and amended during the
+2026-09-09 bounded pilot. Live acquisition/provider requests were limited to
+the recorded RC-027 pilot budget; one pilot-state SQLite Online Backup was
+uploaded to the explicitly authorized production R2 prefix and restored for
+verification. No production Turso write, production migration or deployment
+was performed.
 
 The deployment branch is `deployment/render-turso-r2`.  RC-022 is preserved at
 `39d15b8f3da9870b03102525ed03431194edaad6`; the runtime-data manifest is
