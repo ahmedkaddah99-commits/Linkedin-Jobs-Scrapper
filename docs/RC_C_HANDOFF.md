@@ -2,9 +2,9 @@
 
 ## RC-027 gate result — 2026-09-09
 
-RC-027 was not executed. The integrated tree is ready for a bounded staging
-pilot only after the missing external gate inputs below are supplied. No live
-provider, VPS, Turso, R2, Render, browser, acquisition, or publication
+RC-027 was not executed. The four-company packet is now frozen, but staging
+execution is blocked by host elevation and isolated resource/provider access.
+No live provider, VPS, Turso, R2, Render, browser, acquisition, or publication
 request was made in this pass.
 
 | Item | Verified value |
@@ -12,33 +12,30 @@ request was made in this pass.
 | Integrated code candidate for a future pilot | `d326726acab7fffbbf59e294629b8ef002437566` |
 | C integration branch | `temp/rc-c-release-integration` |
 | Persistent target branch | `deployment/render-turso-r2` |
-| Persistent target after verified local fast-forward | `06cfae6fea0b2be196b032c0a716aacf2106c814` |
+| Persistent target before this handoff amendment | `360449885d2779c91ffa03f483fdfe5ff28d1f33` |
 | A frozen tip integrated | `764e292a1c090cad7a8af8ba7828b299cb50af41` |
 | B frozen tip integrated | `9e1df3420efa89f8d28b06b6184d86124fd58e66` |
 | Integrated merge tips | A: `8b03e8d771c5b3c9e91b5d0aaeac1e55d216b1d4`; B: `a7683dc40cda20e35d121b0c0f5668f89b47a18b` |
 | Contract / migration | `runr-contract-v1` / `058_customer_task_queue` |
 
-The plan's historical eligibility document describes a possible initial
-shape of 3,148 dual-source tasks (1,574 entities per source). It is not an
-RC-027 approved company list: the reconciled manifest and raw sidecar are not
-present in the C checkout, the bounded known source/snapshot locations did not
-contain them, and no reviewer-approved finite packet was found.
+The recorded reconciled manifest and raw sidecar were restored read-only from
+the RC-023 preservation source. Their external file hashes match the runtime
+inventory, and the packet freezes four canonical-ID-sorted dual-source
+companies from its 1,574 eligible entities. The full manifest remains outside
+Git and is not copied into application tables.
 
-The pilot cannot safely start because the following required values/evidence
-are missing:
+The pilot cannot safely start because the following required runtime access or
+acceptance evidence is missing:
 
-- approved canonical company IDs and the exact finite source-task list;
-- numeric per-source request ceilings, retry/detail limits, provider quota,
-  euro cost ceiling, and explicit stop conditions;
 - isolated staging Turso URL/token, R2 endpoint/bucket/prefix and credentials;
 - an authorized host with the candidate installed, role mounts, and elevation;
 - accepted RC-023 host, RC-024 restore, RC-025 runtime dashboard, RC-026
   comparable live/cost gates, and RC-022 image/mixed-version staging proof.
 
-The offline contract keeps `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false`,
-`RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY=false`, and
-`RUNR_ACQUISITION_MAX_REQUESTS=0`; enabling these without the missing packet
-would not be a bounded pilot. RC-006b remains separate and was not started.
+The packet records the user-authorized cumulative request, concurrency, time,
+and US$5 cost limits. The repository defaults remain disabled until isolated
+staging secrets and the host runtime exist. RC-006b remains separate and was
+not started.
 The R2 signed-download/CORS checks remain offline-only; no real bucket or
 browser origin was available for live verification.
 
@@ -51,7 +48,7 @@ create pilot data or authorize external requests.
 No staging database, provider state, R2 object, publication, migration or host
 change was created. If this offline integration is rejected, preserve the
 target checkout and use reviewed `git revert` operations for the exact
-documentation commits (`06cfae6f`, `dc1670ab`) and the sampler correction
+documentation commits (`36044988`, `06cfae6f`, `dc1670ab`) and the sampler correction
 (`d326726a`) only after checking dependent ancestry. Do not reset, clean, or
 restore over the integrated A/B merges. Any later pilot rollback must first
 disable new acquisition claims, retain the newest verified publication and

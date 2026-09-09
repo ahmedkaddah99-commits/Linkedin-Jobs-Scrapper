@@ -103,11 +103,11 @@ Run migration once against the isolated staging database, then start API,
 customer and acquisition roles with unique IDs. Mount the packet manifest and
 raw sidecar read-only at `/srv/runr/shared/inputs`; mount acquisition state and
 exports only to the acquisition owner. The wrappers must be invoked with one
-frozen company ID at a time, `--mode pilot`, `--max-companies 1`, one worker,
-one detail worker, retry limit 1, and `--max-requests 30` for LinkedIn. The
-employer connector must use one target at a time and a page/browser cap below
-the 30-request company budget. Cumulative accounting, not command-line caps
-alone, is authoritative.
+frozen company ID at a time. The LinkedIn wrapper must use `--mode pilot`,
+`--max-companies 1`, one worker, one detail worker, retry limit 1, and
+`--max-requests 30`; the employer wrapper must use one target at a time and a
+page/browser cap below the 30-request company budget. Cumulative accounting,
+not command-line caps alone, is authoritative.
 
 ## Evidence required before completion
 
