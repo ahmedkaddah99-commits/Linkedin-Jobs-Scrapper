@@ -368,70 +368,90 @@ def run_delivery(
         "sources": {},
         "unresolved_observations": 0,
     }
+
+    def deliver_company(
+        source: str,
+        company_id: str,
+        company: Mapping[str, object],
+    ) -> dict[str, object]:
+        target_id = _text(_target(company, source)["target_id"])
+        task = (cycle_targets.get(target_id) or {}).get("task") or {}
+        task_id = _text(task.get("task_id")) or f"producer_task:{target_id}"
+        raw_rows = groups.get(company_id, [])
+        failed = False
+        if source == SOURCE_LINKEDIN:
+            observations = [
+                adapt_linkedin_job(row, cycle_id=cycle_id, scan_id=_text(row.get("company_scan_id")))
+                for row in raw_rows
+            ]
+            status_values = {
+                _text(li_statuses.get(_text(row.get("linkedin_company_id"))))
+                for row in raw_rows
+                if _text(row.get("linkedin_company_id"))
+            }
+            status_values.update(linkedin_statuses_by_canonical.get(company_id, set()))
+            closure_safe = bool(status_values) and status_values.issubset(COMPLETE_LINKEDIN_SCAN_STATUSES)
+            valid_snapshot = True
+        else:
+            observations = [
+                adapt_employer_job(row, cycle_id=cycle_id)
+                for row in raw_rows
+            ]
+            status, classification = employer_statuses.get(company_id, ("", ""))
+            closure_safe = classification == "confirmed_complete"
+            failed = status.casefold() in FAILED_EMPLOYER_STATUSES
+            valid_snapshot = not failed
+        deliverable = [item for item in observations if item.canonical_company_id not in {"", UNKNOWN, "//"}]
+        result = _deliver_group(
+            store,
+            cycle_id=cycle_id,
+            task_id=task_id,
+            target_id=target_id,
+            observations=deliverable,
+            closure_safe=closure_safe,
+            valid_snapshot=valid_snapshot,
+        )
+        store.complete_task(
+            task_id,
+            status="completed" if closure_safe else "partial",
+            result={
+                **result,
+                "complete_snapshot": True,
+                "valid_snapshot": valid_snapshot,
+                "closure_safe": closure_safe,
+                "credible_evidence": closure_safe,
+                "collection_metadata": {
+                    "producer_bridge": True,
+                    "source": source,
+                    "source_marker": marker_value,
+                    "unresolved_observations": len(observations) - len(deliverable),
+                },
+            },
+        )
+        return {
+            "target_id": target_id,
+            "closure_safe": closure_safe,
+            "failed": failed,
+            "jobs_delivered": len(deliverable),
+            "unresolved_observations": len(observations) - len(deliverable),
+        }
+
     try:
         for source, companies, groups, marker_value in source_specs:
             source_metrics = {"companies": len(companies), "groups_with_jobs": len(groups), "jobs_delivered": 0, "partial_companies": 0, "failed_companies": 0, "source_marker": marker_value}
-            for company_id, company in companies.items():
-                target_id = _text(_target(company, source)["target_id"])
-                task = (cycle_targets.get(target_id) or {}).get("task") or {}
-                task_id = _text(task.get("task_id")) or f"producer_task:{target_id}"
-                raw_rows = groups.get(company_id, [])
-                if source == SOURCE_LINKEDIN:
-                    observations = [
-                        adapt_linkedin_job(row, cycle_id=cycle_id, scan_id=_text(row.get("company_scan_id")))
-                        for row in raw_rows
-                    ]
-                    status_values = {
-                        _text(li_statuses.get(_text(row.get("linkedin_company_id"))))
-                        for row in raw_rows
-                        if _text(row.get("linkedin_company_id"))
-                    }
-                    status_values.update(linkedin_statuses_by_canonical.get(company_id, set()))
-                    closure_safe = bool(status_values) and status_values.issubset(COMPLETE_LINKEDIN_SCAN_STATUSES)
-                    valid_snapshot = True
-                else:
-                    observations = [
-                        adapt_employer_job(row, cycle_id=cycle_id)
-                        for row in raw_rows
-                    ]
-                    status, classification = employer_statuses.get(company_id, ("", ""))
-                    closure_safe = classification == "confirmed_complete"
-                    valid_snapshot = not (status.casefold() in FAILED_EMPLOYER_STATUSES)
-                    if status.casefold() in FAILED_EMPLOYER_STATUSES:
-                        source_metrics["failed_companies"] = int(source_metrics["failed_companies"]) + 1
-                deliverable = [item for item in observations if item.canonical_company_id not in {"", UNKNOWN, "//"}]
-                source_metrics["unresolved_observations"] = int(source_metrics.get("unresolved_observations") or 0) + len(observations) - len(deliverable)
-                if not closure_safe:
-                    partial = True
-                    source_metrics["partial_companies"] = int(source_metrics["partial_companies"]) + 1
-                result = _deliver_group(
-                    store,
-                    cycle_id=cycle_id,
-                    task_id=task_id,
-                    target_id=target_id,
-                    observations=deliverable,
-                    closure_safe=closure_safe,
-                    valid_snapshot=valid_snapshot,
-                )
-                source_metrics["jobs_delivered"] = int(source_metrics["jobs_delivered"]) + len(deliverable)
-                store.complete_task(
-                    task_id,
-                    status="completed" if closure_safe else "partial",
-                    result={
-                        **result,
-                        "complete_snapshot": True,
-                        "valid_snapshot": valid_snapshot,
-                        "closure_safe": closure_safe,
-                        "credible_evidence": closure_safe,
-                        "collection_metadata": {
-                            "producer_bridge": True,
-                            "source": source,
-                            "source_marker": marker_value,
-                            "unresolved_observations": len(observations) - len(deliverable),
-                        },
-                    },
-                )
-                all_target_ids.append(target_id)
+            company_items = list(companies.items())
+            for offset in range(0, len(company_items), 100):
+                with store.transaction_scope():
+                    for company_id, company in company_items[offset : offset + 100]:
+                        delivered = deliver_company(source, company_id, company)
+                        source_metrics["unresolved_observations"] = int(source_metrics.get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
+                        source_metrics["jobs_delivered"] = int(source_metrics["jobs_delivered"]) + int(delivered["jobs_delivered"])
+                        if bool(delivered["failed"]):
+                            source_metrics["failed_companies"] = int(source_metrics["failed_companies"]) + 1
+                        if not bool(delivered["closure_safe"]):
+                            partial = True
+                            source_metrics["partial_companies"] = int(source_metrics["partial_companies"]) + 1
+                        all_target_ids.append(str(delivered["target_id"]))
             metrics["sources"][source] = source_metrics
         publication_id = store.publish_valid_snapshot(
             cycle_id=cycle_id,
