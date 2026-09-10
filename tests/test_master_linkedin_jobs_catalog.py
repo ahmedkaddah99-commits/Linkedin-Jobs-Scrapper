@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -670,6 +669,55 @@ def test_http_200_challenge_is_blocked_and_adaptive_workers_back_off_on_429() ->
     assert controller.workers < 10
 
 
+def _drive_provider_concurrency(
+    limiter: AdaptiveConcurrency,
+    provider: str,
+    *,
+    workers: int,
+    expected_peak: int,
+) -> None:
+    """Deterministically observe a per-provider in-flight cap.
+
+    Each of ``workers`` threads acquires a permit and then holds it on a release
+    gate.  ``expected_peak`` threads are allowed in by the limiter; the rest
+    block inside ``acquire`` until the gate opens.  Holding the permits on a
+    gate makes the peak observable without relying on sleep timing or thread
+    scheduling, which previously made this assertion flaky (~11% of runs).
+    """
+
+    entered = 0
+    entered_condition = threading.Condition()
+    release_gate = threading.Event()
+
+    def worker() -> None:
+        nonlocal entered
+        limiter.acquire(provider)
+        with entered_condition:
+            entered += 1
+            entered_condition.notify_all()
+        release_gate.wait()
+        limiter.release(provider)
+
+    threads = [threading.Thread(target=worker) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+
+    with entered_condition:
+        while entered < expected_peak:
+            entered_condition.wait()
+
+    # Exactly ``expected_peak`` permits are now held; every other worker is
+    # parked in acquire().  The limiter's own in-flight counter must agree and
+    # must not grow until the gate opens.
+    assert limiter.in_flight == expected_peak
+
+    release_gate.set()
+    for thread in threads:
+        thread.join()
+
+    assert limiter.in_flight == 0
+
+
 def test_shared_limiter_gates_actual_account_and_provider_in_flight_work() -> None:
     limiter = AdaptiveConcurrency(
         initial=3,
@@ -677,37 +725,13 @@ def test_shared_limiter_gates_actual_account_and_provider_in_flight_work() -> No
         maximum=3,
         provider_limits={"linkedin": 1, "company_resolution": 2},
     )
-    state_lock = threading.Lock()
-    active = {"count": 0, "peak": 0}
 
-    def run(provider: str) -> None:
-        limiter.acquire(provider)
-        try:
-            with state_lock:
-                active["count"] += 1
-                active["peak"] = max(active["peak"], active["count"])
-            time.sleep(0.01)
-        finally:
-            with state_lock:
-                active["count"] -= 1
-            limiter.release(provider)
-
-    threads = [threading.Thread(target=run, args=("linkedin",)) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert active["peak"] == 1
+    _drive_provider_concurrency(limiter, "linkedin", workers=4, expected_peak=1)
     assert limiter.peak_in_flight == 1
 
-    threads = [threading.Thread(target=run, args=("company_resolution",)) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    _drive_provider_concurrency(limiter, "company_resolution", workers=4, expected_peak=2)
+    assert limiter.peak_in_flight == 2
 
-    assert active["peak"] == 2
     limiter.observe(status_code=429, blocked=False, provider="company_resolution")
     assert limiter.workers == 2
 
@@ -1733,4 +1757,60 @@ def test_ambiguous_pipeline_excludes_unknown_company_without_primary_fallback(tm
     state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
     assert state.connection.execute("SELECT COUNT(*) FROM detail_queue").fetchone()[0] == 0
     assert state.connection.execute("SELECT COUNT(*) FROM ownership_exclusions WHERE reason LIKE '%ambiguous%'").fetchone()[0] == 2
+    state.close()
+
+
+def test_bounded_cycle_cursor_advances_through_ordered_groups(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(
+        source,
+        [
+            {
+                "canonical_CompanyID": "C-001",
+                "company_name": "Acme",
+                "linkedin_company_url": "https://www.linkedin.com/company/acme",
+                "linkedin_slug": "acme",
+                "linkedin_company_id": "22",
+            },
+            {
+                "canonical_CompanyID": "C-002",
+                "company_name": "Beta",
+                "linkedin_company_url": "https://www.linkedin.com/company/beta",
+                "linkedin_slug": "beta",
+                "linkedin_company_id": "23",
+            },
+            {
+                "canonical_CompanyID": "C-003",
+                "company_name": "Gamma",
+                "linkedin_company_url": "https://www.linkedin.com/company/gamma",
+                "linkedin_slug": "gamma",
+                "linkedin_company_id": "24",
+            },
+        ],
+    )
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+    empty = (FIXTURES / "linkedin_job_search_no_results.html").read_text(encoding="utf-8")
+
+    selected_per_cycle: list[set[str]] = []
+    for _ in range(3):
+        transport = ScriptedTransport(search_body=empty)
+        CatalogRunner(
+            RunnerConfig(
+                input_csv=source,
+                output_dir=tmp_path / "output",
+                pagination_report=pagination,
+                mode="full",
+                max_companies=1,
+            ),
+            transport=transport,
+        ).run()
+        selected_per_cycle.append(
+            {url.split("f_C=")[1].split("&")[0] for url, kind in transport.urls if kind == "search" and "f_C=" in url}
+        )
+
+    # Three cycles of one company each advance through 22 -> 23 -> 24.
+    assert selected_per_cycle == [{"22"}, {"23"}, {"24"}]
+    state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    assert state.get_cursor() == 0
     state.close()
