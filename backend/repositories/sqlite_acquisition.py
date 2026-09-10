@@ -5350,7 +5350,22 @@ class SqliteAcquisitionStore(_SqliteStore):
                 warnings.append({"code": code, "count": len(values), "items": values})
         if partial_source_warnings:
             warnings.append({"code": "partial_source", "count": len(partial_source_warnings), "items": partial_source_warnings})
-        blocker_count = 0
+        blocking = policy.completeness_mode == "blocking"
+        blockers: list[dict[str, Any]] = []
+        if blocking:
+            if completeness_warnings:
+                blockers.append(
+                    {"code": "completeness", "count": len(completeness_warnings), "items": completeness_warnings}
+                )
+            if policy.missing_apply_is_blocker and broken_apply_destinations:
+                blockers.append(
+                    {
+                        "code": "broken_apply_destinations",
+                        "count": len(broken_apply_destinations),
+                        "items": broken_apply_destinations,
+                    }
+                )
+        blocker_count = sum(int(item["count"]) for item in blockers)
         warning_count = sum(int(item["count"]) for item in warnings)
         return {
             "policy_version": policy.version,
@@ -5364,11 +5379,11 @@ class SqliteAcquisitionStore(_SqliteStore):
             "broken_apply_destinations": broken_apply_destinations,
             "partial_source_warnings": partial_source_warnings,
             "completeness_warnings": completeness_warnings,
-            "blockers": [],
+            "blockers": blockers,
             "warnings": warnings,
             "blocker_count": blocker_count,
             "warning_count": warning_count,
-            "report_only": True,
+            "report_only": not blocking,
         }
 
     @staticmethod
