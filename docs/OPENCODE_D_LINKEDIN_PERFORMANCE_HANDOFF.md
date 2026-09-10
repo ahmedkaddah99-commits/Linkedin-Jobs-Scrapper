@@ -25,15 +25,148 @@ branch/worktree were created from the base SHA.
 
 - `scripts/master_linkedin_jobs_catalog.py` — bounded pipelined execution,
   request-limiter ordering fix, retry jitter, batched SQLite writes, config
-  knobs and environment override.
-- `scripts/benchmark_linkedin_pipeline.py` — new offline, no-network replay
-  benchmark that runs the real producer against deterministic synthetic
-  fixtures with artificial latency and compares sequential vs pipelined.
-- `tests/test_linkedin_pipeline_performance.py` — new correctness regressions
-  for pipeline equivalence, overlap, cache identity, retry/budget, and request
-  accounting.
+  knobs and environment override; deterministic pipeline shutdown (full drain),
+  and a durable bounded-cycle `collection_cursor` with rotated selection.
+- `scripts/benchmark_linkedin_pipeline.py` — offline, no-network replay
+  benchmark comparing sequential vs pipelined execution with artificial latency.
+- `scripts/benchmark_linkedin_representative.py` — offline, read-only benchmark
+  that measures the producer's parse and SQLite write throughput against the
+  preserved historical state shape, separate from network latency.
+- `tests/test_linkedin_pipeline_performance.py` — pipeline equivalence,
+  overlap, cache identity, retry/budget, and request accounting regressions.
+- `tests/test_linkedin_pipeline_shutdown.py` — backpressure, consumer failure,
+  budget exhaustion, batch flushing, resume, and shared-limiter regressions.
+- `tests/test_master_linkedin_jobs_catalog.py` — deterministic limiter
+  regression and the bounded-cycle cursor advancement regression.
+- `tests/test_rc023_producer_state_paths.py` — LinkedIn schema table count
+  14 -> 15 (the new `collection_cursor` table).
 
 No employer collector, deployment file, or shared publication code was edited.
+The backup/restore schema contract is C-owned and recorded below as a required
+C change.
+
+## Resolved concurrency-test failure
+
+`test_shared_limiter_gates_actual_account_and_provider_in_flight_work` failed
+intermittently (reproduced 22/200 runs, ~11%) with `assert active["peak"] == 2`
+observing `1`. The `AdaptiveConcurrency` implementation is unchanged from the
+base and is correct: the failure is a test defect, not a limiter defect. The
+test held permits with `time.sleep(0.01)` and sampled a peak, so whether two
+`company_resolution` threads overlapped depended on scheduling.
+
+The test now drives `workers` threads through acquire/hold-on-a-release-gate and
+asserts the limiter's own `in_flight` counter equals the configured per-provider
+cap while the gate is held. The concurrency invariant is preserved and stronger
+(the authoritative `in_flight` counter is asserted directly), and the test is
+deterministic (300/300 in a loop). No limiter logic was weakened or skipped.
+
+## Pipeline shutdown and resume verification
+
+Added `tests/test_linkedin_pipeline_shutdown.py` covering the requested
+scenarios and fixed one demonstrated defect:
+
+- **Bounded-queue backpressure** — a `pipeline_detail_queue_size=1` run with 40
+  details completes all of them with no deadlock.
+- **Consumer failure** — a detail worker whose `_process_detail` raises is
+  caught by the worker loop; the failed row remains PENDING and is completed by
+  the final drain. No lost work, no deadlock.
+- **Budget exhaustion** — detail requests returning `request_budget_exhausted`
+  are recorded as `RETRY` and remain resumable.
+- **Pending batches at shutdown** — every enqueued row is durable after
+  shutdown (`pending==0`, `retry==0`, `done==N`).
+- **Restart with unfinished details** — a failed first run is resumed and
+  completes its adopted details.
+- **Global request limit** — search and detail share one limiter
+  (`transport.request_limiter is runner.adaptive`), and combined in-flight never
+  exceeds the account cap.
+
+Fixed defect: `_stop_pipeline` previously joined workers with
+`worker.join(timeout=60.0)`. A worker legitimately parked in a bounded proxy
+cooldown (up to 300 s) could outlive the timeout, then write a late
+observation/attempt after `reconcile_lifecycle` and `finish_run`, misclassifying
+a still-pending job as absent. It now joins without a fixed timeout so every
+detail worker is drained before finalization. Cooldown is bounded and budget
+exhaustion closes the request path, so the join always terminates.
+
+## Bounded-cycle advancement (stopped-B finding)
+
+`CatalogRunner` selected `selected[:max_companies]` from the start of the group
+list, so repeated small cycles re-hit the same first groups and never advanced.
+A durable `collection_cursor` singleton table now stores an index into a
+deterministically sorted group order. Bounded windows (`max_companies`,
+`smoke`, `pilot`) rotate the selection by the cursor and advance it by the
+window size after a non-interrupted run. Exact cohorts (`--company-id` /
+`--company-ids`, where the window equals the materialised group count) are
+unaffected. Regression:
+`test_bounded_cycle_cursor_advances_through_ordered_groups` (three one-company
+cycles select `22 -> 23 -> 24`).
+
+### Required C change (backup/restore schema contract)
+
+The new `collection_cursor` table makes the LinkedIn state a 15-table schema.
+C owns `scripts/acquisition_state_backup.py` and its schema contract:
+
+- Add `"collection_cursor"` to
+  `ROLE_CONFIG["linkedin"]["required_tables"]`.
+- Rename and update
+  `tests/test_rc024_backup_restore.py::test_online_backup_accepts_the_authoritative_14_table_linkedin_schema`
+  to expect 15 tables (including `collection_cursor`).
+
+Until C applies this, that single C-owned test fails with a schema mismatch
+(`expected` 14 tables vs `got` 15). This is a cross-lane dependency, not a
+regression in the LinkedIn producer. The employer lane (E) already introduced
+the same `collection_cursor` table for the employer state, so C must coordinate
+both schema contracts.
+
+## Representative performance (offline, read-only)
+
+The preserved historical LinkedIn state
+(`...\rc023-20260908\...\master linkedin jobs url\master_linkedin_jobs_state.db`,
+3,479,191,552 bytes) and its RC-024 checkpoint copy were inspected read-only and
+benchmarked without network or provider calls.
+
+Cardinality (preserved state):
+
+| Table | Rows |
+| --- | ---: |
+| source_company_groups | 11,896 |
+| jobs / job_company_observations | 188,206 |
+| search_pages | 52,386 |
+| search_cards | 198,491 |
+| detail_attempts | 198,493 |
+| detail_queue | 198,491 |
+| company_scans | 11,921 |
+| lifecycle_events | 187,415 |
+| ownership_exclusions | 8,689 |
+
+Measured throughput (separating CPU from network):
+
+| Measurement | Result |
+| --- | --- |
+| Parse (search page + job detail) | ~292 records/s (CPU-bound, BeautifulSoup + regex) |
+| SQLite write (upsert + attempt, large descriptions) | ~118 details/s (CPU-bound; full row serialised to both `jobs` and `job_company_observations`) |
+| Pipeline replay, 300 jobs / 340 requests | 14.19 s sequential -> 10.64 s pipelined (~25% faster) |
+| Pipeline replay, 1000 jobs / 1120 requests | ~neutral (38.2 s vs 40.3 s), DB-write-bound |
+
+The parse/write figures are local Windows measurements and are not VPS numbers.
+The key secondary finding is that the producer's DB write path double-serialises
+the full observation (large German descriptions) into two tables, which
+dominates at representative scale and caps the pipeline's wall-time gain once
+network latency is not the bottleneck. This is recorded as a live uncertainty /
+follow-up rather than changed in this pass.
+
+The exact remaining VPS validation command is the existing benchmark entrypoint
+(no live acquisition; run against a read-only restored checkpoint as the
+acquisition user):
+
+```sh
+sudo -n -u runr-acquisition /opt/runr/.venv/bin/python \
+  /opt/runr/scripts/benchmark_linkedin_representative.py \
+  --state-db /srv/runr/backups/<checkpoint>/master_linkedin_jobs_state.db \
+  --write-sample 20000 --parse-iterations 10000
+```
+
+
 
 ## Original bottlenecks (with evidence)
 
@@ -245,8 +378,14 @@ Add `--warm-cache` to pre-seed state and measure the daily cache-reuse path.
 
 ## Exact shared/runtime changes required from C
 
-No shared-code change is required; the producer is self-contained and the
-pipeline is the default. Optional items C may choose to adopt:
+One required change (see "Bounded-cycle advancement" above): the LinkedIn state
+is now 15 tables. C must add `"collection_cursor"` to
+`ROLE_CONFIG["linkedin"]["required_tables"]` in
+`scripts/acquisition_state_backup.py` and update the `test_rc024_backup_restore.py`
+14-table test to 15 tables. This is coordinated with E's identical employer
+`collection_cursor` table.
+
+Optional items C may choose to adopt:
 
 - Expose `RUNR_LINKEDIN_PIPELINE` (default `1`) in the acquisition environment
   template if an emergency rollback to sequential execution is desired without
@@ -254,8 +393,10 @@ pipeline is the default. Optional items C may choose to adopt:
 - Consider `--pipeline-detail-queue-size` and `--pipeline-flush-interval`
   overrides only if a future authorized host benchmark shows contention;
   defaults are already within the recorded VPS limits.
+- Expose a bounded-cycle `--max-companies` cadence in the scheduler so the
+  durable `collection_cursor` advances through the eligible list across cycles.
 
-No migration, deployment, publication, or scheduler change is requested.
+No migration, deployment, publication, or scheduler change is requested here.
 
 ## Stopped-B commits reviewed
 
@@ -265,4 +406,11 @@ B's `benchmark_acquisition_full_state.py` and `benchmark_personalized_jobs.py`
 are separate full-state benchmarks; the new `benchmark_linkedin_pipeline.py`
 is a narrower producer-pipeline replay and does not overlap or replace them.
 B's note about the timing-sensitive limiter test in mixed processes matches the
-single pre-existing failure observed here.
+single pre-existing failure resolved in this pass.
+
+`docs/OPENCODE_B_HANDOFF.md` (stopped B collectors) lists the bounded-cycle
+advancement defect ("repeated cycles re-hit the same first groups") as not
+implemented; it is implemented here via the durable `collection_cursor`.
+E's `runr-opencode-e-employer-completeness` worktree already added the same
+`collection_cursor` table to the employer state, so the schema-contract change
+for C spans both lanes.

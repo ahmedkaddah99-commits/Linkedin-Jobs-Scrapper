@@ -1890,6 +1890,11 @@ class StateStore:
                     last_request_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS collection_cursor (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cursor_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column("runs", "finished_at", "TEXT NOT NULL DEFAULT ''")
@@ -2044,6 +2049,24 @@ class StateStore:
             self.connection.execute(
                 "UPDATE runs SET status=?, finished_at=? WHERE run_id=?",
                 (status, finished_at or _utc_now(), str(run_id)),
+            )
+
+    def get_cursor(self) -> int:
+        """Return the durable bounded-cycle selection cursor."""
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT cursor_index FROM collection_cursor WHERE id=1"
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_cursor(self, index: int) -> None:
+        """Persist the bounded-cycle cursor after a completed selection window."""
+        value = max(0, int(index))
+        with self._lock, self.connection:
+            self.connection.execute(
+                "INSERT INTO collection_cursor(id, cursor_index, updated_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET cursor_index=excluded.cursor_index, updated_at=excluded.updated_at",
+                (value, _utc_now()),
             )
 
     def start_company_scan(self, run_id: str, group: SourceCompanyGroup, *, scan_id: str | None = None, started_at: str | None = None) -> str:
@@ -2906,6 +2929,20 @@ class CatalogRunner:
         state_root = Path(self.config.state_dir) if self.config.state_dir is not None else output_dir
         return state_root / "master_linkedin_jobs_state.db"
 
+    def _selection_limit(self, total: int) -> int:
+        """Effective number of companies selected for this run.
+
+        ``max_companies`` is a bounded-cycle window; ``smoke``/``pilot`` are
+        bounded diagnostic windows; otherwise every eligible company is selected.
+        """
+        if self.config.max_companies is not None:
+            return min(total, max(0, int(self.config.max_companies)))
+        if self.config.mode == "smoke":
+            return min(total, 1)
+        if self.config.mode == "pilot":
+            return min(total, 25)
+        return total
+
     def _validate_required_state(self, output_dir: Path) -> Path:
         state_path = self._state_db_path(output_dir)
         if self.config.require_existing_state and not state_path.is_file():
@@ -2989,13 +3026,21 @@ class CatalogRunner:
             self._detail_workers.append(thread)
 
     def _stop_pipeline(self) -> None:
-        """Flush batched writes, drain the detail queue, and stop workers."""
+        """Flush batched writes, drain the detail queue, and stop workers.
+
+        Joins without a fixed timeout so a worker that is legitimately parked in
+        a bounded proxy cooldown is still drained before the run is finalized.
+        Otherwise that worker could write a late observation/attempt after
+        ``reconcile_lifecycle`` and ``finish_run``, which would misclassify a
+        still-pending job as absent.  Cooldown is bounded, and budget
+        exhaustion closes the request path, so the join always terminates.
+        """
         self._flush_enqueue_batch()
         self._flush_cache_hit_batch()
         for _ in self._detail_workers:
             self._detail_task_queue.put(None)
         for worker in self._detail_workers:
-            worker.join(timeout=60.0)
+            worker.join()
         self._detail_workers.clear()
         self._pipeline_stop_event.set()
 
@@ -3664,13 +3709,10 @@ class CatalogRunner:
             )
         else:
             self.metrics["proxy_count"] = len(getattr(self.transport, "proxies", ())) or 1
-        selected = list(self.groups.values())
-        if self.config.max_companies is not None:
-            selected = selected[: max(0, int(self.config.max_companies))]
-        elif self.config.mode == "smoke":
-            selected = selected[:1]
-        elif self.config.mode == "pilot":
-            selected = selected[:25]
+        ordered = sorted(self.groups.values(), key=lambda group: (int(group.linkedin_company_id), group.linkedin_company_id))
+        total = len(ordered)
+        limit = self._selection_limit(total)
+        selected = ordered[:limit]
         self.metrics["companies_selected"] = len(selected)
         if self.config.dry_run or self.config.mode in {"validate", "reconcile"}:
             try:
@@ -3710,6 +3752,13 @@ class CatalogRunner:
         self.store = self._open_state(output_dir)
         self.store.start_run(run_id, mode=self.config.mode, input_sha256=input_hash)
         self._pipeline_stop_event.clear()
+        selection_cursor = 0
+        if limit < total:
+            selection_cursor = self.store.get_cursor() % total
+            if selection_cursor:
+                selected = ordered[selection_cursor:] + ordered[:selection_cursor]
+                selected = selected[:limit]
+            self.metrics["selection_cursor"] = selection_cursor
         try:
             if selected:
                 worker_count = min(max(1, self.config.workers), len(selected))
@@ -3801,6 +3850,8 @@ class CatalogRunner:
             self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
             self._capture_detail_provider_usage()
             self.store.finish_run(run_id, run_status, self.now())
+            if limit < total:
+                self.store.set_cursor((selection_cursor + limit) % total)
             if self._event_journal is not None:
                 self._event_journal.close()
                 self._event_journal = None

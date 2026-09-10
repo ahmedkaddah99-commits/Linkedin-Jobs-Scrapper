@@ -1,0 +1,223 @@
+"""Representative LinkedIn producer benchmark (offline, read-only).
+
+Measures the producer's parse and SQLite write throughput against the shape of
+the preserved historical state (188,206 jobs, 198,491 cards, 198,493 attempts)
+without network or provider calls.  Network latency is simulated separately by
+``benchmark_linkedin_pipeline.py`` so that CPU/parsing/DB work and I/O wait are
+reported independently.
+
+The historical state is opened read-only (or read from a read-only checkpoint
+copy); writes are measured against a fresh temporary StateStore so no
+historical original is modified.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import sqlite3
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.master_linkedin_jobs_catalog import (
+    StateStore,
+    SourceCompanyGroup,
+    parse_job_detail,
+    parse_search_page,
+)
+
+FIXTURES = ROOT / "tests" / "fixtures"
+
+
+def _peak_rss_bytes() -> int | None:
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = Counters()
+        counters.cb = ctypes.sizeof(Counters)
+        get_memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+        get_memory_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        get_memory_info.restype = wintypes.BOOL
+        process = ctypes.windll.kernel32.GetCurrentProcess()
+        ok = get_memory_info(process, ctypes.byref(counters), ctypes.sizeof(counters))
+        return int(counters.PeakWorkingSetSize) if ok else None
+    try:
+        import resource
+
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value * (1024 if sys.platform != "darwin" else 1)
+    except (ImportError, AttributeError):
+        return None
+
+
+def _ro_connect(path: Path) -> sqlite3.Connection:
+    uri = "file:" + str(path.resolve()).replace("\\", "/") + "?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=30)
+
+
+def report_cardinality(path: Path) -> dict[str, int]:
+    connection = _ro_connect(path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        counts: dict[str, int] = {}
+        for table in (
+            "source_company_groups",
+            "jobs",
+            "job_company_observations",
+            "search_pages",
+            "search_cards",
+            "detail_attempts",
+            "detail_queue",
+            "company_scans",
+            "lifecycle_events",
+            "ownership_exclusions",
+        ):
+            if table in tables:
+                counts[table] = int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+        counts["table_count"] = len(tables)
+        return counts
+    finally:
+        connection.close()
+
+
+def benchmark_parse(iterations: int) -> dict[str, Any]:
+    search_body = (FIXTURES / "linkedin_job_search_valid.html").read_text(encoding="utf-8")
+    detail_body = (FIXTURES / "linkedin_job_detail.html").read_text(encoding="utf-8")
+    started = time.perf_counter()
+    started_cpu = time.process_time()
+    search_cards = 0
+    detail_records = 0
+    for _ in range(iterations):
+        page = parse_search_page(search_body)
+        search_cards += len(page.cards) + len(page.malformed_cards)
+        detail = parse_job_detail("1234567890", detail_body)
+        detail_records += 1 if detail.title or detail.linkedin_job_id else 0
+    wall = time.perf_counter() - started
+    cpu = time.process_time() - started_cpu
+    return {
+        "iterations": iterations,
+        "search_cards_parsed": search_cards,
+        "detail_records_parsed": detail_records,
+        "wall_time_seconds": round(wall, 4),
+        "cpu_time_seconds": round(cpu, 4),
+        "parse_records_per_second": round((search_cards + detail_records) / wall, 2),
+        "peak_rss_bytes": _peak_rss_bytes(),
+    }
+
+
+def _sample_catalog_rows(connection: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        "SELECT row_json FROM job_company_observations LIMIT ?", (limit,)
+    ).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
+def benchmark_db_writes(rows: list[dict[str, Any]], *, batch_size: int) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="runr-linkedin-rep-") as tmp:
+        store = StateStore(Path(tmp) / "state.db")
+        run_id = "benchmark-run"
+        store.start_run(run_id, mode="full", input_sha256="benchmark")
+        group = SourceCompanyGroup(
+            linkedin_company_id="22",
+            primary_canonical_company_id="C-001",
+            source_company_names=("Acme",),
+            source_company_ids=("C-001",),
+            source_company_urls=("https://www.linkedin.com/company/acme",),
+            primary_slug="acme",
+        )
+        scan_id = store.start_company_scan(run_id, group)
+        started = time.perf_counter()
+        started_cpu = time.process_time()
+        written = 0
+        for index, row in enumerate(rows):
+            normalized = dict(row)
+            normalized["run_id"] = run_id
+            normalized["company_scan_id"] = scan_id
+            with store.batch():
+                store.upsert_catalog_row(normalized)
+                store.record_detail_attempt(run_id, str(row.get("linkedin_job_id") or index), status="SUCCESS")
+            written += 1
+        wall = time.perf_counter() - started
+        cpu = time.process_time() - started_cpu
+        store.close()
+        return {
+            "rows_written": written,
+            "batch_size": batch_size,
+            "wall_time_seconds": round(wall, 4),
+            "cpu_time_seconds": round(cpu, 4),
+            "writes_per_second": round(written / wall, 2),
+            "peak_rss_bytes": _peak_rss_bytes(),
+        }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--state-db", type=Path, required=True, help="read-only historical LinkedIn state DB")
+    parser.add_argument("--write-sample", type=int, default=50000, help="number of historical rows to re-write")
+    parser.add_argument("--parse-iterations", type=int, default=20000, help="search+detail parse iterations")
+    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args(argv)
+
+    state_path = args.state_db
+    if not state_path.is_file():
+        raise SystemExit(f"state DB not found: {state_path}")
+
+    cardinality = report_cardinality(state_path)
+    parse = benchmark_parse(args.parse_iterations)
+
+    connection = _ro_connect(state_path)
+    try:
+        sample_rows = _sample_catalog_rows(connection, args.write_sample)
+    finally:
+        connection.close()
+    writes = benchmark_db_writes(sample_rows, batch_size=args.batch_size)
+
+    report = {
+        "version": "linkedin-representative-benchmark-v1",
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "state_db_bytes": state_path.stat().st_size,
+        "cardinality": cardinality,
+        "parse": parse,
+        "db_writes": writes,
+        "note": "Offline, read-only against the preserved checkpoint copy. No network or provider calls.",
+    }
+    encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(encoded + "\n", encoding="utf-8")
+    print(encoded)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
