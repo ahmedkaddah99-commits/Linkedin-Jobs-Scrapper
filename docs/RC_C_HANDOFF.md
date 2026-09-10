@@ -1,5 +1,43 @@
 # RC-C release and integration handoff
 
+## Repair completion checkpoint - 2026-09-10
+
+Executable code: `2ab1da7fdd9883e86adca726335427ac91244c4b`. The preceding
+current-tip labels below are historical. C integrated explicit cohort scope,
+budget deferral, missing Python Playwright/Chromium, real route.request API,
+safe partial/empty browser outcomes, homepage-first discovery, separate proxy
+authentication, timeout observation preservation, and direct-first browser
+fallback. All A/B ancestry is retained.
+
+Verification: 222 combined producer, discovery, scheduler, worker and runtime
+tests plus four subtests passed before the last two narrow changes. The latest
+timeout/direct-first changes passed 65 focused producer/fallback/adapter tests.
+Ruff passed. The real browser fixture extracted one job and counted one
+loopback navigation under runr-acquisition and systemd restrictions. The
+latest systemd fixture used code `38d59eba`, invocation
+`ee76f660573d496dacff6975b165dda3`, exited 0 in 8.198 seconds. This was a
+browser-runtime check, not an unattended acquisition-cycle acceptance.
+
+The existing host unit gained only
+`/etc/systemd/system/runr-acquisition-worker.service.d/30-browser-runtime.conf`
+with PLAYWRIGHT_BROWSERS_PATH=/ms-playwright. It remains inactive/disabled;
+customer dotenv remains unreadable to the acquisition account. Host diagnostic
+code archives are under `/opt/runr/releases/rc027-*`; the service's production
+code was not promoted. No Render push, production SQL or publication occurred.
+
+The user stopped further provider-credit diagnostics. The final collector was
+terminated (exit -15); no acquisition-user process remains. There are 188
+confirmed attempts plus a reserved 12 with unknown actual consumption. Do not
+reuse the reservation or restart a source probe. See the pilot receipt for
+per-company outcomes and persistent evidence paths.
+
+Rollback: use reviewed Git reverts of the six repair commits in reverse order,
+not resets. Leave the service disabled and preserve all state, exports and
+archives. The added browser-path drop-in can be removed individually followed
+by daemon-reload if reverting runtime configuration; do not remove other unit
+overrides or bulk-uninstall host libraries. Installed browser dependencies do
+not enable or start acquisition.
+
 ## Browser runtime correction - 2026-09-10
 
 Read-only host evidence identifies `playwright_not_installed` on St. Vincenz's

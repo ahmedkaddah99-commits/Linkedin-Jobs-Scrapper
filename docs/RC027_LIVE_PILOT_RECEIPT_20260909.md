@@ -1,5 +1,55 @@
 # RC-027 bounded real-source pilot receipt
 
+## Corrective diagnostics and spending stop - 2026-09-10
+
+These are manually scoped diagnostics; two unattended staging cycles, Turso
+publication and authenticated Jobs/UI visibility remain unaccepted. The
+original four companies were investigated without replacements.
+
+| Candidate | Company | Attempts | Jobs | Outcome |
+| --- | --- | ---: | ---: | --- |
+| 15f58623 | MALZERS | 3 | 1 | partial; embedded JSON observation, CAPTCHA on selected target |
+| 15f58623 | St. Vincenz | 15 | 0 | partial; request cap |
+| 15f58623 | NOVENTI | 15 | 0 | partial; request cap |
+| 15f58623 | helmag | 15 | 0 | partial; request cap |
+| 42f150f5 | St. Vincenz | 4 | 0 | source_failed; browser timeout |
+| 42f150f5 | NOVENTI | 5 | 0 | partial; browser timeout |
+| 42f150f5 | helmag | 5 | 0 | partial; browser timeout |
+| 547ff5a7 | St. Vincenz | 7 | 0 | source_failed; browser timeouts on two targets |
+| 547ff5a7 | NOVENTI | 10 | 0 | partial; browser timeouts on two targets |
+| 547ff5a7 | helmag | 9 | 0 | partial; browser timeouts on two targets |
+
+Each invocation selected exactly one approved canonical ID and enforced its
+own cap. Receipts are preserved under `/srv/runr/exports/rc027-browser-15f58623/`,
+`/srv/runr/exports/rc027-discovery-42f150f5/`, and
+`/srv/runr/exports/rc027-proxy-547ff5a7/`. Their receipt.json files were copied
+to the persistent local `runr-acquisition-snapshots/rc027-20260909/` directory
+as `rc027-<browser|discovery|proxy>-<SHA>-receipt.json`. State is separate under
+the matching `/srv/runr/state/rc027-*` directories. No existing state was cleared.
+
+Accounting: the earlier repair diagnostics used 100, then these runs used
+48 + 14 + 26 = 88, for **188 confirmed attempts** of the new 200 allowance.
+A final NOVENTI run at `2ab1da7f` reserved 12 and was explicitly terminated
+after the user stopped credit-consuming diagnostics. It returned exit -15;
+actual consumption is unknown. Its receipt at
+`/srv/runr/exports/rc027-direct-2ab1da7f/receipt.json` reserves those 12.
+Treat the allowance as fully allocated, without claiming 200 measured
+requests. Historical 190/200 remains separate. No new plan, purchase or credit
+top-up occurred; incremental monetary cost was not reported by the transport.
+
+The final code fixes browser timeout evidence loss and adds direct-first
+browser access with proxy fallback. Those fixes have focused offline evidence;
+the interrupted final run does not establish live success. A real Linux
+Chromium loopback fixture passed as runr-acquisition under systemd protections.
+The production acquisition service remains inactive/disabled and no acquisition
+user processes remain running. No production publication or cutover occurred.
+
+Staging still requires a scoped Turso database/token and scoped R2 bucket
+access with browser CORS. The authoritative env contains database/S3 access
+credentials, but no Turso Platform or Cloudflare management token. The latest
+instruction stops further provider-credit diagnostics; continue offline only
+until the user directs the next live operation and allowance.
+
 ## Repair-candidate live verification amendment - 2026-09-09
 
 The final A/B repair candidate was staged as release

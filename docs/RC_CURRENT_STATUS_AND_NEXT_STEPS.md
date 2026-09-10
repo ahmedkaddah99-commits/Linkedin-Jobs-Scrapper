@@ -1,5 +1,28 @@
 # Current RC status and next steps
 
+## Current implementation checkpoint - 2026-09-10
+
+Executable candidate: `2ab1da7fdd9883e86adca726335427ac91244c4b`. The
+2026-09-09 current-tip statements below are historical. Runtime corrections
+now enforce explicit cohorts, defer untouched companies after request-budget
+exhaustion, install the required Python Playwright runtime, use the real
+browser request API and proxy authentication fields, and keep unverified
+rendered snapshots closure-unsafe. Employer discovery tries credible homepage
+career links before spending on guessed paths. Existing enrichment callers
+keep their prior discovery strategy.
+
+Timeouts now retain observed jobs and request counts; browser extraction tries
+direct access before proxy fallback using the remaining shared browser budget.
+The final live invocation was stopped at the user's instruction to stop
+provider-credit diagnostics. Confirmed usage is 188 attempts, with 12 reserved
+for the interrupted run and not available for reuse until reconciled. No
+acquisition processes remain running. Offline checks use no provider credits.
+
+The VPS browser proof passed under the acquisition user and a systemd sandbox
+using only a loopback fixture. RC-027 acceptance and production cutover remain
+pending: real-source diagnostics are not scheduler/Turso/API/UI acceptance.
+Use the latest pilot receipt for request accounting and per-company outcomes.
+
 Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`

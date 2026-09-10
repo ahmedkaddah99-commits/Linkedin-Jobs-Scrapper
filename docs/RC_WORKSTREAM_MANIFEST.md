@@ -1,5 +1,28 @@
 # Runr acquisition workstream manifest
 
+## Collector/runtime corrections - 2026-09-10
+
+Implementation candidate: `2ab1da7fdd9883e86adca726335427ac91244c4b`.
+This contains cohort/budget deferral `6a242e10`, Python browser/runtime
+corrections `15f58623`, bounded homepage-first discovery `42f150f5`, and
+browser proxy authentication `547ff5a7`, timeout observation preservation
+`38d59eba`, and direct-first browser access `2ab1da7f`. All descend from the integrated A/B
+tips. C owns these corrections and remains the sole live-run owner.
+Documentation commits after this candidate record observations without changing
+the executable candidate. Earlier current-tip statements below are historical.
+
+Python Playwright 1.60.0 and Chromium revision 1223 were installed on the VPS.
+The real collector extracted a loopback fixture as `runr-acquisition` and in
+a systemd sandbox with outbound traffic restricted to localhost. The existing
+acquisition service remains disabled. No Render push/cutover occurred.
+See the latest pilot receipt for actual cumulative request usage.
+
+User stopped further provider-credit diagnostic spending. The last collector
+was terminated and the acquisition user has no remaining processes. Confirmed
+usage is 188/200; the interrupted final invocation reserved the remaining 12
+and its actual usage is unconfirmed. Do not reuse that reservation. No further
+live diagnostics are authorized by the latest user instruction.
+
 ## Final local candidate amendment - 2026-09-09
 
 The current clean C and persistent deployment checkout are both at
