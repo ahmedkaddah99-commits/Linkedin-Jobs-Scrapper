@@ -31,6 +31,44 @@ def _source(path: Path, *identifiers: str) -> None:
     )
 
 
+def test_budget_exhaustion_defers_untouched_companies_without_synthetic_scans(tmp_path, monkeypatch):
+    import scripts.master_employer_jobs_catalog as catalog
+
+    source = tmp_path / "companies.csv"
+    _source(source, "first", "second", "third")
+    attempted = []
+
+    def collect(company, limits):
+        attempted.append(company.canonical_company_id)
+        with limits.transport_gate.http_request(company.website_url):
+            pass
+        return EmployerCollectionResult(company=company, status="no_jobs", outcome="confirmed_zero")
+
+    monkeypatch.setattr(catalog, "_collect_company_worker", collect)
+    result = run_collection(
+        input_csv=source, output_dir=tmp_path / "out", limit=3, max_requests=1,
+        company_concurrency=1, max_pending=1,
+    )
+    assert attempted == ["first"]
+    assert result["requests"] == 1
+    assert result["companies_processed"] == 1
+    assert result["companies_deferred_budget"] == 2
+    assert result["final_export_completed"] is True
+    state = EmployerState(tmp_path / "out" / "master_employer_jobs_state.db")
+    try:
+        assert not state.company_status(_company("second"))
+        assert not state.company_status(_company("third"))
+    finally:
+        state.close()
+    resumed = run_collection(
+        input_csv=source, output_dir=tmp_path / "out", limit=3, max_requests=2,
+        company_concurrency=1, max_pending=1, recheck_budget=0,
+    )
+    assert attempted == ["first", "second", "third"]
+    assert resumed["rechecks_skipped_budget"] == 1
+    assert resumed["companies_processed"] == 2
+
+
 def test_stalled_company_does_not_block_completed_checkpoint(tmp_path: Path, monkeypatch) -> None:
     import scripts.master_employer_jobs_catalog as catalog
 

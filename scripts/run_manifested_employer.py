@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="opt into website-only/LinkedIn-only expansion tasks; default is the dual-source pilot",
     )
     parser.add_argument("--company-id", default="")
+    parser.add_argument("--company-ids", nargs="+", help="exact eligible canonical IDs for a bounded cohort")
     parser.add_argument("--max-job-links", type=int, default=25)
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-browser-requests", type=int, default=10)
@@ -58,13 +59,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.limit <= 0 and not args.full:
+        parser.error("--limit must be positive; use --full for an unrestricted run")
+    if args.max_requests < 0:
+        parser.error("--max-requests must not be negative")
+    if args.company_id and args.company_ids:
+        parser.error("use either --company-id or --company-ids")
+    if args.company_ids and not args.full and len(set(args.company_ids)) > args.limit:
+        parser.error("--limit must cover every requested company ID")
     pilot_only = not args.include_single_source
     manifest, tasks = require_eligibility_manifest(args.manifest, SOURCE_EMPLOYER, pilot_only=pilot_only)
     output_dir = args.output_dir.resolve()
     state_dir = args.state_dir.resolve() if args.state_dir is not None else None
     staged_input = output_dir / ".manifest_inputs" / f"{manifest['manifest_id']}-employer.csv"
-    staged = materialize_source_input(manifest, SOURCE_EMPLOYER, staged_input, pilot_only=pilot_only)
+    cohort = args.company_ids or ([args.company_id] if args.company_id else None)
+    staged = materialize_source_input(
+        manifest, SOURCE_EMPLOYER, staged_input, pilot_only=pilot_only, company_ids=cohort
+    )
     metrics = run_collection(
         input_csv=staged_input,
         output_dir=output_dir,

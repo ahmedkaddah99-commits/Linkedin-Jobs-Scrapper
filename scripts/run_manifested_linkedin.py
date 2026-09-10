@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detail-refresh-hours", type=float, default=168.0)
     parser.add_argument("--volatile-refresh-hours", type=float, default=24.0)
     parser.add_argument("--company-id")
+    parser.add_argument("--company-ids", nargs="+", help="exact eligible canonical IDs for a bounded cohort")
     parser.add_argument("--resume-run-id")
     parser.add_argument("--max-companies", type=int)
     parser.add_argument("--fresh", action="store_true")
@@ -60,13 +61,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.company_id and args.company_ids:
+        parser.error("use either --company-id or --company-ids")
+    if args.company_ids and args.max_companies is not None:
+        parser.error("--company-ids selects the exact cohort; do not combine with --max-companies")
+    if args.max_requests < 0:
+        parser.error("--max-requests must not be negative")
     pilot_only = not args.include_single_source
     manifest, tasks = require_eligibility_manifest(args.manifest, SOURCE_LINKEDIN, pilot_only=pilot_only)
     output_dir = args.output_dir.resolve()
     state_dir = args.state_dir.resolve() if args.state_dir is not None else None
     staged_input = output_dir / ".manifest_inputs" / f"{manifest['manifest_id']}-linkedin.csv"
-    staged = materialize_source_input(manifest, SOURCE_LINKEDIN, staged_input, pilot_only=pilot_only)
+    cohort = args.company_ids
+    staged = materialize_source_input(
+        manifest, SOURCE_LINKEDIN, staged_input, pilot_only=pilot_only, company_ids=cohort
+    )
     config = RunnerConfig(
         input_csv=staged_input,
         output_dir=output_dir,
@@ -89,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         fresh=args.fresh,
         require_existing_state=args.require_existing_state,
         dry_run=args.dry_run,
-        max_companies=args.max_companies,
+        max_companies=staged["rows"] if args.company_ids else args.max_companies,
     )
     # The low-level producer creates its transport lazily. A dry-run must
     # validate the manifest without requiring provider credentials or making a

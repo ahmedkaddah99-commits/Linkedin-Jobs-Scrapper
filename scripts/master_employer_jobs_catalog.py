@@ -1641,6 +1641,7 @@ def run_collection(
         "exported_jobs": 0,
         "companies_processed": 0,
         "companies_skipped_resume": 0,
+        "companies_deferred_budget": 0,
         "rechecks_attempted": 0,
         "rechecks_skipped_budget": 0,
         "recheck_budget": max(0, int(recheck_budget)),
@@ -1780,6 +1781,10 @@ def run_collection(
         try:
             while next_index < len(work) or pending:
                 while next_index < len(work) and len(pending) < pending_limit:
+                    if request_budget is not None and accounting.snapshot()["total_attempts"] >= request_budget:
+                        metrics["companies_deferred_budget"] = len(work) - next_index
+                        next_index = len(work)
+                        break
                     company = work[next_index]
                     next_index += 1
                     pending[executor.submit(_collect_company_worker, company, limits)] = company

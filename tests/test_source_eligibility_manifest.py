@@ -266,6 +266,34 @@ def test_both_scheduled_entrypoints_require_and_consume_the_manifest(tmp_path):
     )
 
 
+@pytest.mark.parametrize("source", [SOURCE_EMPLOYER, SOURCE_LINKEDIN])
+def test_explicit_cohort_materializes_only_requested_eligible_ids(tmp_path, source):
+    path = tmp_path / "manifest.json"
+    write_manifest_bundle(path, _report(), raw_sidecar_path=tmp_path / "raw.jsonl")
+    manifest = load_manifest(path)
+    before = path.read_bytes()
+    output = tmp_path / "cohort.csv"
+    result = materialize_source_input(
+        manifest, source, output, pilot_only=False, company_ids=["master-alpha"]
+    )
+    with output.open(encoding="utf-8-sig", newline="") as handle:
+        assert {row["canonical_CompanyID"] for row in csv.DictReader(handle)} == {"master-alpha"}
+    assert result["tasks"] == 1
+    assert path.read_bytes() == before
+    for invalid in (["not-eligible"], ["master-alpha", "not-eligible"], [], [""]):
+        with pytest.raises(ValueError, match="must all be eligible"):
+            materialize_source_input(manifest, source, tmp_path / "bad.csv", company_ids=invalid)
+        assert not (tmp_path / "bad.csv").exists()
+
+
+@pytest.mark.parametrize("limit", ["0", "-1"])
+def test_employer_wrapper_rejects_implicit_full_run_before_reading_input(tmp_path, limit):
+    with pytest.raises(SystemExit) as error:
+        employer_main(["--manifest", "missing.json", "--output-dir", str(tmp_path / "out"), "--limit", limit])
+    assert error.value.code == 2
+    assert not (tmp_path / "out").exists()
+
+
 def test_manifest_source_gate_rejects_wrong_schema_and_duplicate_task():
     report = _report()
     assert len(validate_manifest_for_source(report, SOURCE_EMPLOYER)) == 1

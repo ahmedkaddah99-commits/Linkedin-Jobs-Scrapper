@@ -993,10 +993,17 @@ def materialize_source_input(
     output_path: str | Path,
     *,
     pilot_only: bool = True,
+    company_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a source-specific CSV from eligible task representatives only."""
 
     tasks = validate_manifest_for_source(manifest, source, pilot_only=pilot_only)
+    if company_ids is not None:
+        requested = {value.strip() for value in company_ids}
+        available = {task["canonical_company_id"] for task in tasks}
+        if not requested or "" in requested or requested - available:
+            raise ValueError("requested company IDs must all be eligible for this source")
+        tasks = [task for task in tasks if task["canonical_company_id"] in requested]
     output = Path(output_path).resolve()
     source_path = Path(str((manifest.get("source_snapshot") or {}).get("path") or "")).resolve()
     if output == source_path:
