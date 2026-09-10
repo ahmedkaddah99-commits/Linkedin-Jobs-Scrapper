@@ -75,6 +75,9 @@ Jobs-Urls/
 test CV/
 test-CV/
 
+# Generated completeness audit inputs (regenerable via scripts/)
+data/audit/master_jobs_sample.jsonl
+
 # Legacy local folders
 bc_automation
 
