@@ -340,7 +340,13 @@ def run_delivery(
             "manifest_hash": _text(manifest.get("manifest_hash")),
             "source_version": source_version,
         }
-    store.ensure_targets(targets)
+    existing_target_ids = {
+        _text(target.get("target_id"))
+        for target in store.list_targets(include_disabled=True)
+    }
+    store.ensure_targets(
+        target for target in targets if _text(target.get("target_id")) not in existing_target_ids
+    )
     marker = "|".join([_text(manifest.get("manifest_hash")), linkedin_marker, employer_marker, source_version])
     cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
     cycle = store.claim_due_cycle(
