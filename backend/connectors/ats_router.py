@@ -214,6 +214,7 @@ def fetch_ats_snapshot(
         jobs: list[dict[str, Any]] = []
         last_response = None
         total_expected = 0
+        total_reported = None
         pages_fetched = 0
         page_limit = max(1, min(20, int(max_pages)))
         if int(max_requests or 0) > 0:
@@ -232,7 +233,12 @@ def fetch_ats_snapshot(
                 jobs.extend(page_jobs)
                 pages_fetched += 1
                 meta = payload.get("meta") if isinstance(payload, dict) else {}
-                total_expected = int(meta.get("total") or 0) if isinstance(meta, dict) else 0
+                if isinstance(meta, dict) and "total" in meta:
+                    try:
+                        total_reported = int(meta.get("total") or 0)
+                        total_expected = total_reported
+                    except (TypeError, ValueError):
+                        pass
                 if not page_jobs or (total_expected and len(jobs) >= total_expected) or len(page_jobs) < 100:
                     pagination_complete = True
                     break
@@ -268,6 +274,9 @@ def fetch_ats_snapshot(
             "pages_fetched": pages_fetched,
             "requests_made": pages_fetched,
             "source_reported_count": total_expected or len(jobs),
+            # Independent source-reported total (the ``meta.total`` value).  This
+            # is the authoritative denominator for completeness reconciliation.
+            "source_reported_total": total_reported,
         }
 
     if normalized_ats == "lever":
