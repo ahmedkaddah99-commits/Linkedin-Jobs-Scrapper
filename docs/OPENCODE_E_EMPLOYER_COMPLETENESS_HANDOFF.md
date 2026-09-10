@@ -1,11 +1,13 @@
 # OpenCode E: Employer-site completeness handoff
 
-Date: 2026-09-10  
-Worktree: `C:\Users\ahmed\Projects_Local\runr-opencode-e-employer-completeness`  
-Branch: `temp/opencode-e-employer-completeness`  
-Base SHA: `848408f3024c3c675abb3f8d6696563eb4184c50`  
-Final SHA: `7d91de2c31e4ea8f608ae52862737f3ed450116e`  
-Owner: E (employer-site collector, career-page/ATS discovery, pagination/partition traversal, direct/proxy/browser connectors, per-company coverage receipts)
+| Field | Value |
+|---|---|
+| Date | 2026-09-10 |
+| Worktree | `C:\Users\ahmed\Projects_Local\runr-opencode-e-employer-completeness` |
+| Branch | `temp/opencode-e-employer-completeness` |
+| Base SHA | `848408f3024c3c675abb3f8d6696563eb4184c50` |
+| Final SHA | `13ccb9a7d03ef5a12d6f35a2dd9f39813ac5be5b` |
+| Owner | E (employer-site collector, career-page/ATS discovery, pagination/partition traversal, direct/proxy/browser connectors, per-company coverage receipts) |
 
 ## Scope
 
@@ -14,7 +16,7 @@ Make Runr's employer-career-site acquisition demonstrably capable of reporting t
 ## Base and final SHAs
 
 - Base: `848408f3024c3f8d6696563eb4184c50` (`deployment/render-turso-r2` tip at worktree creation)
-- Final: `7d91de2c31e4ea8f608ae52862737f3ed450116e`
+- Final: `13ccb9a7d03ef5a12d6f35a2dd9f39813ac5be5b`
 
 ## Changed files
 
@@ -163,4 +165,5 @@ No reset, clean, push, deploy, live request, or production mutation was performe
 
 ## Clean branch tip
 
-Final commit SHA after this handoff: `7d91de2c31e4ea8f608ae52862737f3ed450116e`.
+Implementation commit: `13ccb9a7d03ef5a12d6f35a2dd9f39813ac5be5b`
+Branch tip (`temp/opencode-e-employer-completeness`): `git rev-parse HEAD` — a documentation-only commit records the implementation SHA after this handoff.
