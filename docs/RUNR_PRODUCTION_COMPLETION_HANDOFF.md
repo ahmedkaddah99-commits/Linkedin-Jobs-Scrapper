@@ -5,7 +5,7 @@ Verification date: 2026-09-11
 ## Release and deployment
 
 - Repository: `deployment/render-turso-r2`
-- Final commit: `5dfdd1066d8bcba4a958f3d95e98dc6b7dbe8553`
+- Runtime release commit deployed to production: `5dfdd1066d8bcba4a958f3d95e98dc6b7dbe8553`
 - Acquisition/admin integration ancestor: `550ee00a50b7f5538359a21c5b6a02227efac9ce`
 - Integrated delivery commit: `dd47acf9`
 - VPS: `runr-vps` / `vmd205749`, release root `/opt/runr`
