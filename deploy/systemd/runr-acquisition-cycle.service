@@ -11,6 +11,9 @@ User=runr-acquisition
 Group=runr-acquisition
 UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
+# Provider credentials are kept separately from operational caps and paths.
+# The leading '-' preserves fail-closed startup when no provider is configured.
+EnvironmentFile=-/opt/runr/.env.acquisition.provider
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
 Environment=RUNR_DATA_DIR=/var/lib/runr/acquisition-data
 Environment=RUNR_ACQUISITION_INPUT_ROOT=/srv/runr/shared/inputs
