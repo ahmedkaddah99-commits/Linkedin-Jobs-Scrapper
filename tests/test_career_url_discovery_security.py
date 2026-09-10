@@ -85,21 +85,6 @@ class CareerUrlDiscoverySecurityTests(unittest.TestCase):
         self.assertIn(status, {401, 403})
         discovery.assert_not_called()
 
-    def test_non_admin_cannot_access_acquisition_publication_mutations(self):
-        paths = (
-            "/admin/acquisition/rollout/configure",
-            "/admin/acquisition/rollout/advance",
-            "/admin/acquisition/targets/qonto_lever/validate",
-            "/admin/acquisition/staging/publication-test/promote",
-            "/admin/acquisition/requests/request-test/decision",
-            "/admin/acquisition/recover",
-        )
-
-        for path in paths:
-            with self.subTest(path=path):
-                status, _ = self._request(authenticated=True, path=path)
-                self.assertEqual(status, 403)
-
 
 if __name__ == "__main__":
     unittest.main()

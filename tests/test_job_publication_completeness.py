@@ -316,9 +316,8 @@ def test_slash_sentinel_canonical_company_id_is_missing():
     assert REASON_MISSING_CANONICAL_COMPANY_ID in _codes(result)
 
 
-def test_job_detail_url_is_an_acceptable_application_url():
-    # A LinkedIn view URL / employer position URL is a valid user-facing
-    # application/job URL per the current product policy.
+def test_job_detail_url_is_not_an_application_url():
+    # A LinkedIn view URL is useful provenance but does not let a customer apply.
     record = _complete_record(
         apply_url="https://www.linkedin.com/jobs/view/4313287713",
         application_url="https://www.linkedin.com/jobs/view/4313287713",
@@ -329,8 +328,19 @@ def test_job_detail_url_is_an_acceptable_application_url():
         },
     )
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
-    assert result.status == STATUS_PUBLISHABLE_COMPLETE
-    assert REASON_LISTING_FALLBACK_APPLICATION_URL not in _codes(result)
+    assert result.status == STATUS_INVALID
+    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+
+
+def test_linkedin_view_url_is_rejected_even_when_legacy_apply_field_is_used():
+    record = _complete_record(
+        apply_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_destination=None,
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
 
 
 def test_careers_listing_url_is_still_rejected():

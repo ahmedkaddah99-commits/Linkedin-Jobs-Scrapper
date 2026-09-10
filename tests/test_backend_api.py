@@ -1106,128 +1106,14 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(test_run_item["tracker_source_type"], "test_run")
         self.assertTrue(test_run_item["placed_in_tracker_at"])
 
-    def test_dashboard_returns_candidate_action_and_progress_insights(self):
-        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
-            status, run_payload = self._request(
-                "POST",
-                "/runs",
-                {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
-            )
-        self.assertEqual(status, 201)
-        run_id = run_payload["id"]
-
-        status, review_payload = self._request(
-            "POST",
-            f"/runs/{run_id}/reviews",
-            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
-        )
-        self.assertEqual(status, 201)
-        review = self.app.get_review(review_payload["review_id"])
-        old_application_date = (
-            datetime.now(timezone.utc) - timedelta(days=20, minutes=1)
-        ).replace(microsecond=0).isoformat()
-        review.metadata = {
-            **dict(review.metadata or {}),
-            "tracker_status": "applied",
-            "application_status": "Applied",
-            "application_date": old_application_date,
-        }
-        review.updated_at = old_application_date
-        self.app.repositories.review_store.upsert_review(review)
-
-        recent_application_date = self._recent_tracker_timestamp(days_ago=2, hour=11)
-        user = self.app.get_user(self.user.user_id)
-        user.metadata = {
-            **dict(user.metadata or {}),
-            "external_tracker_applications": [
-                {
-                    "application_id": "external_dashboard_1",
-                    "review_id": "external_dashboard_1",
-                    "source": "gmail_detection",
-                    "source_label": "Gmail",
-                    "title": "Data Analyst",
-                    "company": "Example GmbH",
-                    "application_date": recent_application_date,
-                    "tracker_status": "interview_invited",
-                    "application_status": "Interviewing",
-                    "created_at": recent_application_date,
-                    "updated_at": recent_application_date,
-                }
-            ],
-        }
-        self.app.upsert_user(user)
-
-        status, contact_payload = self._request(
-            "POST",
-            "/referrals",
-            {
-                "name": "Jane Referrer",
-                "company": "ACME API",
-                "linkedin_url": "https://linkedin.com/in/jane-referrer",
-                "source_kind": "linkedin_csv",
-            },
-        )
-        self.assertEqual(status, 201)
-        self.assertTrue(contact_payload["contact_id"])
-
+    def test_removed_dashboard_route_is_not_available(self):
         status, payload = self._request("GET", "/dashboard")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["meta"]["mode"], "full")
-        self.assertEqual(payload["analytics"]["outcomes"]["trackerTotal"], 2)
-        self.assertEqual(payload["analytics"]["outcomes"]["submittedTotal"], 2)
-
-        insights = payload["analytics"]["candidateInsights"]
-        self.assertEqual(
-            [stage["label"] for stage in insights["funnel"]["stages"]],
-            ["Discovered", "Approved", "Submitted", "Employer responses", "Interviews", "Offers"],
-        )
-        self.assertTrue(all(stage["conversionRate"] <= 1 for stage in insights["funnel"]["stages"]))
-        awaiting_response = next(
-            stage for stage in insights["pipelineAging"] if stage["status"] == "Applied"
-        )
-        self.assertEqual(awaiting_response["count"], 1)
-        self.assertEqual(awaiting_response["staleCount"], 1)
-        self.assertGreaterEqual(awaiting_response["medianAgeDays"], 20)
-
-        source_labels = [source["label"] for source in insights["sourceEffectiveness"]]
-        self.assertIn("Gmail", source_labels)
-        self.assertIn("Unknown source", source_labels)
-        role_strategy = insights["roleStrategy"]
-        self.assertEqual(role_strategy["totalApplications"], 2)
-        self.assertIn("Data Analyst", role_strategy["summary"])
-        roles_by_label = {role["label"]: role for role in role_strategy["roles"]}
-        self.assertEqual(roles_by_label["Data Analyst"]["applications"], 1)
-        self.assertEqual(roles_by_label["Data Analyst"]["responses"], 1)
-        self.assertEqual(roles_by_label["Data Analyst"]["interviews"], 1)
-        self.assertEqual(roles_by_label["Data Analyst"]["applicationShare"], 0.5)
-        self.assertEqual(roles_by_label["Data Analyst"]["responseRate"], 1)
-        self.assertEqual(roles_by_label["Data Analyst"]["recommendation"], "Test more")
-        self.assertEqual(roles_by_label["Engineer"]["applications"], 1)
-        self.assertEqual(roles_by_label["Engineer"]["responses"], 0)
-        self.assertEqual(insights["weeklySummary"]["current"]["applications"], 1)
-        self.assertEqual(insights["weeklySummary"]["current"]["responses"], 1)
-        self.assertEqual(insights["weeklySummary"]["current"]["interviews"], 1)
-        self.assertGreater(insights["dataQuality"]["issueCount"], 0)
-        action_ids = [item["id"] for item in insights["actionPlan"]]
-        self.assertIn("stale_applications", action_ids)
-        self.assertIn("interviews", action_ids)
-        self.assertIn("referral_outreach", action_ids)
-
-    def test_dashboard_summary_mode_returns_fast_shell_payload(self):
-        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
-            status, run_payload = self._request(
-                "POST",
-                "/runs",
-                {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
-            )
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "not_found")
 
         status, payload = self._request("GET", "/dashboard?mode=summary")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["meta"]["mode"], "summary")
-        self.assertTrue(any(run["id"] == run_payload["id"] for run in payload["recent_runs"]))
-        self.assertEqual(payload["analytics"]["outcomes"]["trackerTotal"], 0)
-        self.assertEqual(payload["analytics"]["candidateInsights"]["funnel"]["stages"], [])
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "not_found")
 
     def test_api_supports_deleting_queued_run(self):
         status, run_payload = self._request(
@@ -2926,128 +2812,6 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(customer_view["run"]["scrapeops_usage"]["totals"]["runner_credits"], 5)
 
-    def test_admin_scrapeops_policy_can_be_saved_and_loaded(self):
-        policy_payload = {
-            "plan_policies": {
-                "free": {
-                    "runner_credits_per_month": 150,
-                    "company_sites_per_run": 3,
-                    "runner_credits_per_run": 40,
-                }
-            },
-            "user_overrides": [
-                {
-                    "user_id": self.user.user_id,
-                    "plan_id": "scale",
-                    "runner_credits_per_month": -1,
-                    "company_sites_per_run": -1,
-                    "runner_credits_per_run": -1,
-                    "notes": "internal admin test",
-                }
-            ],
-            "domain_policies": [
-                {
-                    "policy_id": "workday_basic_first",
-                    "domain_pattern": "*.myworkdayjobs.com",
-                    "site_request_modes": ["basic", "render_js_cheap"],
-                    "job_detail_request_modes": ["basic"],
-                    "locality_mode": "strict_local_only",
-                    "country_code": "DE",
-                    "priority": 10,
-                }
-            ],
-            "alert_policy": {
-                "enabled": True,
-                "cadence_hours": 4,
-                "low_remaining_credits_threshold": 50,
-                "discrepancy_threshold": 25,
-                "history_days": 14,
-            },
-        }
-
-        status, saved = self._request("PUT", "/admin/scrapeops/policy", policy_payload)
-        self.assertEqual(status, 200)
-        self.assertEqual(saved["plan_policies"]["free"]["company_sites_per_run"], 3)
-        self.assertEqual(saved["user_overrides"][0]["user_id"], self.user.user_id)
-        self.assertEqual(saved["domain_policies"][0]["policy_id"], "workday_basic_first")
-        self.assertEqual(saved["alert_policy"]["cadence_hours"], 4)
-
-        status, fetched = self._request("GET", "/admin/scrapeops/policy")
-        self.assertEqual(status, 200)
-        self.assertEqual(fetched["domain_policies"][0]["domain_pattern"], "*.myworkdayjobs.com")
-
-    def test_admin_scrapeops_dashboard_returns_trends_policy_and_alerts(self):
-        usage_occurred_at = (
-            datetime.now(timezone.utc) - timedelta(days=1)
-        ).replace(hour=12, minute=10, second=0, microsecond=0).isoformat()
-        self.app.repositories.analytics_store.emit_event(
-            event_id="evt_scrapeops_admin_usage_1",
-            event_name="scrapeops_request",
-            occurred_at=usage_occurred_at,
-            user_id=self.user.user_id,
-            workspace_id="api_workspace",
-            run_id="run_usage_admin",
-            route="/runs/run_usage_admin",
-            source="worker",
-            payload={
-                "domain": "company.example",
-                "request_mode": "basic",
-                "billed": True,
-                "runner_credits": 2,
-                "native_credits": 2,
-            },
-        )
-        with (
-            patch(
-                "backend.application.services._scrapeops_account_state",
-                return_value={
-                    "available": True,
-                    "status": "healthy",
-                    "summary": "ScrapeOps account is healthy.",
-                    "usage": {"used": 12, "limit": 1000, "remaining": 988},
-                },
-            ),
-            patch("backend.application.services.fetch_domain_stats", return_value={"results": []}),
-        ):
-            status, payload = self._request("GET", "/admin/scrapeops/usage")
-
-        self.assertEqual(status, 200)
-        self.assertIn("policy", payload)
-        self.assertEqual(payload["usage"]["totals"]["runner_credits"], 2)
-        self.assertEqual(payload["usage_series"][0]["runner_credits"], 2)
-        self.assertIn("reconciliation_series", payload)
-        self.assertIn("alerts", payload)
-
-    def test_admin_scrapeops_reconciliation_run_records_alerts(self):
-        self.app.save_scrapeops_admin_policy(
-            {
-                "alert_policy": {
-                    "enabled": True,
-                    "cadence_hours": 6,
-                    "low_remaining_credits_threshold": 100,
-                    "discrepancy_threshold": 10,
-                    "history_days": 30,
-                }
-            }
-        )
-        with (
-            patch(
-                "backend.application.services._scrapeops_account_state",
-                return_value={
-                    "available": True,
-                    "status": "healthy",
-                    "summary": "ScrapeOps account is low on credits.",
-                    "usage": {"used": 950, "limit": 1000, "remaining": 50},
-                },
-            ),
-            patch("backend.application.services.fetch_domain_stats", return_value={"results": []}),
-        ):
-            status, payload = self._request("POST", "/admin/scrapeops/reconciliation/run", {})
-
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["status"], "completed")
-        self.assertTrue(payload["alerts"])
-        self.assertEqual(payload["alerts"][0]["alert_type"], "low_remaining_credits")
 
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")
@@ -4280,34 +4044,19 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(excluded_job["create_documents_run_status"], "completed")
         self.assertTrue(excluded_job["create_documents_run_url"].endswith(generate_payload["run"]["id"]))
 
-    def test_api_supports_user_and_secret_admin_endpoints(self):
-        status, users_payload = self._request("GET", "/users")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(users_payload["users"]), 1)
-
-        status, token_payload = self._request(
-            "POST",
-            f"/users/{self.user.user_id}/tokens",
-            {"name": "secondary-token"},
+    def test_removed_admin_data_endpoints_are_not_available(self):
+        removed_routes = (
+            ("GET", "/users"),
+            ("POST", "/users/test-user/tokens"),
+            ("GET", "/secrets"),
+            ("POST", "/secrets"),
+            ("DELETE", "/secrets/test-secret"),
         )
-        self.assertEqual(status, 201)
-        self.assertIn("access_token", token_payload)
-
-        status, secret_payload = self._request(
-            "POST",
-            "/secrets",
-            {"name": "api_secret", "provider": "stored", "workspace_id": "api_workspace", "secret_value": "123"},
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(secret_payload["name"], "api_secret")
-        secret_id = secret_payload["secret_id"]
-
-        status, secrets_payload = self._request("GET", "/secrets?workspace_id=api_workspace")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(secrets_payload["secrets"]), 1)
-
-        status, _ = self._request("DELETE", f"/secrets/{secret_id}")
-        self.assertEqual(status, 200)
+        for method, path in removed_routes:
+            with self.subTest(method=method, path=path):
+                status, payload = self._request(method, path, {}) if method == "POST" else self._request(method, path)
+                self.assertEqual(status, 404)
+                self.assertEqual(payload["error"]["code"], "not_found")
 
     def test_referrals_endpoints_and_review_queue_badges(self):
         status, contact_payload = self._request(
@@ -4415,7 +4164,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(delete_payload["deleted"], contact_id)
 
-    def test_phase1_analytics_events_and_overview_endpoint(self):
+    def test_phase1_analytics_events_endpoint(self):
         self.app.upsert_workflow_template(
             {
                 "id": "analytics_template_v1",
@@ -4516,32 +4265,6 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(outreach_payload["outreach_status"], "Contacted")
 
-        status, overview_payload = self._request("GET", "/analytics/overview")
-        self.assertEqual(status, 200)
-        self.assertIn("automation_success_rate", overview_payload)
-        self.assertIn("applications_per_user", overview_payload)
-        self.assertIn("referral_outreach_funnel", overview_payload)
-        self.assertEqual(overview_payload["product_analytics"]["schema_version"], "product_analytics_v1")
-        overview_user_row = next(
-            (row for row in overview_payload["applications_per_user"] if row["user_id"] == self.user.user_id),
-            None,
-        )
-        self.assertIsNotNone(overview_user_row)
-        self.assertEqual(overview_user_row["approved_reviews"], 1)
-
-        status, snapshot_payload = self._request("GET", "/admin/analytics/snapshot")
-        self.assertEqual(status, 200)
-        snapshot_user_row = next(
-            (
-                row
-                for row in snapshot_payload["applications_per_user"]["rows"]
-                if row["user_id"] == self.user.user_id
-            ),
-            None,
-        )
-        self.assertIsNotNone(snapshot_user_row)
-        self.assertEqual(snapshot_user_row["run_count"], 1)
-
         event_rows = self.app.repositories.analytics_store.query_rows(
             "SELECT event_name FROM analytics_events ORDER BY occurred_at ASC"
         )
@@ -4573,204 +4296,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("database_write_read_delete", payload["timings_ms"])
         self.assertIn("object_storage_put_get_delete", payload["timings_ms"])
 
-    def test_frontend_api_request_diagnostic_event_is_persisted(self):
-        status, payload = self._request(
-            "POST",
-            "/analytics/events",
-            {
-                "event_name": "frontend_api_request_failed",
-                "route": "/runs/:run_id/customer-view",
-                "source": "frontend_api_request_diagnostic",
-                "payload": {
-                    "event": "api_request_failed",
-                    "method": "GET",
-                    "path": "/runs/:run_id/customer-view",
-                    "status": 500,
-                    "duration_ms": 20001,
-                    "timeout_ms": 20000,
-                    "error_name": "Error",
-                    "error_code": "internal_error",
-                    "aborted": False,
-                },
-            },
-        )
-        self.assertEqual(status, 202)
-        self.assertEqual(payload["event_name"], "frontend_api_request_failed")
+    def test_removed_analytics_endpoint_is_not_available(self):
+        status, payload = self._request("POST", "/analytics/events", {})
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "not_found")
 
-        rows = self.app.repositories.analytics_store.query_rows(
-            """
-            SELECT event_name, route, source, payload_json
-            FROM analytics_events
-            WHERE event_name = 'frontend_api_request_failed'
-            ORDER BY occurred_at DESC
-            LIMIT 1
-            """
-        )
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["route"], "/runs/:run_id/customer-view")
-        self.assertEqual(rows[0]["source"], "frontend_api_request_diagnostic")
-        event_payload = json.loads(rows[0]["payload_json"])
-        self.assertEqual(event_payload["status"], 500)
-        self.assertEqual(event_payload["path"], "/runs/:run_id/customer-view")
-        self.assertNotIn("Authorization", event_payload)
-        self.assertNotIn("body", event_payload)
-
-    def test_admin_events_endpoint_supports_filters_pagination_and_admin_role(self):
-        analytics_store = self.app.repositories.analytics_store
-        analytics_store.emit_event(
-            event_id="evt_admin_1",
-            event_name="page_view",
-            occurred_at="2026-01-10T08:00:00+00:00",
-            user_id=self.user.user_id,
-            payload={"route": "/dashboard"},
-        )
-        analytics_store.emit_event(
-            event_id="evt_admin_2",
-            event_name="session_started",
-            occurred_at="2026-01-11T08:00:00+00:00",
-            user_id="usr_other",
-            payload={"session_id": "session_2"},
-        )
-        analytics_store.emit_event(
-            event_id="evt_admin_3",
-            event_name="page_view",
-            occurred_at="2026-01-12T08:00:00+00:00",
-            user_id=self.user.user_id,
-            payload={"route": "/tracker"},
-        )
-
-        status, payload = self._request("GET", "/admin/events?limit=2&offset=0")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["meta"]["limit"], 2)
-        self.assertEqual(payload["meta"]["offset"], 0)
-        self.assertEqual(payload["meta"]["returned"], 2)
-        self.assertEqual(payload["meta"]["total"], 3)
-        self.assertEqual([item["event_id"] for item in payload["events"]], ["evt_admin_3", "evt_admin_2"])
-        self.assertEqual(payload["events"][0]["payload"]["route"], "/tracker")
-
-        status, second_page_payload = self._request("GET", "/admin/events?limit=2&offset=2")
-        self.assertEqual(status, 200)
-        self.assertEqual([item["event_id"] for item in second_page_payload["events"]], ["evt_admin_1"])
-
-        occurred_from = quote("2026-01-11T00:00:00+00:00", safe="")
-        occurred_to = quote("2026-01-13T00:00:00+00:00", safe="")
-        status, filtered_payload = self._request(
-            "GET",
-            f"/admin/events?event_name=page_view&user_id={self.user.user_id}&occurred_from={occurred_from}&occurred_to={occurred_to}",
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(filtered_payload["meta"]["total"], 1)
-        self.assertEqual([item["event_id"] for item in filtered_payload["events"]], ["evt_admin_3"])
-
-        viewer = self.app.upsert_user(
-            {
-                "email": "viewer@example.com",
-                "display_name": "Viewer",
-                "role": "viewer",
-            }
-        )
-        _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
-        status, _, unauthorized_payload = self._request_with_headers(
-            "GET",
-            "/admin/events",
-            headers={"Authorization": f"Bearer {viewer_token}"},
-        )
-        self.assertEqual(status, 403)
-        self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
-
-    def test_admin_promo_code_endpoints_proxy_to_creem(self):
-        list_response = {
-            "discounts": [
-                {
-                    "discount_id": "disc_1",
-                    "name": "Spring campaign",
-                    "code": "SPRING25",
-                    "amount": 25,
-                    "amount_type": "percent",
-                    "max_redemptions": 100,
-                    "starts_at": "2026-05-01T00:00:00+00:00",
-                    "expires_at": "2026-05-31T23:59:59+00:00",
-                    "status": "published",
-                    "status_formatted": "Published",
-                    "created_at": "2026-04-30T10:00:00+00:00",
-                }
-            ],
-            "meta": {"current_page": 1, "per_page": 10, "total": 1},
-        }
-        created_discount = {
-            "discount_id": "disc_2",
-            "name": "Launch code",
-            "code": "LAUNCH10",
-            "amount": 1000,
-            "amount_type": "fixed",
-            "max_redemptions": 0,
-            "starts_at": "",
-            "expires_at": "2026-06-30T22:00:00+00:00",
-            "status": "published",
-            "status_formatted": "Published",
-            "created_at": "2026-05-23T08:00:00+00:00",
-        }
-        viewer = self.app.upsert_user(
-            {
-                "email": "viewer@example.com",
-                "display_name": "Viewer",
-                "role": "viewer",
-            }
-        )
-        _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
-
-        with (
-            patch("backend.api.server._configured_paid_plan_product_ids", return_value=["prod_101", "prod_202", "prod_303"]),
-            patch("backend.api.server._configured_paid_plan_labels", return_value="Launch, Momentum, Scale"),
-            patch("backend.api.server.list_creem_discounts", return_value=list_response),
-            patch("backend.api.server.create_creem_discount", return_value=created_discount) as create_mock,
-            patch("backend.api.server.delete_creem_discount") as delete_mock,
-        ):
-            status, list_payload = self._request("GET", "/admin/promo-codes?limit=10&offset=0")
-            self.assertEqual(status, 200)
-            self.assertEqual(list_payload["meta"]["total"], 1)
-            self.assertEqual(list_payload["promo_codes"][0]["code"], "SPRING25")
-            self.assertEqual(list_payload["promo_codes"][0]["discount"], "25%")
-            self.assertEqual(list_payload["promo_codes"][0]["scope"], "Launch, Momentum, Scale")
-
-            status, create_payload = self._request(
-                "POST",
-                "/admin/promo-codes",
-                {
-                    "name": "Launch code",
-                    "code": "launch10",
-                    "amount_type": "fixed",
-                    "amount": "10.00",
-                    "expires_at": "2026-07-01T00:00:00+02:00",
-                },
-            )
-            self.assertEqual(status, 201)
-            self.assertEqual(create_payload["promo_code"]["code"], "LAUNCH10")
-            self.assertEqual(create_payload["promo_code"]["discount"], "EUR 10.00")
-            create_mock.assert_called_once_with(
-                name="Launch code",
-                code="LAUNCH10",
-                amount=1000,
-                amount_type="fixed",
-                starts_at="",
-                expires_at="2026-06-30T22:00:00+00:00",
-                max_redemptions=0,
-                duration="once",
-                product_ids=["prod_101", "prod_202", "prod_303"],
-            )
-
-            status, delete_payload = self._request("DELETE", "/admin/promo-codes/disc_2")
-            self.assertEqual(status, 200)
-            self.assertEqual(delete_payload["deleted"], "disc_2")
-            delete_mock.assert_called_once_with("disc_2")
-
-            status, _, unauthorized_payload = self._request_with_headers(
-                "GET",
-                "/admin/promo-codes",
-                headers={"Authorization": f"Bearer {viewer_token}"},
-            )
-            self.assertEqual(status, 403)
-            self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
 
     def test_billing_checkout_accepts_valid_promo_code_without_logging_raw_code(self):
         self.app.repositories.config_store.set_value("acquisition.phase_i.checkout_gate_enabled", True)

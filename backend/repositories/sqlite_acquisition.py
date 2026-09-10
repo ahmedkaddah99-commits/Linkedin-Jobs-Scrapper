@@ -20,6 +20,7 @@ from backend.domain.company_identity import (
 )
 from backend.application.company_reconciliation import build_url_reconciliation_report
 from backend.acquisition.network_policy import hostname_for_url
+from backend.acquisition.job_publication_completeness import validate_job_for_publication
 from backend.acquisition.phase_g import (
     applicant_source_gate,
     has_applicant_evidence,
@@ -354,6 +355,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                                 **(
                                     {"canonical_company_name": str(target.get("canonical_company_name") or "")}
                                     if target.get("canonical_company_name")
+                                    else {}
+                                ),
+                                **(
+                                    {"canonical_company_id": str(target.get("canonical_company_id") or "")}
+                                    if target.get("canonical_company_id")
                                     else {}
                                 ),
                             }
@@ -1403,6 +1409,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 company_name,
                 entity_kind,
                 now,
+                preferred_company_id=str(config.get("canonical_company_id") or ""),
                 provenance_url=str(target.get("provenance_url") or ""),
                 aliases=(str(target["display_name"] or ""), str(target["source_token"] or "")),
                 identity_key=f"target:{target_id}",
@@ -2134,6 +2141,119 @@ class SqliteAcquisitionStore(_SqliteStore):
             if (lease_owner or lease_token) and updated.rowcount != 1:
                 raise AcquisitionLeaseLostError(f"Acquisition cycle lease lost: {cycle_id}")
 
+    @staticmethod
+    def _publication_rows_with_completeness(
+        candidate_rows: Iterable[Mapping[str, Any]],
+        *,
+        policy,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return the thin snapshot and durable rejection details.
+
+        The blocking policy is the one explicit activation point for the
+        record-completeness contract. Report-only publications preserve the
+        historical snapshot shape and behavior.
+        """
+        snapshot: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for raw_row in candidate_rows:
+            row = _dict_row(raw_row) if hasattr(raw_row, "keys") else dict(raw_row)
+            payload = _decode(row.get("version_payload_json"), {})
+            payload = dict(payload) if isinstance(payload, Mapping) else {}
+            record = {
+                **payload,
+                "canonical_job_id": str(row.get("canonical_job_id") or ""),
+                "canonical_company_id": str(row.get("company_id") or ""),
+                "company": str(row.get("company") or ""),
+                "title": str(row.get("title") or ""),
+                "location": str(row.get("version_location") or row.get("location") or ""),
+                "location_raw": str(row.get("version_location") or row.get("location") or ""),
+                "description": str(row.get("version_description") or ""),
+                "description_text": str(row.get("version_description") or ""),
+                "full_description": str(row.get("version_description") or ""),
+                "apply_url": str(row.get("apply_url") or ""),
+                "application_url": str(row.get("apply_url") or ""),
+                "source_job_id": str(row.get("source_job_id") or ""),
+                "source": str(row.get("source_ats") or ""),
+                "source_ats": str(row.get("source_ats") or ""),
+                "observed_at": str(row.get("observation_observed_at") or ""),
+                "last_seen_at": str(row.get("last_seen_at") or ""),
+                "last_verified_at": str(row.get("last_verified_at") or ""),
+                "lifecycle_state": str(row.get("lifecycle_state") or ""),
+            }
+            if policy.completeness_mode == "blocking":
+                result = validate_job_for_publication(
+                    record,
+                    company_registry={str(row.get("company_id") or "")},
+                )
+                if not result.publishable:
+                    rejected.append(
+                        {
+                            "canonical_job_id": record["canonical_job_id"],
+                            "external_job_id": record["source_job_id"],
+                            "title": record["title"],
+                            "target_id": str(row.get("source_target_id") or "publication"),
+                            "task_id": str(row.get("source_task_id") or "publication"),
+                            "reasons": [reason.to_dict() for reason in result.reasons],
+                            "status": result.status,
+                        }
+                    )
+                    continue
+            snapshot.append(
+                {
+                    "canonical_job_id": record["canonical_job_id"],
+                    "company": record["company"],
+                    "title": record["title"],
+                    "location": record["location"],
+                    "canonical_url": str(row.get("canonical_url") or ""),
+                    "apply_url": record["apply_url"],
+                    "lifecycle_state": record["lifecycle_state"],
+                    "current_version_id": str(row.get("current_version_id") or ""),
+                }
+            )
+        return snapshot, rejected
+
+    @staticmethod
+    def _persist_publication_rejections(
+        connection,
+        *,
+        cycle_id: str,
+        rejected_rows: Iterable[Mapping[str, Any]],
+    ) -> None:
+        for item in rejected_rows:
+            reasons = item.get("reasons") if isinstance(item.get("reasons"), list) else []
+            for reason in reasons:
+                reason_code = str((reason or {}).get("code") or "unknown_rejection") if isinstance(reason, Mapping) else "unknown_rejection"
+                external_job_id = str(item.get("external_job_id") or "")
+                title = str(item.get("title") or "")
+                request_id = f"publication:{cycle_id}"
+                rejection_key = f"{request_id}:{external_job_id}:{title}:{reason_code}"
+                rejection_id = f"acq_rejection_{hashlib.sha256(rejection_key.encode('utf-8')).hexdigest()[:32]}"
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO acquisition_job_rejections (
+                        rejection_id, request_id, cycle_id, task_id, target_id,
+                        external_job_id, title, reason_code, observed_at, detail_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        rejection_id,
+                        request_id,
+                        cycle_id,
+                        str(item.get("task_id") or "publication"),
+                        str(item.get("target_id") or "publication"),
+                        external_job_id,
+                        title,
+                        reason_code,
+                        utc_now_iso(),
+                        _json({
+                            "canonical_job_id": str(item.get("canonical_job_id") or ""),
+                            "status": str(item.get("status") or ""),
+                            "reason": dict(reason) if isinstance(reason, Mapping) else {},
+                            "source": "publication_completeness_gate",
+                        }),
+                    ),
+                )
+
     def publish_valid_snapshot(
         self,
         *,
@@ -2195,13 +2315,44 @@ class SqliteAcquisitionStore(_SqliteStore):
                     (int(published_count or 0), existing_id, now, cycle_id),
                 )
                 return existing_id
-            placeholders = ",".join("?" for _ in target_ids)
-            rows = connection.execute(
+            if len(target_ids) > 500:
+                connection.execute("DROP TABLE IF EXISTS temp.publication_target_ids")
+                connection.execute("CREATE TEMP TABLE publication_target_ids (target_id TEXT PRIMARY KEY)")
+                connection.executemany(
+                    "INSERT INTO publication_target_ids(target_id) VALUES (?)",
+                    [(target_id,) for target_id in target_ids],
+                )
+                target_scope = "EXISTS (SELECT 1 FROM temp.publication_target_ids pt WHERE pt.target_id = o.target_id)"
+                target_scope_params: tuple[Any, ...] = ()
+            else:
+                placeholders = ",".join("?" for _ in target_ids)
+                target_scope = f"o.target_id IN ({placeholders})"
+                target_scope_params = target_ids
+            candidate_rows = connection.execute(
                 f"""
-                SELECT DISTINCT j.canonical_job_id, c.canonical_name AS company,
+                SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                 j.title, j.location, j.canonical_url,
                                 COALESCE(v.apply_url, '') AS apply_url,
-                                j.lifecycle_state, j.current_version_id
+                                j.lifecycle_state, j.first_seen_at, j.last_seen_at,
+                                j.last_verified_at, j.current_version_id,
+                                COALESCE(v.description, '') AS version_description,
+                                COALESCE(v.location, '') AS version_location,
+                                COALESCE(v.payload_json, '{{}}') AS version_payload_json,
+                                (SELECT o.external_job_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
+                                (SELECT o.source_ats FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
+                                (SELECT o.observed_at FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
+                                (SELECT o.target_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
+                                (SELECT o.task_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
                 FROM canonical_jobs j
                 JOIN canonical_companies c ON c.company_id = j.company_id
                 LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
@@ -2210,7 +2361,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     EXISTS (
                         SELECT 1 FROM job_source_observations o
                         WHERE o.canonical_job_id = j.canonical_job_id
-                          AND o.target_id IN ({placeholders}) AND o.cycle_id = ?
+                          AND {target_scope} AND o.cycle_id = ?
                     )
                     OR EXISTS (
                         SELECT 1 FROM acquisition_publication_jobs previous_jobs
@@ -2222,9 +2373,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                   )
                 ORDER BY j.title, j.canonical_job_id
                 """,
-                (*target_ids, cycle_id),
+                (*target_scope_params, cycle_id),
             ).fetchall()
-            snapshot = [_dict_row(row) for row in rows]
+            snapshot, rejected_rows = self._publication_rows_with_completeness(candidate_rows, policy=policy)
+            self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
@@ -2252,7 +2404,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
             connection.executemany(
                 "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
-                [(publication_id, str(row["canonical_job_id"])) for row in rows],
+                [(publication_id, str(row["canonical_job_id"])) for row in snapshot],
             )
             if previous_publication_id:
                 changed = connection.execute(
@@ -2287,7 +2439,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
             connection.execute(
                 "UPDATE acquisition_cycles SET jobs_published = ?, publication_id = ?, updated_at = ? WHERE cycle_id = ?",
-                (len(rows), publication_id, now, cycle_id),
+                (len(snapshot), publication_id, now, cycle_id),
             )
             for target_id in target_ids:
                 target_published = connection.execute(
@@ -2331,24 +2483,56 @@ class SqliteAcquisitionStore(_SqliteStore):
         policy = get_publication_policy(policy_version)
 
         def publish(connection):
-            placeholders = ",".join("?" for _ in target_ids)
-            rows = connection.execute(
+            if len(target_ids) > 500:
+                connection.execute("DROP TABLE IF EXISTS temp.publication_target_ids")
+                connection.execute("CREATE TEMP TABLE publication_target_ids (target_id TEXT PRIMARY KEY)")
+                connection.executemany(
+                    "INSERT INTO publication_target_ids(target_id) VALUES (?)",
+                    [(target_id,) for target_id in target_ids],
+                )
+                target_scope = "EXISTS (SELECT 1 FROM temp.publication_target_ids pt WHERE pt.target_id = o.target_id)"
+                target_scope_params: tuple[Any, ...] = ()
+            else:
+                placeholders = ",".join("?" for _ in target_ids)
+                target_scope = f"o.target_id IN ({placeholders})"
+                target_scope_params = target_ids
+            candidate_rows = connection.execute(
                 f"""
-                SELECT DISTINCT j.canonical_job_id, c.canonical_name AS company,
+                SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                 j.title, j.location, j.canonical_url,
                                 COALESCE(v.apply_url, '') AS apply_url,
-                                j.lifecycle_state, j.current_version_id
+                                j.lifecycle_state, j.first_seen_at, j.last_seen_at,
+                                j.last_verified_at, j.current_version_id,
+                                COALESCE(v.description, '') AS version_description,
+                                COALESCE(v.location, '') AS version_location,
+                                COALESCE(v.payload_json, '{{}}') AS version_payload_json,
+                                (SELECT o.external_job_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
+                                (SELECT o.source_ats FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
+                                (SELECT o.observed_at FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
+                                (SELECT o.target_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
+                                (SELECT o.task_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
                 FROM canonical_jobs j
                 JOIN canonical_companies c ON c.company_id = j.company_id
                 LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
                 JOIN job_source_observations o ON o.canonical_job_id = j.canonical_job_id
-                WHERE o.target_id IN ({placeholders}) AND o.cycle_id = ?
+                WHERE {target_scope} AND o.cycle_id = ?
                   AND j.lifecycle_state IN ('active', 'stale', 'reposted')
                 ORDER BY j.title, j.canonical_job_id
                 """,
-                (*target_ids, cycle_id),
+                (*target_scope_params, cycle_id),
             ).fetchall()
-            snapshot = [_dict_row(row) for row in rows]
+            snapshot, rejected_rows = self._publication_rows_with_completeness(candidate_rows, policy=policy)
+            self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
@@ -2376,11 +2560,11 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
             connection.executemany(
                 "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
-                [(publication_id, str(row["canonical_job_id"])) for row in rows],
+                [(publication_id, str(row["canonical_job_id"])) for row in snapshot],
             )
             connection.execute(
                 "UPDATE acquisition_cycles SET jobs_published=?, updated_at=? WHERE cycle_id=?",
-                (len(rows), now, cycle_id),
+                (len(snapshot), now, cycle_id),
             )
             for target_id in target_ids:
                 target_published = connection.execute(
@@ -5835,9 +6019,11 @@ class SqliteAcquisitionStore(_SqliteStore):
         identity_key: str = "",
         identity_type: str = "external",
         identity_evidence: Mapping[str, Any] | None = None,
+        preferred_company_id: str = "",
     ) -> str:
         normalized_kind = canonical_entity_kind(entity_kind)
         identity_key = str(identity_key or "").strip()
+        preferred_company_id = str(preferred_company_id or "").strip()
         row = None
         if identity_key:
             row = connection.execute(
@@ -5850,6 +6036,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 (identity_key, normalized_kind),
             ).fetchone()
         if row is not None:
+            if preferred_company_id and str(row["company_id"]) != preferred_company_id:
+                raise ValueError(
+                    f"canonical company identity conflict for {identity_key}: "
+                    f"mapped to {row['company_id']}, requested {preferred_company_id}"
+                )
             if provenance_url:
                 connection.execute(
                     "UPDATE canonical_companies SET provenance_url=?, updated_at=? "
@@ -5872,7 +6063,51 @@ class SqliteAcquisitionStore(_SqliteStore):
                 now=now,
             )
             return company_id
-        company_id = f"canonical_company_{uuid4().hex}"
+        if preferred_company_id:
+            existing_preferred = connection.execute(
+                "SELECT company_id, entity_kind FROM canonical_companies WHERE company_id=?",
+                (preferred_company_id,),
+            ).fetchone()
+            if existing_preferred is not None:
+                if canonical_entity_kind(str(existing_preferred["entity_kind"] or "")) != normalized_kind:
+                    raise ValueError(
+                        f"canonical company identity conflict for {preferred_company_id}: "
+                        f"expected entity kind {normalized_kind}"
+                    )
+                company_id = preferred_company_id
+                if provenance_url:
+                    connection.execute(
+                        "UPDATE canonical_companies SET provenance_url=?, updated_at=? "
+                        "WHERE company_id=? AND provenance_url=''",
+                        (provenance_url, now, company_id),
+                    )
+                if identity_key:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO company_identity_keys (
+                            identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (identity_key, company_id, str(identity_type or "external"), "acquisition", _json(dict(identity_evidence or {})), now, now),
+                    )
+                for alias in aliases:
+                    SqliteAcquisitionStore._ensure_company_alias(connection, company_id, alias, source="target", now=now)
+                SqliteAcquisitionStore._record_company_identity_evidence(
+                    connection,
+                    company_id=company_id,
+                    observed_name=name,
+                    identity_key=identity_key,
+                    evidence_type=identity_type,
+                    evidence=dict(identity_evidence or {}),
+                    confidence=1.0,
+                    link_state="linked",
+                    review_required=False,
+                    now=now,
+                )
+                return company_id
+            company_id = preferred_company_id
+        else:
+            company_id = f"canonical_company_{uuid4().hex}"
         connection.execute(
             """
             INSERT INTO canonical_companies (

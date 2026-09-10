@@ -249,24 +249,6 @@ class WorkerService:
             )
 
         if self.role == WORKER_ROLE_ACQUISITION:
-            if isinstance(self.application, BackendApplication):
-                self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_ACQUISITION)
-                try:
-                    admin_import_result = self.application.process_next_admin_job_import(
-                        worker_id=self.worker_id,
-                        worker_role=self.role,
-                    )
-                finally:
-                    self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
-                if admin_import_result is not None:
-                    self.logger.info(
-                        "worker_admin_job_import_complete",
-                        extra=self._log_extra(
-                            task_name="admin_job_import",
-                            import_id=str((admin_import_result.get("import") or {}).get("import_id") or ""),
-                        ),
-                    )
-                    return admin_import_result
             return None
 
         # Personalized job intelligence has its own durable queue.  It is

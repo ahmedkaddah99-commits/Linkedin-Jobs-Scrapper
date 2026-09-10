@@ -109,7 +109,7 @@ class _MemoryRemote:
         return {"ContentLength": len(body), "Metadata": {"sha256": hashlib.sha256(body).hexdigest()}}
 
 
-def test_online_backup_accepts_the_authoritative_14_table_linkedin_schema(tmp_path: Path) -> None:
+def test_online_backup_accepts_the_current_15_table_linkedin_schema(tmp_path: Path) -> None:
     source = tmp_path / "master_linkedin_jobs_state.db"
     state = StateStore(source)
     state.close()
@@ -121,6 +121,7 @@ def test_online_backup_accepts_the_authoritative_14_table_linkedin_schema(tmp_pa
     )
     checkpoint_dir = tmp_path / "backups" / "linkedin" / str(manifest["checkpoint_id"])
     assert validate_checkpoint(checkpoint_dir, expected_role="linkedin")["backup"]["schema"]["tables"] == [
+        "collection_cursor",
         "company_scans",
         "company_slug_aliases",
         "detail_attempts",
@@ -136,6 +137,36 @@ def test_online_backup_accepts_the_authoritative_14_table_linkedin_schema(tmp_pa
         "search_pages",
         "source_company_groups",
     ]
+
+
+def test_backup_validation_accepts_legacy_linkedin_schema(tmp_path: Path) -> None:
+    source = tmp_path / "master_linkedin_jobs_state.db"
+    state = StateStore(source)
+    state.close()
+    with sqlite3.connect(source) as connection:
+        connection.execute("DROP TABLE collection_cursor")
+        connection.commit()
+    manifest = create_checkpoint(
+        **{
+            **_checkpoint_kwargs(source, tmp_path / "backups", role="linkedin"),
+            "shard_id": "linkedin-legacy-fixture",
+        }
+    )
+    checkpoint_dir = tmp_path / "backups" / "linkedin" / str(manifest["checkpoint_id"])
+    assert "collection_cursor" not in validate_checkpoint(checkpoint_dir, expected_role="linkedin")["backup"]["schema"]["tables"]
+
+
+def test_backup_validation_accepts_legacy_employer_schema(tmp_path: Path) -> None:
+    source = tmp_path / "master_employer_jobs_state.db"
+    state = EmployerState(source)
+    state.close()
+    with sqlite3.connect(source) as connection:
+        connection.execute("DROP TABLE coverage_receipts")
+        connection.execute("DROP TABLE collection_cursor")
+        connection.commit()
+    manifest = create_checkpoint(**_checkpoint_kwargs(source, tmp_path / "backups"))
+    checkpoint_dir = tmp_path / "backups" / "employer" / str(manifest["checkpoint_id"])
+    assert validate_checkpoint(checkpoint_dir, expected_role="employer")["backup"]["schema"]["tables"] == ["companies", "jobs"]
 
 
 def test_online_backup_preserves_wal_consistency_schema_and_source(tmp_path: Path) -> None:
@@ -165,7 +196,7 @@ def test_online_backup_preserves_wal_consistency_schema_and_source(tmp_path: Pat
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_digest
     assert not list(checkpoint_dir.glob("*.db-wal"))
     assert not list(checkpoint_dir.glob("*.db-shm"))
-    assert manifest["state"]["schema"]["tables"] == ["companies", "jobs"]
+    assert manifest["state"]["schema"]["tables"] == ["collection_cursor", "companies", "coverage_receipts", "jobs"]
 
 
 def test_off_host_upload_commits_manifest_last_and_remote_restore_is_isolated(tmp_path: Path) -> None:

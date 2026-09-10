@@ -3,7 +3,6 @@ import { Show, SignInButton, SignUpButton, UserButton, useUser } from "@clerk/re
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
-import { isAdminUser } from "../lib/auth";
 import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
 import { personalizedJobsExperienceEnabled } from "../lib/personalizedJobsConfig";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
@@ -32,15 +31,6 @@ export const careerAssetSections = [
 ];
 
 const navItems = [
-  {
-    label: "Dashboard",
-    icon: "dashboard",
-    to: "/dashboard",
-    matchers: [
-      { path: "/", end: true },
-      { path: "/dashboard", end: true },
-    ],
-  },
   {
     label: "Workspaces",
     icon: "workspaces",
@@ -129,13 +119,6 @@ const secondaryTopRibbonItems = [
   },
   { label: "Support", icon: "contact_support" },
   { label: "Documentation", icon: "menu_book" },
-  {
-    adminOnly: true,
-    label: "Admin",
-    icon: "admin_panel_settings",
-    to: "/admin",
-    matchers: [{ path: "/admin", end: false }],
-  },
 ];
 
 function isNavItemActive(pathname, item) {
@@ -461,7 +444,6 @@ function TopRibbonDisclosure({ items }) {
 function SidebarContents({
   collapsed = false,
   isDesktop = false,
-  isAdmin = false,
   onClose,
   onStartRun,
   onToggleCollapse,
@@ -498,7 +480,7 @@ function SidebarContents({
           ) : null}
         </div>
 
-        {isAdmin ? <button
+        <button
           aria-label={isCollapsedRail ? "Start New Run" : undefined}
           className={["shell-primary-action", isCollapsedRail ? "is-collapsed" : ""].join(" ")}
           onClick={handleStartRun}
@@ -508,11 +490,11 @@ function SidebarContents({
           <span className="material-symbols-outlined shell-primary-action__icon">add</span>
           {!isCollapsedRail ? <span>Start New Run</span> : null}
           {isCollapsedRail ? <HoverLabel label="Start New Run" /> : null}
-        </button> : null}
+        </button>
       </div>
 
       <nav className="shell-sidebar__nav">
-        {(isAdmin ? personalizedNavItems : userNavItems).map((item) => (
+        {userNavItems.map((item) => (
           <SidebarLink collapsed={isCollapsedRail} item={item} key={item.label} onNavigate={onClose} />
         ))}
       </nav>
@@ -548,7 +530,6 @@ export default function AppShell({ children, muteSidebar = false }) {
   const { status, user } = useSession();
   const { user: clerkUser } = useUser();
   const { isDark, toggleTheme } = useTheme();
-  const isAdmin = isAdminUser(user);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
     if (typeof window === "undefined") {
@@ -628,7 +609,7 @@ export default function AppShell({ children, muteSidebar = false }) {
     name: user?.display_name || user?.email || "",
     subtitle: user?.email || "",
   };
-  const topRibbonItems = secondaryTopRibbonItems.filter((item) => !item.adminOnly || isAdmin);
+  const topRibbonItems = secondaryTopRibbonItems;
 
   return (
     <div
@@ -658,7 +639,6 @@ export default function AppShell({ children, muteSidebar = false }) {
         ].join(" ")}
       >
         <SidebarContents
-          isAdmin={isAdmin}
           onClose={() => setMobileNavOpen(false)}
           onStartRun={() => navigate("/workspaces")}
         />
@@ -667,7 +647,6 @@ export default function AppShell({ children, muteSidebar = false }) {
       <aside className="app-shell__desktop-sidebar shell-sidebar hidden flex-col md:flex">
         <SidebarContents
           collapsed={desktopSidebarCollapsed}
-          isAdmin={isAdmin}
           isDesktop
           onStartRun={() => navigate("/workspaces")}
           onToggleCollapse={() => setDesktopSidebarCollapsed((currentValue) => !currentValue)}
@@ -677,7 +656,7 @@ export default function AppShell({ children, muteSidebar = false }) {
       {isJobsExperience ? <>
         <button aria-label="Close workspace menu" className={["jobs-workspace-menu__backdrop", mobileNavOpen ? "is-open" : ""].join(" ")} onClick={() => setMobileNavOpen(false)} type="button" />
         <aside aria-label="Runr workspace menu" className={["jobs-workspace-menu", mobileNavOpen ? "is-open" : ""].join(" ")}>
-          <SidebarContents isAdmin={isAdmin} onClose={() => setMobileNavOpen(false)} onStartRun={() => navigate("/workspaces")} />
+          <SidebarContents onClose={() => setMobileNavOpen(false)} onStartRun={() => navigate("/workspaces")} />
         </aside>
       </> : null}
 

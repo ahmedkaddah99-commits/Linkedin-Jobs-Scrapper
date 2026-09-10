@@ -150,6 +150,12 @@ class PhaseAAcquisitionScheduler:
         return getter(key, default)
 
     def _phase_a_config(self, name: str) -> Any:
+        if (
+            str(os.getenv("RUNR_ACQUISITION_SCHEDULER_DISABLED") or "").strip().casefold()
+            in {"1", "true", "yes", "on"}
+            and name in {"scheduler_enabled", "global_enabled", "publication_enabled"}
+        ):
+            return False
         if private_test_deployment_enabled():
             forced_values = {
                 "scheduler_enabled": False,

@@ -243,15 +243,15 @@ _APPLICATION_DESTINATION_CLASSIFICATIONS = {
     "redirect_apply": "redirect_apply",
 }
 
-# Product policy: a trustworthy user-facing destination must point at *this*
-# job.  A direct ATS/employer apply URL, an embedded apply form, or a specific
-# job-detail URL (LinkedIn view page or employer position page) all qualify --
-# the user can apply through them.  A generic careers/search/portal listing or
-# an unstable redirect does not.  This matches ``resolve_application_destination``
-# (which exposes a job-detail URL as a truthful user-facing fallback) and the
-# current ``PublicationPolicy(missing_apply_is_blocker=False)`` stance.
+# Product policy: publication requires a company or ATS application URL, or an
+# embedded application destination. A job-detail/view URL is useful provenance
+# but is not an application destination. A generic careers/search/portal listing
+# or an unstable redirect is also rejected.
 _REJECTED_APPLICATION_DESTINATIONS = frozenset({
     "redirect_apply",
+    "job_detail_only",
+    "employer_job_detail",
+    "ats_job_detail",
     "listing_fallback",
     "search_results",
     "portal_listing",
@@ -355,6 +355,15 @@ def is_tracking_only_url(value: Any) -> bool:
     if not canonical:
         return False
     return _hostname(canonical) in _TRACKING_ONLY_HOSTS
+
+
+def is_linkedin_job_detail_url(value: Any) -> bool:
+    """Return true for LinkedIn view URLs, which are not application URLs."""
+    canonical = canonicalize_url(_text(value))
+    if not canonical:
+        return False
+    parsed = urlparse(canonical)
+    return _hostname(canonical) == "linkedin.com" and parsed.path.casefold().startswith("/jobs/view/")
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -533,19 +542,21 @@ def _closed_at(record: Mapping[str, Any]) -> str:
 def _application_url_and_kind(record: Mapping[str, Any]) -> tuple[str, str]:
     """Return (url, destination_kind) using the resolved application contract.
 
-    The ``application_destination`` mapping is authoritative when it carries a
-    resolved/user-facing/detail URL; otherwise we fall back to the flattened
-    apply fields for legacy records.
+    The ``application_destination`` mapping is authoritative. A user-facing
+    detail URL is retained as a rejected destination so the reason is explicit.
+    Legacy flattened fields are limited to actual application aliases; job
+    detail/source/canonical URLs must not silently become apply links.
     """
     kind = ""
     application = record.get("application_destination")
     if isinstance(application, Mapping):
         kind = _text(_first(application, "destination_type", "classification"))
-        url = _text(
-            _first(application, "resolved_url", "user_facing_url", "job_detail_url")
-        )
-        if url:
-            return url, kind
+        resolved_url = _text(_first(application, "resolved_url"))
+        if resolved_url:
+            return resolved_url, kind
+        detail_url = _text(_first(application, "user_facing_url", "job_detail_url"))
+        if detail_url:
+            return detail_url, kind or "job_detail_only"
     url = _text(
         _first(
             record,
@@ -554,12 +565,6 @@ def _application_url_and_kind(record: Mapping[str, Any]) -> tuple[str, str]:
             "apply_link",
             "apply_url_canonical",
             "apply_url_raw",
-            "job_detail_url",
-            "linkedin_job_url",
-            "source_job_url",
-            "source_url",
-            "canonical_url",
-            "link",
         )
     )
     return url, kind
@@ -669,6 +674,9 @@ def validate_job_for_publication(
         field_states["application_url"] = "missing"
     elif not is_valid_url(application_url):
         mark(REASON_INVALID_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
+        field_states["application_url"] = "invalid"
+    elif is_linkedin_job_detail_url(application_url):
+        mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
         field_states["application_url"] = "invalid"
     elif is_tracking_only_url(application_url):
         mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)

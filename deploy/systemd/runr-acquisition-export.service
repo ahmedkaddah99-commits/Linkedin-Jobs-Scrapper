@@ -1,7 +1,7 @@
 [Unit]
 Description=Runr daily combined company/job export
-After=runr-acquisition-worker.service
-Wants=runr-acquisition-worker.service
+After=runr-acquisition-cycle.service
+Wants=runr-acquisition-cycle.service
 
 [Service]
 Type=oneshot

@@ -4,11 +4,8 @@ from pathlib import Path
 import os
 import tempfile
 import unittest
-from unittest.mock import Mock
 
 from backend.application.company_reconciliation import build_url_reconciliation_report
-from backend.api.routes import build_route_registry
-from backend.api.routes.registry import ApiRouteContext
 from backend.bootstrap import create_backend
 from backend.domain.company_identity import (
     CANONICAL_ENTITY_KINDS,
@@ -22,23 +19,6 @@ from backend.domain.company_identity import (
     classify_company_link,
 )
 from backend.domain.models import utc_now_iso
-
-
-class _AdminRouteHandler:
-    def __init__(self, body=None):
-        self.body = body or {}
-        self.payload = None
-        self.admin_calls = 0
-
-    def _require_admin(self):
-        self.admin_calls += 1
-        return {"id": "admin-fixture"}, object()
-
-    def _read_json_body(self):
-        return self.body
-
-    def _send_json(self, payload, status=200, *, headers=None):
-        self.payload = (status, payload)
 
 
 class CompanyIdentityContractTests(unittest.TestCase):
@@ -306,66 +286,6 @@ class SqliteCompanyIdentityTests(unittest.TestCase):
         self.assertEqual(second["urls_persisted"], 0)
         self.assertEqual(second["duplicates_skipped"], 2)
         self.assertEqual(len(store.list_admin_companies(entity_kind="employer", limit=20)), 2)
-
-
-class CompanyIdentityApiTests(unittest.TestCase):
-    def test_company_filters_and_url_inspection_are_admin_authorized_and_bounded(self):
-        registry = build_route_registry()
-        application = Mock()
-        application.list_admin_companies.return_value = []
-        handler = _AdminRouteHandler()
-        context = ApiRouteContext(
-            application=application,
-            handler=handler,
-            method="GET",
-            segments=("admin", "acquisition", "companies"),
-            query={
-                "entity_kind": ["fixture"],
-                "profile_status": ["incomplete"],
-                "url_type": ["ats_jobs"],
-                "url_lifecycle": ["discovered"],
-                "limit": ["9999"],
-            },
-        )
-        self.assertTrue(registry.dispatch(context, auth_required=True))
-        self.assertEqual(handler.admin_calls, 1)
-        application.list_admin_companies.assert_called_once_with(
-            limit=500,
-            search="",
-            entity_kind="fixture",
-            profile_status="incomplete",
-            url_type="ats_jobs",
-            url_lifecycle="discovered",
-        )
-
-        application.reset_mock()
-        application.list_admin_company_urls.return_value = {"read_only": True, "urls": [], "occurrences": []}
-        handler = _AdminRouteHandler()
-        context = ApiRouteContext(
-            application=application,
-            handler=handler,
-            method="GET",
-            segments=("admin", "acquisition", "companies", "company-a", "urls"),
-            query={"persisted_only": ["true"], "limit": ["9999"]},
-        )
-        self.assertTrue(registry.dispatch(context, auth_required=True))
-        application.list_admin_company_urls.assert_called_once_with(
-            "company-a", url_type="", url_lifecycle="", include_occurrences=False, limit=1000
-        )
-
-    def test_company_routes_are_rejected_without_route_authentication(self):
-        registry = build_route_registry()
-        application = Mock()
-        handler = _AdminRouteHandler()
-        context = ApiRouteContext(
-            application=application,
-            handler=handler,
-            method="GET",
-            segments=("admin", "acquisition", "companies"),
-            query={},
-        )
-        self.assertFalse(registry.dispatch(context, auth_required=False))
-        application.list_admin_companies.assert_not_called()
 
 
 if __name__ == "__main__":

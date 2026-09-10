@@ -2,7 +2,6 @@
 
 Covers:
 - Bounded event payload validation (rejects forbidden keys)
-- Operator report separating Greenhouse and Lever
 - Remote config data-only proof
 """
 
@@ -17,7 +16,7 @@ from backend.application.assisted_apply_telemetry_service import (
 
 
 class AdapterHealthTelemetryServiceTests(unittest.TestCase):
-    """Tests for the in-memory telemetry store and operator report."""
+    """Tests for the in-memory telemetry store."""
 
     def setUp(self):
         self.service = AdapterHealthTelemetryService()
@@ -42,50 +41,7 @@ class AdapterHealthTelemetryServiceTests(unittest.TestCase):
             },
         ]
         self.service.record_events(events)
-        report = self.service.get_operator_report()
-        self.assertEqual(report["summary"]["totalEvents"], 2)
-
-    def test_operator_report_separates_greenhouse_and_lever(self):
-        greenhouse_events = [
-            {
-                "schemaVersion": 1,
-                "adapter": "greenhouse",
-                "adapterVersion": "0.3.0",
-                "lifecycleStage": stage,
-                "aggregateOutcome": "success",
-                "errorCategory": "none",
-            }
-            for stage in ("detect", "inspect", "match", "fill", "validate")
-        ]
-        lever_events = [
-            {
-                "schemaVersion": 1,
-                "adapter": "lever",
-                "adapterVersion": "0.3.0",
-                "lifecycleStage": stage,
-                "aggregateOutcome": outcome,
-                "errorCategory": "none" if outcome == "success" else "fill_rejected",
-            }
-            for stage, outcome in (("detect", "success"), ("fill", "failure"))
-        ]
-        self.service.record_events(greenhouse_events + lever_events)
-
-        report = self.service.get_operator_report()
-        self.assertIn("greenhouse", report["adapter"])
-        self.assertEqual(len(report["adapter"]["greenhouse"]), 5)
-        self.assertIn("lever", report["adapter"])
-        self.assertEqual(len(report["adapter"]["lever"]), 2)
-        self.assertEqual(report["summary"]["totalEvents"], 7)
-        self.assertEqual(report["summary"]["errorEvents"], 1)
-        self.assertGreater(report["summary"]["errorRate"], 0)
-
-    def test_empty_report(self):
-        report = self.service.get_operator_report()
-        self.assertEqual(report["summary"]["totalEvents"], 0)
-        self.assertEqual(report["summary"]["errorEvents"], 0)
-        self.assertEqual(report["summary"]["errorRate"], 0.0)
-        self.assertEqual(report["adapter"]["greenhouse"], {})
-        self.assertEqual(report["adapter"]["lever"], {})
+        self.assertEqual(len(self.service._events), 2)
 
     def test_rejects_extra_keys_via_validator(self):
         from backend.api.routes.assisted_apply_telemetry import (

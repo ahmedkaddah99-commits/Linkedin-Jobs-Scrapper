@@ -1383,6 +1383,11 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 v.description, v.location AS version_location,
                 v.apply_url, v.source_observation_id, v.payload_json AS version_payload_json,
                 (
+                    SELECT o.external_job_id FROM job_source_observations o
+                    WHERE o.canonical_job_id = j.canonical_job_id
+                    ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1
+                ) AS source_job_id,
+                (
                     SELECT o.source_ats FROM job_source_observations o
                     WHERE o.canonical_job_id = j.canonical_job_id
                     ORDER BY o.observed_at DESC LIMIT 1

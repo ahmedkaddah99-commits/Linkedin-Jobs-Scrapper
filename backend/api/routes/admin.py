@@ -5,7 +5,7 @@ from backend.application.production_rollout import phase_i_config
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
 
-# Admin, billing, settings, analytics, users, secrets, and webhooks.
+# Customer billing, settings, account deletion, and provider webhooks.
 _SERVER_BIND_RESERVED = {
     "register_routes",
     "_handle_get",
@@ -25,29 +25,12 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.exact('GET', ('auth', 'me'), _handle_get, auth_required=True, name='admin.auth.me')
     registry.prefix('GET', ('billing',), _handle_get, auth_required=True, name='admin.billing')
     registry.prefix('GET', ('scrapeops',), _handle_get, auth_required=True, name='admin.scrapeops')
-    registry.prefix('GET', ('analytics',), _handle_get, auth_required=True, name='admin.analytics')
-    registry.prefix('GET', ('admin',), _handle_get, auth_required=True, name='admin.admin')
-    registry.prefix('GET', ('dev',), _handle_get, auth_required=True, name='admin.dev')
-    registry.exact('GET', ('dashboard',), _handle_get, auth_required=True, name='admin.dashboard')
     registry.exact('GET', ('settings',), _handle_get, auth_required=True, name='admin.settings')
-    registry.prefix('GET', ('users',), _handle_get, auth_required=True, name='admin.users')
-    registry.exact('GET', ('tokens',), _handle_get, auth_required=True, name='admin.tokens')
-    registry.prefix('GET', ('secrets',), _handle_get, auth_required=True, name='admin.secrets')
     registry.exact('POST', ('webhooks', 'clerk'), _handle_post, auth_required=False, name='admin.webhooks.clerk')
     registry.exact('POST', ('webhooks', 'creem'), _handle_post, auth_required=False, name='admin.webhooks.creem')
-    registry.prefix('POST', ('admin',), _handle_post, auth_required=True, name='admin.admin.post')
-    registry.prefix('POST', ('analytics',), _handle_post, auth_required=True, name='admin.analytics.post')
     registry.prefix('POST', ('billing',), _handle_post, auth_required=True, name='admin.billing.post')
-    registry.prefix('POST', ('users',), _handle_post, auth_required=True, name='admin.users.post')
-    registry.prefix('POST', ('secrets',), _handle_post, auth_required=True, name='admin.secrets.post')
-    registry.prefix('PUT', ('admin',), _handle_put, auth_required=True, name='admin.admin.put')
     registry.exact('PUT', ('settings',), _handle_put, auth_required=True, name='admin.settings.put')
-    registry.prefix('PUT', ('users',), _handle_put, auth_required=True, name='admin.users.put')
-    registry.prefix('PUT', ('secrets',), _handle_put, auth_required=True, name='admin.secrets.put')
-    registry.prefix('DELETE', ('users',), _handle_delete, auth_required=True, name='admin.users.delete')
     registry.exact('DELETE', ('account',), _handle_delete, auth_required=True, name='admin.account.delete')
-    registry.prefix('DELETE', ('admin',), _handle_delete, auth_required=True, name='admin.admin.delete')
-    registry.prefix('DELETE', ('secrets',), _handle_delete, auth_required=True, name='admin.secrets.delete')
 
 
 def _handle_get(context: ApiRouteContext) -> bool | None:
@@ -112,109 +95,6 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                                     occurred_from=occurred_from,
                                     occurred_to=occurred_to,
                                 )
-                            }
-                        )
-                        return
-
-    if segments == ["analytics", "overview"]:
-                        user, _ = self._require_identity()
-                        if str(user.role or "").strip().lower() != ROLE_ADMIN:
-                            raise PermissionError("Admin access required.")
-                        self._send_json(application.get_analytics_overview())
-                        return
-
-    if segments == ["admin", "scrapeops", "usage"]:
-                        self._require_admin()
-                        occurred_from = str((query.get("occurred_from") or [""])[0]).strip()
-                        occurred_to = str((query.get("occurred_to") or [""])[0]).strip()
-                        workspace_id = str((query.get("workspace_id") or [""])[0]).strip()
-                        run_id = str((query.get("run_id") or [""])[0]).strip()
-                        user_id = str((query.get("user_id") or [""])[0]).strip()
-                        self._send_json(
-                            application.get_scrapeops_admin_dashboard(
-                                user_id=user_id,
-                                workspace_id=workspace_id,
-                                run_id=run_id,
-                                occurred_from=occurred_from,
-                                occurred_to=occurred_to,
-                                date=str((query.get("date") or [""])[0]).strip(),
-                            )
-                        )
-                        return
-
-    if segments == ["admin", "scrapeops", "policy"]:
-                        self._require_admin()
-                        self._send_json(application.get_scrapeops_admin_policy())
-                        return
-
-    if segments == ["admin", "analytics", "snapshot"]:
-                        self._require_admin()
-                        self._send_json(_build_admin_analytics_snapshot(application))
-                        return
-
-    if segments == ["admin", "events"]:
-                        self._require_admin()
-                        limit = _parse_int_param(query, "limit", default=50, maximum=200)
-                        offset = _parse_int_param(query, "offset", default=0, maximum=100000)
-                        event_name = str((query.get("event_name") or [""])[0]).strip()
-                        user_id = str((query.get("user_id") or [""])[0]).strip()
-                        occurred_from = str((query.get("occurred_from") or [""])[0]).strip()
-                        occurred_to = str((query.get("occurred_to") or [""])[0]).strip()
-                        events_payload = application.list_analytics_events(
-                            limit=limit,
-                            offset=offset,
-                            event_name=event_name,
-                            user_id=user_id,
-                            occurred_from=occurred_from,
-                            occurred_to=occurred_to,
-                        )
-                        self._send_json(
-                            {
-                                "events": events_payload["events"],
-                                "meta": {
-                                    **self._pagination_meta(
-                                        limit=limit,
-                                        offset=offset,
-                                        returned=len(events_payload["events"]),
-                                    ),
-                                    "total": int(events_payload["total"]),
-                                },
-                            }
-                        )
-                        return
-
-    if segments == ["admin", "promo-codes"]:
-                        self._require_admin()
-                        limit = _parse_int_param(query, "limit", default=50, maximum=200)
-                        offset = _parse_int_param(query, "offset", default=0, maximum=100000)
-                        self._send_json(_list_admin_promo_codes(limit=limit, offset=offset))
-                        return
-
-    if segments == ["admin", "users", "health"]:
-                        self._require_admin()
-                        self._send_json(_build_admin_user_health_snapshot(application))
-                        return
-
-    if segments == ["dev", "bootstrap-auth"]:
-                        user = application.upsert_user(
-                            {
-                                "email": "admin@runr.local",
-                                "display_name": "Runr Admin",
-                                "role": "admin",
-                                "allowed_workspace_ids": [],
-                            }
-                        )
-                        token, raw_token = application.issue_api_token(
-                            user_id=user.user_id,
-                            name="frontend-dev",
-                            scopes=[],
-                        )
-                        self._send_json(
-                            {
-                                "api_base_url": self._request_api_prefix() or "/v1",
-                                "access_token": raw_token,
-                                "user": user.to_dict(),
-                                "token": token.to_public_dict(),
                             }
                         )
                         return
@@ -356,14 +236,6 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     payload = self._read_json_body()
 
-    if segments == ["admin", "scrapeops", "reconciliation", "run"]:
-                        self._require_admin()
-                        self._send_json(
-                            application.run_scrapeops_reconciliation_cycle(force=True, source="admin"),
-                            status=HTTPStatus.OK,
-                        )
-                        return
-
     if segments == ["analytics", "events"]:
                         context = self._auth_context()
                         event_name = str(payload.get("event_name") or "").strip()
@@ -384,23 +256,6 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             payload=event_payload,
                         )
                         self._send_json({"status": "ok", "event_name": event_name}, status=HTTPStatus.ACCEPTED)
-                        return
-
-    if segments == ["admin", "promo-codes"]:
-                        admin_user, _ = self._require_admin()
-                        promo_code_payload = _create_admin_promo_code(payload)
-                        application.emit_event(
-                            "promo_code_created",
-                            user_id=admin_user.user_id,
-                            route="/admin/promo-codes",
-                            source="api",
-                            payload={
-                                "discount_id": promo_code_payload["discount_id"],
-                                "discount": promo_code_payload["discount"],
-                                "expires_at": promo_code_payload["expires_at"],
-                            },
-                        )
-                        self._send_json({"promo_code": promo_code_payload}, status=HTTPStatus.CREATED)
                         return
 
     if segments == ["billing", "checkout"]:
@@ -524,11 +379,6 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
     query = context.query
     payload = self._read_json_body()
 
-    if segments == ["admin", "scrapeops", "policy"]:
-                        self._require_admin()
-                        self._send_json(application.save_scrapeops_admin_policy(payload), status=HTTPStatus.OK)
-                        return
-
     if segments == ["settings"]:
                         user, _ = self._require_identity()
                         metadata = dict(user.metadata or {})
@@ -645,19 +495,6 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
                         self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                         application.delete_user(segments[1])
                         self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
-                        return
-
-    if segments[:2] == ["admin", "promo-codes"] and len(segments) == 3:
-                        admin_user, _ = self._require_admin()
-                        delete_creem_discount(segments[2])
-                        application.emit_event(
-                            "promo_code_deleted",
-                            user_id=admin_user.user_id,
-                            route="/admin/promo-codes",
-                            source="api",
-                            payload={"discount_id": segments[2]},
-                        )
-                        self._send_json({"deleted": segments[2]}, status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["users"] and len(segments) == 4 and segments[2] == "tokens":

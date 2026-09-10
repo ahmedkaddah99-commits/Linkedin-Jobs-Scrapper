@@ -90,10 +90,14 @@ def _validate_state(item: dict[str, Any], roots: dict[str, Path], *, deep: bool)
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        expected_tables = set((item.get("schema") or {}).get("tables", {}))
-        if expected_tables and actual_tables != expected_tables:
+        schema = item.get("schema") or {}
+        expected_tables = set(schema.get("tables", {}))
+        supported_table_sets = schema.get("supported_tables") or []
+        supported = [set(table_set) for table_set in supported_table_sets if isinstance(table_set, list)]
+        if expected_tables and actual_tables not in (supported or [expected_tables]):
             raise ValueError(
-                f"state database table mismatch for {path}: expected {sorted(expected_tables)}, got {sorted(actual_tables)}"
+                f"state database table mismatch for {path}: expected one of "
+                f"{[sorted(table_set) for table_set in (supported or [expected_tables])]}, got {sorted(actual_tables)}"
             )
         if deep:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])

@@ -48,13 +48,6 @@ def register_routes(registry: RouteRegistry) -> None:
         auth_required=False,
         name="assisted_apply.telemetry.events.receive",
     )
-    registry.exact(
-        "GET",
-        ("assisted-apply", "telemetry", "operator-report"),
-        _get_operator_report,
-        auth_required=True,
-        name="assisted_apply.telemetry.operator_report.get",
-    )
 
 
 def _read_bounded_telemetry_event(value: object) -> dict[str, Any]:
@@ -121,12 +114,3 @@ def _receive_telemetry_events(context: ApiRouteContext) -> None:
         {"accepted": len(validated)},
         status=HTTPStatus.ACCEPTED,
     )
-
-
-def _get_operator_report(context: ApiRouteContext) -> None:
-    """Return an operator-facing report separating Greenhouse and Lever lifecycle regressions."""
-    user, _ = context.require_clerk_identity()
-    context.require_admin()
-
-    report = _telemetry_service.get_operator_report()
-    context.send_json(report, status=HTTPStatus.OK)
