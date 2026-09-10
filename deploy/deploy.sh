@@ -32,6 +32,8 @@ release_branch="${RUNR_RELEASE_BRANCH:-$(git branch --show-current 2>/dev/null |
 echo "Deploying selected Runr release commit=${release_commit:-unknown} branch=${release_branch:-unknown}"
 
 sudo "$python_bin" -m pip install -r "$PROJECT_DIR/requirements-linux.txt"
+sudo env PLAYWRIGHT_BROWSERS_PATH=/ms-playwright "$python_bin" -m playwright install --with-deps chromium
+sudo chmod -R a+rX /ms-playwright
 sudo systemctl daemon-reload
 sudo systemctl restart runr.target
 sudo systemctl status runr.target --no-pager

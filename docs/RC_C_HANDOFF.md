@@ -1,5 +1,24 @@
 # RC-C release and integration handoff
 
+## Browser runtime correction - 2026-09-10
+
+Read-only host evidence identifies `playwright_not_installed` on St. Vincenz's
+three attempted targets. The Python collector imports Playwright, while the
+Linux dependency file only installs the unrelated Node/browser tooling.
+The runtime correction pins Python Playwright 1.60.0 (pyee 13.0.1, greenlet
+3.5.5) and installs its matching Chromium under `/ms-playwright`, readable
+by the acquisition role under systemd ProtectHome. This supplies an existing
+collector dependency; no new provider, service, purchase or source request is
+required. Verify it using a loopback fixture before real-source acquisition.
+
+The captured four LinkedIn organization IDs match the frozen cohort. Eight
+search pages share suspicious-empty body hash
+`ea12acf875ac1dffa5de9dd8f5c5a54a41cf50370705c4694aef841aa2b28a36`;
+successful preceding pages do not establish authoritative absence. Keep
+these partial and closure-unsafe. Employer work after the 40-request cap must
+be deferred without creating synthetic scans. The new allowance remains
+100/200 used; this investigation used no additional source attempts.
+
 ## Final local candidate amendment - 2026-09-09
 
 The final clean local candidate is

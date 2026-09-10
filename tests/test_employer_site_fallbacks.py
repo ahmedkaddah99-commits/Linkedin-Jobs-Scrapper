@@ -74,7 +74,15 @@ class _FakePage:
     def on(self, event: str, callback: object) -> None:
         self.handlers[event] = callback
 
+    def route(self, _pattern, callback):
+        self.route_callback = callback
+
     def goto(self, *_args: object, **_kwargs: object) -> None:
+        self.route_callback(SimpleNamespace(
+            request=SimpleNamespace(url="https://acme.example/careers", resource_type="document"),
+            continue_=lambda: None,
+            abort=lambda: None,
+        ))
         response = _FakeResponse(
             "https://acme.example/api/jobs",
             {
@@ -134,8 +142,40 @@ def test_fetch_browser_snapshot_keeps_same_origin_xhr_and_rendered_content(monke
     )
 
     assert snapshot["status"] == "completed"
+    assert snapshot["requests_made"] == 1
+    assert snapshot["complete_snapshot"] is False
     assert snapshot["jobs"][0]["source_raw_payload"]["format"] == "xhr"
     assert snapshot["jobs"][0]["job_detail_url"] == "https://acme.example/jobs/xhr-1"
+
+
+def test_browser_empty_app_shell_is_not_authoritative_zero(monkeypatch):
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    monkeypatch.setattr(fallbacks, "sync_playwright", lambda: _FakePlaywright())
+    monkeypatch.setattr(_FakePage, "goto", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(_FakePage, "content", lambda self: "<html><body>Careers</body></html>")
+    snapshot = fetch_browser_snapshot("https://acme.example/careers")
+    assert snapshot["jobs"] == []
+    assert snapshot["complete_snapshot"] is False
+    assert snapshot["credible_evidence"] is False
+
+
+def test_browser_request_limit_cannot_be_complete(monkeypatch):
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    monkeypatch.setattr(fallbacks, "sync_playwright", lambda: _FakePlaywright())
+    original_goto = _FakePage.goto
+
+    def two_requests(page, *args, **kwargs):
+        original_goto(page, *args, **kwargs)
+        original_goto(page, *args, **kwargs)
+
+    monkeypatch.setattr(_FakePage, "goto", two_requests)
+    snapshot = fetch_browser_snapshot("https://acme.example/careers", max_requests=1)
+    assert snapshot["status"] == "partial"
+    assert snapshot["requests_made"] == 1
+    assert snapshot["stop_reason"] == "max_requests"
+    assert snapshot["complete_snapshot"] is False
 
 
 def test_fetch_browser_snapshot_returns_report_data_when_browser_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:

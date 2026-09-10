@@ -335,6 +335,7 @@ def fetch_browser_snapshot(
     seen: set[str] = set()
     response_count = 0
     browser_request_count = 0
+    request_limit_reached = False
 
     def add_jobs(items: Iterable[Mapping[str, Any]]) -> None:
         for job in items:
@@ -356,12 +357,13 @@ def fetch_browser_snapshot(
                     page = context.new_page()
 
                     def handle_route(route: Any) -> None:
-                        nonlocal browser_request_count
-                        request = getattr(route, "request", lambda: None)()
+                        nonlocal browser_request_count, request_limit_reached
+                        request = route.request
                         request_url = _text(getattr(request, "url", ""))
                         request_type = _text(getattr(request, "resource_type", ""))
                         if request_url.startswith(("http://", "https://")):
                             if browser_request_count >= response_limit:
+                                request_limit_reached = True
                                 route.abort()
                                 return
                             browser_request_count += 1
@@ -443,10 +445,13 @@ def fetch_browser_snapshot(
 
     return {
         "jobs": jobs,
-        "status": "completed",
+        "status": "partial" if request_limit_reached else "completed",
         "status_code": 200,
-        "complete_snapshot": True,
-        "credible_evidence": True,
+        # Rendering one page proves observations, not exhaustion of the site's
+        # pagination. In particular an empty app shell must never close jobs.
+        "complete_snapshot": False,
+        "credible_evidence": bool(jobs),
+        "stop_reason": "max_requests" if request_limit_reached else "pagination_unverified",
         "request_url": target_url,
         "resolved_url": target_url,
         "transport": "browser",

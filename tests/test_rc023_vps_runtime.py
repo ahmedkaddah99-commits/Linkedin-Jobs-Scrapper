@@ -78,6 +78,10 @@ def test_runtime_setup_pins_python_and_installs_all_role_units() -> None:
     assert 'python3.12-venv' in setup
     assert '"$INSTALL_DIR/.venv/bin/python" -m pip install' in setup
     assert 'sudo "$python_bin" -m pip install' in deploy
+    for script in (setup, deploy):
+        assert "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright" in script
+        assert "-m playwright install --with-deps chromium" in script
+    assert "Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright" in _read_unit("runr-acquisition-worker.service")
     assert 'runr-acquisition-worker.service' in setup
     assert 'runr-journald.conf' in setup
     assert '/var/log/runr/customer' in setup

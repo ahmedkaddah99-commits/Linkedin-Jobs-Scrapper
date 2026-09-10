@@ -77,6 +77,8 @@ if [ "$venv_version" != "$EXPECTED_PYTHON_VERSION" ]; then
   exit 1
 fi
 sudo "$INSTALL_DIR/.venv/bin/python" -m pip install -r "$INSTALL_DIR/requirements-linux.txt"
+sudo env PLAYWRIGHT_BROWSERS_PATH=/ms-playwright "$INSTALL_DIR/.venv/bin/python" -m playwright install --with-deps chromium
+sudo chmod -R a+rX /ms-playwright
 npm --prefix "$INSTALL_DIR/frontend" install
 
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-api.service" /etc/systemd/system/runr-api.service
