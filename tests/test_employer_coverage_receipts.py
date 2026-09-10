@@ -159,15 +159,17 @@ def test_receipt_for_request_budget_exhausted() -> None:
     }
     receipt = build_coverage_receipt(result)
 
-    assert receipt.terminal_classification == "failed"
+    assert receipt.terminal_classification == "partial"
     assert "company:request_budget_exhausted" in receipt.reasons
 
 
-def test_merge_receipts_preserves_confirmed_complete() -> None:
+def test_merge_receipts_current_generation_wins_and_preserves_history() -> None:
     complete = EmployerCoverageReceipt(
         company_id="c1",
         terminal_classification="confirmed_complete",
         endpoint_used="https://boards.greenhouse.io/c1",
+        created_at="2026-09-01T00:00:00Z",
+        generation_id="gen-old",
     )
     partial = EmployerCoverageReceipt(
         company_id="c1",
@@ -175,8 +177,18 @@ def test_merge_receipts_preserves_confirmed_complete() -> None:
         endpoint_used="https://company.example/careers",
     )
 
-    assert merge_receipts(complete, partial) is complete
-    assert merge_receipts(partial, complete) is complete
+    merged = merge_receipts(complete, partial)
+    assert merged.terminal_classification == "partial"
+    assert merged.last_confirmed_complete_at == "2026-09-01T00:00:00Z"
+    assert merged.last_confirmed_complete_generation == "gen-old"
+
+    # A newer complete scan simply wins.
+    newer_complete = EmployerCoverageReceipt(
+        company_id="c1",
+        terminal_classification="confirmed_complete",
+        generation_id="gen-new",
+    )
+    assert merge_receipts(partial, newer_complete) is newer_complete
 
 
 def test_state_persists_and_retrieves_receipt(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 {
   "mode": "read_only_employer_coverage_audit",
   "state_db": ".backend_test_tmp\\employer_coverage_offline.db",
-  "generated_at": "2026-09-10T13:53:38Z",
+  "generated_at": "2026-09-10T18:13:08Z",
   "observed": {
     "companies": 10,
     "status_counts": {
@@ -45,7 +45,7 @@
         "website_url": "https://empty.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://boards.greenhouse.io/empty-co",
         "connector_family": "ats_native",
         "discovery_method": "ats_signature",
@@ -54,15 +54,18 @@
             "url": "https://boards.greenhouse.io/empty-co",
             "connector_family": "ats_native",
             "transport": "direct",
+            "role": "authoritative",
             "pages_attempted": 1,
             "pages_completed": 1,
-            "partitions_attempted": 1,
-            "partitions_completed": 1,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "flat",
             "expected_count": null,
             "observed_count": 0,
             "accepted_count": 0,
             "pending_detail_count": 0,
             "complete": true,
+            "pagination_complete": true,
             "stop_reason": "pagination_complete",
             "error": ""
           }
@@ -76,7 +79,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "greenhouse-co",
@@ -84,7 +89,7 @@
         "website_url": "https://greenhouse.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://boards.greenhouse.io/greenhouse-co",
         "connector_family": "ats_native",
         "discovery_method": "ats_signature",
@@ -93,15 +98,18 @@
             "url": "https://boards.greenhouse.io/greenhouse-co",
             "connector_family": "ats_native",
             "transport": "direct",
+            "role": "authoritative",
             "pages_attempted": 3,
             "pages_completed": 3,
-            "partitions_attempted": 1,
-            "partitions_completed": 1,
-            "expected_count": 1,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "flat",
+            "expected_count": null,
             "observed_count": 1,
             "accepted_count": 1,
             "pending_detail_count": 0,
             "complete": true,
+            "pagination_complete": true,
             "stop_reason": "pagination_complete",
             "error": ""
           }
@@ -115,7 +123,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "lever-co",
@@ -123,7 +133,7 @@
         "website_url": "https://lever.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://jobs.lever.co/lever-co",
         "connector_family": "ats_native",
         "discovery_method": "ats_signature",
@@ -132,15 +142,18 @@
             "url": "https://jobs.lever.co/lever-co",
             "connector_family": "ats_native",
             "transport": "direct",
+            "role": "authoritative",
             "pages_attempted": 1,
             "pages_completed": 1,
-            "partitions_attempted": 1,
-            "partitions_completed": 1,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "flat",
             "expected_count": null,
             "observed_count": 0,
             "accepted_count": 0,
             "pending_detail_count": 0,
             "complete": true,
+            "pagination_complete": true,
             "stop_reason": "pagination_complete",
             "error": ""
           }
@@ -154,7 +167,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "personio-co",
@@ -162,7 +177,7 @@
         "website_url": "https://personio.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://personio-co.jobs.personio.de",
         "connector_family": "ats_expansion",
         "discovery_method": "ats_signature",
@@ -171,15 +186,18 @@
             "url": "https://personio-co.jobs.personio.de",
             "connector_family": "ats_expansion",
             "transport": "direct",
+            "role": "authoritative",
             "pages_attempted": 1,
             "pages_completed": 1,
-            "partitions_attempted": 1,
-            "partitions_completed": 1,
-            "expected_count": 1,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "flat",
+            "expected_count": null,
             "observed_count": 1,
             "accepted_count": 1,
             "pending_detail_count": 0,
             "complete": true,
+            "pagination_complete": true,
             "stop_reason": "pagination_complete",
             "error": ""
           }
@@ -193,7 +211,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "workday-co",
@@ -201,7 +221,7 @@
         "website_url": "https://workday.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://workday.wd101.myworkdayjobs.com/workday-co",
         "connector_family": "ats_expansion",
         "discovery_method": "ats_signature",
@@ -210,15 +230,18 @@
             "url": "https://workday.wd101.myworkdayjobs.com/workday-co",
             "connector_family": "ats_expansion",
             "transport": "direct",
+            "role": "authoritative",
             "pages_attempted": 2,
             "pages_completed": 2,
-            "partitions_attempted": 1,
-            "partitions_completed": 1,
-            "expected_count": 1,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "flat",
+            "expected_count": null,
             "observed_count": 1,
             "accepted_count": 1,
             "pending_detail_count": 0,
             "complete": true,
+            "pagination_complete": true,
             "stop_reason": "pagination_complete",
             "error": ""
           }
@@ -232,7 +255,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       }
     ],
     "partial": [
@@ -242,7 +267,7 @@
         "website_url": "https://browser.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://browser.example/jobs",
         "connector_family": "generic_browser",
         "discovery_method": "browser_rendered_discovery",
@@ -251,15 +276,18 @@
             "url": "https://browser.example/jobs",
             "connector_family": "generic_browser",
             "transport": "direct",
+            "role": "alternate",
             "pages_attempted": 1,
-            "pages_completed": 0,
-            "partitions_attempted": 1,
-            "partitions_completed": 0,
-            "expected_count": 1,
+            "pages_completed": null,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "unknown",
+            "expected_count": null,
             "observed_count": 1,
             "accepted_count": 1,
             "pending_detail_count": 0,
             "complete": false,
+            "pagination_complete": false,
             "stop_reason": "pagination_unverified",
             "error": ""
           }
@@ -275,7 +303,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "generic-co",
@@ -283,7 +313,7 @@
         "website_url": "https://generic.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://generic.example/careers",
         "connector_family": "generic_direct",
         "discovery_method": "homepage_link",
@@ -292,15 +322,18 @@
             "url": "https://generic.example/careers",
             "connector_family": "generic_direct",
             "transport": "direct",
+            "role": "alternate",
             "pages_attempted": 1,
-            "pages_completed": 0,
-            "partitions_attempted": 1,
-            "partitions_completed": 0,
-            "expected_count": 1,
+            "pages_completed": null,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "unknown",
+            "expected_count": null,
             "observed_count": 1,
             "accepted_count": 1,
             "pending_detail_count": 0,
             "complete": false,
+            "pagination_complete": false,
             "stop_reason": "pagination_unverified",
             "error": ""
           }
@@ -316,7 +349,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       },
       {
         "company_id": "suspicious-co",
@@ -324,7 +359,7 @@
         "website_url": "https://suspicious.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://suspicious.example/careers",
         "connector_family": "generic_direct",
         "discovery_method": "homepage_link",
@@ -333,15 +368,18 @@
             "url": "https://suspicious.example/careers",
             "connector_family": "generic_direct",
             "transport": "direct",
+            "role": "alternate",
             "pages_attempted": 1,
-            "pages_completed": 0,
-            "partitions_attempted": 1,
-            "partitions_completed": 0,
+            "pages_completed": null,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "unknown",
             "expected_count": null,
             "observed_count": 0,
             "accepted_count": 0,
             "pending_detail_count": 0,
             "complete": false,
+            "pagination_complete": false,
             "stop_reason": "pagination_unverified",
             "error": ""
           }
@@ -357,7 +395,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       }
     ],
     "blocked": [
@@ -367,7 +407,7 @@
         "website_url": "https://blocked.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://blocked.example/careers",
         "connector_family": "generic_direct",
         "discovery_method": "homepage_link",
@@ -376,15 +416,18 @@
             "url": "https://blocked.example/careers",
             "connector_family": "generic_direct",
             "transport": "direct",
+            "role": "alternate",
             "pages_attempted": 0,
-            "pages_completed": 0,
-            "partitions_attempted": 1,
-            "partitions_completed": 0,
+            "pages_completed": null,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "unknown",
             "expected_count": null,
             "observed_count": 0,
             "accepted_count": 0,
             "pending_detail_count": 0,
             "complete": false,
+            "pagination_complete": false,
             "stop_reason": "challenge_page",
             "error": "challenge_page"
           }
@@ -401,7 +444,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       }
     ],
     "failed": [
@@ -411,7 +456,7 @@
         "website_url": "https://timeout.example",
         "generation_id": "offline-fixture-generation",
         "source_version": "fixture",
-        "created_at": "2026-09-10T13:53:38Z",
+        "created_at": "2026-09-10T18:13:08Z",
         "endpoint_used": "https://timeout.example/careers",
         "connector_family": "generic_browser",
         "discovery_method": "homepage_link",
@@ -420,17 +465,20 @@
             "url": "https://timeout.example/careers",
             "connector_family": "generic_browser",
             "transport": "direct",
+            "role": "alternate",
             "pages_attempted": 0,
-            "pages_completed": 0,
-            "partitions_attempted": 1,
-            "partitions_completed": 0,
+            "pages_completed": null,
+            "partitions_attempted": null,
+            "partitions_completed": null,
+            "partition_state": "unknown",
             "expected_count": null,
             "observed_count": 0,
             "accepted_count": 0,
             "pending_detail_count": 0,
             "complete": false,
+            "pagination_complete": false,
             "stop_reason": "timeout",
-            "error": ""
+            "error": "timeout"
           }
         ],
         "persisted_job_count": 0,
@@ -445,7 +493,9 @@
           "recheck_required": true,
           "request_budget_exhausted": false,
           "targets": 1
-        }
+        },
+        "last_confirmed_complete_at": "",
+        "last_confirmed_complete_generation": ""
       }
     ],
     "unknown": []

@@ -857,6 +857,17 @@ def _coverage_target(
     request_count = sum(_snapshot_request_count(snapshot) for snapshot in coverage_snapshots)
     pages_fetched = sum(max(0, int(snapshot.get("pages_fetched") or 0)) for snapshot in coverage_snapshots)
     detail_failures = sum(len(snapshot.get("observation_failures") or []) for snapshot in coverage_snapshots)
+    # Independent source-reported total.  Only populated when the connector
+    # received an authoritative total from the source; never derived from the
+    # number of jobs observed.
+    expected_count = next(
+        (
+            int(snapshot["source_reported_total"])
+            for snapshot in coverage_snapshots
+            if snapshot.get("source_reported_total") is not None
+        ),
+        None,
+    )
     complete = any(
         _snapshot_is_complete(
             snapshot,
@@ -900,6 +911,7 @@ def _coverage_target(
         "discovery_method": discovery_method,
         "status": target_outcome,
         "job_count": accepted_jobs,
+        "expected_count": expected_count,
         "counts": {
             "jobs_observed": observed_jobs,
             "jobs_accepted": accepted_jobs,
@@ -1206,6 +1218,22 @@ def collect_company(
             break
 
     _finalize_coverage(result, target_outcomes)
+    # Record complementary source partitions (distinct ATS tenants) that
+    # discovery surfaced but were not traversed.  An unvisited native-ATS tenant
+    # is a potential complementary partition that prevents a confirmed-complete
+    # claim; a skipped generic career page is an alternative, not a complement.
+    processed_urls = {_text(target.get("url", "")) for target in result.targets}
+    complementary_skipped: list[dict[str, str]] = []
+    for candidate in getattr(discovery, "candidates", []) or []:
+        url = _source_url(_text(getattr(candidate, "url", "")))
+        if not url or url in processed_urls:
+            continue
+        ats_type = (
+            _text(getattr(candidate, "ats_type", "")) or detect_ats_type(url) or detect_ats(url) or ""
+        )
+        if ats_type:
+            complementary_skipped.append({"url": url, "ats_type": ats_type})
+    result.coverage["discovery"] = {"complementary_partitions_skipped": complementary_skipped}
     return result
 
 
@@ -1236,6 +1264,11 @@ class EmployerState:
                     company_key TEXT PRIMARY KEY, receipt_json TEXT NOT NULL, classification TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS collection_cursor (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cursor_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self.connection.commit()
@@ -1247,6 +1280,15 @@ class EmployerState:
                 """
                 CREATE TABLE IF NOT EXISTS coverage_receipts (
                     company_key TEXT PRIMARY KEY, receipt_json TEXT NOT NULL, classification TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS collection_cursor (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cursor_index INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -1292,6 +1334,30 @@ class EmployerState:
         with self.connection:
             self.connection.execute("DELETE FROM jobs")
             self.connection.execute("DELETE FROM companies")
+            self.connection.execute("DELETE FROM coverage_receipts")
+            self.connection.execute("DELETE FROM collection_cursor")
+
+    def get_cursor(self) -> int:
+        """Return the durable bounded-cycle cursor (index into the input order)."""
+
+        try:
+            row = self.connection.execute(
+                "SELECT cursor_index FROM collection_cursor WHERE id=1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row["cursor_index"] if row else 0)
+
+    def set_cursor(self, index: int) -> None:
+        """Persist the bounded-cycle cursor after a completed selection window."""
+
+        value = max(0, int(index))
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO collection_cursor(id,cursor_index,updated_at) VALUES(1,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET cursor_index=excluded.cursor_index,updated_at=excluded.updated_at",
+                (value, utc_now()),
+            )
 
     def company_status(self, company: EmployerCompany) -> str:
         key = company.canonical_company_id or company.website_url
@@ -1421,15 +1487,18 @@ class EmployerState:
                     url=attempt.get("url", ""),
                     connector_family=attempt.get("connector_family", ""),
                     transport=attempt.get("transport", ""),
-                    pages_attempted=attempt.get("pages_attempted", 0),
-                    pages_completed=attempt.get("pages_completed", 0),
-                    partitions_attempted=attempt.get("partitions_attempted", 0),
-                    partitions_completed=attempt.get("partitions_completed", 0),
+                    role=attempt.get("role", "authoritative"),
+                    pages_attempted=attempt.get("pages_attempted"),
+                    pages_completed=attempt.get("pages_completed"),
+                    partitions_attempted=attempt.get("partitions_attempted"),
+                    partitions_completed=attempt.get("partitions_completed"),
+                    partition_state=attempt.get("partition_state", "unknown"),
                     expected_count=attempt.get("expected_count"),
                     observed_count=attempt.get("observed_count", 0),
                     accepted_count=attempt.get("accepted_count", 0),
                     pending_detail_count=attempt.get("pending_detail_count", 0),
                     complete=attempt.get("complete", False),
+                    pagination_complete=attempt.get("pagination_complete", False),
                     stop_reason=attempt.get("stop_reason", ""),
                     error=attempt.get("error", ""),
                 )
@@ -1439,6 +1508,8 @@ class EmployerState:
             terminal_classification=payload.get("terminal_classification", "unknown"),
             reasons=payload.get("reasons", []),
             completeness_evidence=payload.get("completeness_evidence", {}),
+            last_confirmed_complete_at=payload.get("last_confirmed_complete_at", ""),
+            last_confirmed_complete_generation=payload.get("last_confirmed_complete_generation", ""),
         )
 
     def coverage_receipts(self) -> list["EmployerCoverageReceipt"]:
@@ -1862,7 +1933,15 @@ def run_collection(
         )
 
         work: list[EmployerCompany] = []
-        for company in selected:
+        use_cursor = resume and limit > 0 and not company_id
+        cursor = 0
+        ordered = companies
+        if use_cursor and companies:
+            cursor = state.get_cursor() % len(companies)
+            ordered = companies[cursor:] + companies[:cursor]
+        examined = 0
+        for company in ordered:
+            examined += 1
             prior_status = state.company_status(company)
             if resume and state.should_skip_resume(company):
                 metrics["companies_skipped_resume"] += 1
@@ -1904,6 +1983,11 @@ def run_collection(
                     continue
                 metrics["rechecks_attempted"] += 1
             work.append(company)
+            if limit > 0 and len(work) >= limit:
+                break
+        if use_cursor and companies:
+            state.set_cursor((cursor + examined) % len(companies))
+        metrics["selected_companies"] = len(work) if use_cursor else len(selected)
 
         def record_checkpoint(result: EmployerCollectionResult) -> None:
             state.save(result, generation_id=run_generation_id, source_version=source_version)
