@@ -14,6 +14,27 @@ employer_state_db="${RUNR_EMPLOYER_STATE_DB:-$employer_state_dir/master_employer
 export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 data_dir="${RUNR_DATA_DIR:-/var/lib/runr/acquisition-data}"
 include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
+max_requests="${RUNR_ACQUISITION_MAX_REQUESTS:-0}"
+linkedin_max_requests="${RUNR_LINKEDIN_MAX_REQUESTS:-0}"
+employer_max_requests="${RUNR_EMPLOYER_MAX_REQUESTS:-0}"
+
+is_positive_integer() {
+  case "$1" in
+    ''|*[!0-9]*|0) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+if ! is_positive_integer "$max_requests" \
+  || ! is_positive_integer "$linkedin_max_requests" \
+  || ! is_positive_integer "$employer_max_requests"; then
+  echo "Set positive total and per-source acquisition request caps before enabling the timer." >&2
+  exit 64
+fi
+if [ "$((linkedin_max_requests + employer_max_requests))" -gt "$max_requests" ]; then
+  echo "Per-source acquisition request caps exceed RUNR_ACQUISITION_MAX_REQUESTS." >&2
+  exit 64
+fi
 
 mkdir -p "$export_root/linkedin" "$export_root/employer"
 
@@ -31,7 +52,7 @@ linkedin_status=0
   --state-dir "$linkedin_state_dir" \
   --require-existing-state \
   --mode daily \
-  --max-requests "${RUNR_LINKEDIN_MAX_REQUESTS:-${RUNR_ACQUISITION_MAX_REQUESTS:-0}}" \
+  --max-requests "$linkedin_max_requests" \
   $linkedin_args \
   || linkedin_status=$?
 
@@ -42,7 +63,7 @@ employer_status=0
   --state-dir "$employer_state_dir" \
   --require-existing-state \
   --full \
-  --max-requests "${RUNR_EMPLOYER_MAX_REQUESTS:-${RUNR_ACQUISITION_MAX_REQUESTS:-0}}" \
+  --max-requests "$employer_max_requests" \
   $employer_args \
   || employer_status=$?
 
