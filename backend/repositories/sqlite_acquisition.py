@@ -571,15 +571,28 @@ class SqliteAcquisitionStore(_SqliteStore):
         now = utc_now_iso()
         rows = [dict(target) for target in targets if bool(target.get("enabled", False))]
         with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO acquisition_tasks (
-                    task_id, cycle_id, target_id, status, created_at, updated_at
-                ) VALUES (?, ?, ?, 'pending', ?, ?)
-                ON CONFLICT(cycle_id, target_id) DO NOTHING
-                """,
-                [(f"acq_task_{uuid4().hex}", cycle_id, str(target["target_id"]), now, now) for target in rows],
-            )
+            existing = {
+                str(row["target_id"] or "").strip()
+                for row in connection.execute(
+                    "SELECT target_id FROM acquisition_tasks WHERE cycle_id = ?",
+                    (cycle_id,),
+                ).fetchall()
+            }
+            parameters = [
+                (f"acq_task_{uuid4().hex}", cycle_id, str(target["target_id"]), now, now)
+                for target in rows
+                if str(target["target_id"] or "").strip() not in existing
+            ]
+            if parameters:
+                connection.executemany(
+                    """
+                    INSERT INTO acquisition_tasks (
+                        task_id, cycle_id, target_id, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'pending', ?, ?)
+                    ON CONFLICT(cycle_id, target_id) DO NOTHING
+                    """,
+                    parameters,
+                )
 
     def set_cycle_forecast(self, cycle_id: str, *, requests: int, credits: int) -> None:
         with self._connect() as connection:
@@ -2866,6 +2879,20 @@ class SqliteAcquisitionStore(_SqliteStore):
             payload["freshness_status"] = self._freshness_status(payload.get("last_success_at"))
             result.append(payload)
         return result
+
+    def list_cycle_task_ids(self, cycle_id: str) -> dict[str, str]:
+        """Return the cycle task mapping without fetching target payloads."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT target_id, task_id FROM acquisition_tasks WHERE cycle_id = ?",
+                (cycle_id,),
+            ).fetchall()
+        return {
+            str(row["target_id"] or "").strip(): str(row["task_id"] or "").strip()
+            for row in rows
+            if str(row["target_id"] or "").strip() and str(row["task_id"] or "").strip()
+        }
 
     def get_cycle_source_metrics(self, cycle_id: str) -> list[dict[str, Any]]:
         """Report yield and reconciled cost for every requested source URL."""

@@ -358,7 +358,10 @@ def run_delivery(
         return {"status": "already_running", "cycle_key": cycle_key}
     cycle_id = _text(cycle.get("cycle_id"))
     store.ensure_cycle_tasks(cycle_id, targets)
-    cycle_targets = {item["target_id"]: item for item in store.list_cycle_targets(cycle_id)}
+    cycle_targets = {
+        target_id: {"task": {"task_id": task_id}}
+        for target_id, task_id in store.list_cycle_task_ids(cycle_id).items()
+    }
     all_target_ids: list[str] = []
     partial = False
     metrics: dict[str, object] = {
