@@ -340,10 +340,7 @@ def run_delivery(
             "manifest_hash": _text(manifest.get("manifest_hash")),
             "source_version": source_version,
         }
-    existing_target_ids = {
-        _text(target.get("target_id"))
-        for target in store.list_targets(include_disabled=True)
-    }
+    existing_target_ids = store.list_target_ids()
     store.ensure_targets(
         target for target in targets if _text(target.get("target_id")) not in existing_target_ids
     )

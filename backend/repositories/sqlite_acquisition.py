@@ -379,6 +379,13 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         self._run_transaction(write)
 
+    def list_target_ids(self) -> set[str]:
+        """Return target identities without fetching large target payloads."""
+
+        with self._connect() as connection:
+            rows = connection.execute("SELECT target_id FROM acquisition_targets").fetchall()
+        return {str(row["target_id"] or "").strip() for row in rows if str(row["target_id"] or "").strip()}
+
     def list_targets(self, *, include_disabled: bool = True) -> list[dict[str, Any]]:
         with self._connect() as connection:
             sql = "SELECT * FROM acquisition_targets"
