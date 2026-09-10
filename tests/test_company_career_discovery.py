@@ -49,6 +49,20 @@ class FakeFetcher:
 
 
 class CompanyCareerDiscoveryTests(unittest.TestCase):
+    def test_collector_can_try_homepage_career_target_before_speculative_probes(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            self.assertEqual(url, "https://example.com/")
+            return FetchResult(url, url, 200, text='<a href="/karriere">Karriere</a>')
+
+        result = discover_career_url(
+            homepage_url="https://example.com", fetch=fetch, prefer_homepage_candidates=True
+        )
+        self.assertEqual(result.primary_career_url, "https://example.com/karriere")
+        self.assertEqual(calls, ["https://example.com/"])
+
     def test_detects_external_ats_from_homepage_link(self):
         fetch = FakeFetcher(
             {

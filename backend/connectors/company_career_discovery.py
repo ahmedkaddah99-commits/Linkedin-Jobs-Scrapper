@@ -591,6 +591,7 @@ def discover_career_url(
     shallow_crawl_pages: int = 8,
     use_rendered_fallback: bool = False,
     allow_domain_guessing: bool = False,
+    prefer_homepage_candidates: bool = False,
     usage_callback=None,
 ) -> CareerDiscoveryResult:
     direct_fetch = fetch or requests_fetcher(request_timeout_seconds)
@@ -636,10 +637,13 @@ def discover_career_url(
     # authoritative source-specific endpoint, so common-path and sitemap
     # probing would only add request cost before the producer verifies it.
     has_authoritative_ats = any(candidate.ats_type for candidate in homepage_candidates)
-    if not has_authoritative_ats:
+    has_homepage_target = prefer_homepage_candidates and any(
+        candidate.confidence_score >= 0.55 for candidate in homepage_candidates
+    )
+    if not has_authoritative_ats and not has_homepage_target:
         all_candidates.extend(guess_common_career_urls(effective_homepage, direct_fetch))
         has_authoritative_ats = any(candidate.ats_type for candidate in all_candidates)
-    if not has_authoritative_ats:
+    if not has_authoritative_ats and not has_homepage_target:
         all_candidates.extend(discover_from_sitemaps(effective_homepage, direct_fetch))
 
     if not all_candidates and shallow_crawl_pages > 0:

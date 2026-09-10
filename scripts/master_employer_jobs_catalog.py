@@ -1007,6 +1007,7 @@ def collect_company(
         request_timeout_seconds=limits.timeout_seconds,
         shallow_crawl_pages=8,
         use_rendered_fallback=False,
+        prefer_homepage_candidates=True,
     )
     candidates = _candidate_rows(discovery, limits)
     preloaded_browser_snapshots: dict[str, Mapping[str, Any]] = {}
