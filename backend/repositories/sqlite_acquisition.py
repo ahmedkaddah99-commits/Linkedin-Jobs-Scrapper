@@ -295,39 +295,14 @@ class SqliteAcquisitionStore(_SqliteStore):
         rows = [dict(target) for target in targets]
 
         def write(connection) -> None:
+            parameters = []
             for target in rows:
                 target_id = str(target.get("target_id") or "").strip()
                 if not target_id:
                     raise ValueError("Acquisition target requires target_id.")
                 target_kind = str(target.get("target_kind") or "employer_career_site")
                 is_quarantined = target_kind.casefold() == "fixture" or target_id in {"fixture_source", "x"}
-                connection.execute(
-                    """
-                    INSERT INTO acquisition_targets (
-                        target_id, target_kind, display_name, canonical_target_url,
-                        provenance_url, request_url, connector, provider, source_token,
-                        policy_version, maturity_state, enabled, publication_enabled,
-                        max_direct_requests, request_mode, config_json, quarantined,
-                        quarantine_reason, quarantined_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(target_id) DO UPDATE SET
-                        target_kind=excluded.target_kind,
-                        display_name=excluded.display_name,
-                        canonical_target_url=excluded.canonical_target_url,
-                        provenance_url=excluded.provenance_url,
-                        request_url=excluded.request_url,
-                        connector=excluded.connector,
-                        provider=excluded.provider,
-                        source_token=excluded.source_token,
-                        policy_version=excluded.policy_version,
-                        maturity_state=CASE WHEN acquisition_targets.quarantined=1 THEN 'quarantined' ELSE excluded.maturity_state END,
-                        enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.enabled END,
-                        publication_enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.publication_enabled END,
-                        max_direct_requests=excluded.max_direct_requests,
-                        request_mode=excluded.request_mode,
-                        config_json=excluded.config_json,
-                        updated_at=excluded.updated_at
-                    """,
+                parameters.append(
                     (
                         target_id,
                         str(target.get("target_kind") or "employer_career_site"),
@@ -370,6 +345,36 @@ class SqliteAcquisitionStore(_SqliteStore):
                         now,
                         now,
                     ),
+                )
+            if parameters:
+                connection.executemany(
+                    """
+                    INSERT INTO acquisition_targets (
+                        target_id, target_kind, display_name, canonical_target_url,
+                        provenance_url, request_url, connector, provider, source_token,
+                        policy_version, maturity_state, enabled, publication_enabled,
+                        max_direct_requests, request_mode, config_json, quarantined,
+                        quarantine_reason, quarantined_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(target_id) DO UPDATE SET
+                        target_kind=excluded.target_kind,
+                        display_name=excluded.display_name,
+                        canonical_target_url=excluded.canonical_target_url,
+                        provenance_url=excluded.provenance_url,
+                        request_url=excluded.request_url,
+                        connector=excluded.connector,
+                        provider=excluded.provider,
+                        source_token=excluded.source_token,
+                        policy_version=excluded.policy_version,
+                        maturity_state=CASE WHEN acquisition_targets.quarantined=1 THEN 'quarantined' ELSE excluded.maturity_state END,
+                        enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.enabled END,
+                        publication_enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.publication_enabled END,
+                        max_direct_requests=excluded.max_direct_requests,
+                        request_mode=excluded.request_mode,
+                        config_json=excluded.config_json,
+                        updated_at=excluded.updated_at
+                    """,
+                    parameters,
                 )
 
         self._run_transaction(write)
@@ -559,16 +564,15 @@ class SqliteAcquisitionStore(_SqliteStore):
         now = utc_now_iso()
         rows = [dict(target) for target in targets if bool(target.get("enabled", False))]
         with self._connect() as connection:
-            for target in rows:
-                connection.execute(
-                    """
-                    INSERT INTO acquisition_tasks (
-                        task_id, cycle_id, target_id, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, 'pending', ?, ?)
-                    ON CONFLICT(cycle_id, target_id) DO NOTHING
-                    """,
-                    (f"acq_task_{uuid4().hex}", cycle_id, str(target["target_id"]), now, now),
-                )
+            connection.executemany(
+                """
+                INSERT INTO acquisition_tasks (
+                    task_id, cycle_id, target_id, status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'pending', ?, ?)
+                ON CONFLICT(cycle_id, target_id) DO NOTHING
+                """,
+                [(f"acq_task_{uuid4().hex}", cycle_id, str(target["target_id"]), now, now) for target in rows],
+            )
 
     def set_cycle_forecast(self, cycle_id: str, *, requests: int, credits: int) -> None:
         with self._connect() as connection:
