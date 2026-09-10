@@ -213,9 +213,12 @@ _UNKNOWN_TOKENS = frozenset({
 })
 
 _PLACEHOLDER_SUBSTRINGS = (
-    "{{", "}}", "<job", "<title", "<company", "<location", "<description",
-    "lorem ipsum", "sample job", "test job", "example job", "template",
+    "{{", "}}", "lorem ipsum",
 )
+
+# A placeholder is bounded to a short token; anything with more meaningful
+# content than this is treated as real text (see ``is_placeholder``).
+_PLACEHOLDER_MAX_MEANINGFUL_CHARS = 40
 
 _BLOCKED_BODY_MARKERS = (
     "attention required", "unusual traffic", "captcha", "robot check",
@@ -223,6 +226,8 @@ _BLOCKED_BODY_MARKERS = (
     "404 not found", "page not found", "something went wrong",
     "an error occurred", "this job is no longer available",
     "this position has been filled", "blocked", "challenge required",
+    # Producer leaks: JSON pagination fragments surfaced as a description.
+    "labeldisplayedrows", '"pagination"', '"header":{"actions"',
 )
 
 _APPLICATION_DESTINATION_CLASSIFICATIONS = {
@@ -238,14 +243,49 @@ _APPLICATION_DESTINATION_CLASSIFICATIONS = {
     "redirect_apply": "redirect_apply",
 }
 
+# Product policy: a trustworthy user-facing destination must point at *this*
+# job.  A direct ATS/employer apply URL, an embedded apply form, or a specific
+# job-detail URL (LinkedIn view page or employer position page) all qualify --
+# the user can apply through them.  A generic careers/search/portal listing or
+# an unstable redirect does not.  This matches ``resolve_application_destination``
+# (which exposes a job-detail URL as a truthful user-facing fallback) and the
+# current ``PublicationPolicy(missing_apply_is_blocker=False)`` stance.
+_REJECTED_APPLICATION_DESTINATIONS = frozenset({
+    "redirect_apply",
+    "listing_fallback",
+    "search_results",
+    "portal_listing",
+    "careers_index",
+    "unresolved",
+})
+
 _TRACKING_ONLY_HOSTS = frozenset({
     "goo.gl", "bit.ly", "tinyurl.com", "t.co", "buff.ly", "ow.ly", "lnkd.in",
     "s.id", "cutt.ly", "rebrand.ly", "adf.ly",
 })
 
+# Sentinel values that producers use to mean "identity not resolved".  The
+# LinkedIn producer writes ``//`` for an unresolved canonical company id; the
+# employer producer leaves the field empty.  Both are treated as absent.
+_MISSING_ID_SENTINELS = frozenset({"", "//", "-", "--", "/", "n/a", "na", "null", "none", "unknown"})
+
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _is_missing_id(value: Any) -> bool:
+    return _norm(value) in _MISSING_ID_SENTINELS
+
+
+def is_missing_identity(value: Any) -> bool:
+    """Public helper: true when an identity value is absent or a sentinel."""
+    return _is_missing_id(value)
+
+
+def _strip_html(value: Any) -> str:
+    """Return a tag-free plain-text view without mutating the source value."""
+    return re.sub(r"<[^>]*>", " ", _text(value))
 
 
 def _norm(value: Any) -> str:
@@ -265,32 +305,33 @@ def is_unknown_token(value: Any) -> bool:
 
 
 def is_placeholder(value: Any) -> bool:
-    text = _text(value)
+    """True only when a value is essentially a template/unknown token.
+
+    A placeholder is *short*; a long description that merely contains a leaked
+    ``}}`` JSON artifact (or similar) is real content and is not a placeholder.
+    """
+    text = _strip_html(value)
     lowered = text.casefold()
     if not lowered:
         return False
     if lowered in _UNKNOWN_TOKENS:
         return True
-    if any(marker in lowered for marker in _PLACEHOLDER_SUBSTRINGS):
-        return True
-    # A title/company that is a bare bracketed token with no word content.
-    if re.fullmatch(r"[<({\[].{0,32}[>)}\]]", text):
-        return True
-    return False
+    if _meaningful_char_count(text) >= _PLACEHOLDER_MAX_MEANINGFUL_CHARS:
+        return False
+    return any(marker in lowered for marker in _PLACEHOLDER_SUBSTRINGS)
 
 
 def is_blocked_body(value: Any) -> bool:
-    text = _text(value)
-    lowered = text.casefold()
+    lowered = _strip_html(value).casefold()
     if not lowered:
         return False
     return any(marker in lowered for marker in _BLOCKED_BODY_MARKERS)
 
 
 def _meaningful_char_count(value: Any) -> int:
-    text = _text(value)
+    plain = _strip_html(value)
     # Count only letters and digits as meaningful content.
-    return len(re.sub(r"[^a-z0-9]", "", text.casefold()))
+    return len(re.sub(r"[^a-z0-9]", "", plain.casefold()))
 
 
 def is_insufficient_description(value: Any, *, min_chars: int = 80) -> bool:
@@ -394,7 +435,9 @@ def _canonical_job_id(record: Mapping[str, Any]) -> str:
 
 
 def _canonical_company_id(record: Mapping[str, Any]) -> str:
-    return _text(_first(record, "canonical_company_id", "company_id", "canonical_CompanyID"))
+    raw = _first(record, "canonical_company_id", "company_id", "canonical_CompanyID")
+    value = _text(raw)
+    return "" if _is_missing_id(value) else value
 
 
 def _company_name(record: Mapping[str, Any]) -> str:
@@ -432,15 +475,17 @@ def _source(record: Mapping[str, Any]) -> str:
 
 
 def _source_job_id(record: Mapping[str, Any]) -> str:
-    return _text(_first(record, "source_job_id", "external_job_id", "job_id"))
+    return _text(_first(record, "source_job_id", "external_job_id", "linkedin_job_id", "job_id"))
 
 
 def _observed_at(record: Mapping[str, Any]) -> str:
-    return _text(_first(record, "observed_at", "observation_timestamp", "last_seen_at"))
+    return _text(
+        _first(record, "observed_at", "observation_timestamp", "last_seen_at", "detail_last_refreshed_at")
+    )
 
 
 def _lifecycle_state(record: Mapping[str, Any]) -> str:
-    return _text(_first(record, "lifecycle_state", "state", "job_status")).casefold()
+    return _text(_first(record, "lifecycle_state", "lifecycle_status", "state", "job_status")).casefold()
 
 
 def _posted_at(record: Mapping[str, Any]) -> str:
@@ -462,7 +507,16 @@ def _posted_at(record: Mapping[str, Any]) -> str:
                 posted = fields.get("source_posted_at")
                 if isinstance(posted, Mapping) and posted.get("value"):
                     return _text(posted["value"])
-    return _text(_first(record, "source_posted_at", "posted_at", "date_posted", "published_at"))
+    return _text(
+        _first(
+            record,
+            "source_posted_at",
+            "posted_at",
+            "posted_at_estimated",
+            "date_posted",
+            "published_at",
+        )
+    )
 
 
 def _closed_at(record: Mapping[str, Any]) -> str:
@@ -498,7 +552,11 @@ def _application_url_and_kind(record: Mapping[str, Any]) -> tuple[str, str]:
             "apply_url",
             "application_url",
             "apply_link",
+            "apply_url_canonical",
+            "apply_url_raw",
             "job_detail_url",
+            "linkedin_job_url",
+            "source_job_url",
             "source_url",
             "canonical_url",
             "link",
@@ -615,7 +673,7 @@ def validate_job_for_publication(
     elif is_tracking_only_url(application_url):
         mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
         field_states["application_url"] = "invalid"
-    elif destination_class in {"job_detail_only", "redirect_apply", "listing_fallback", "search_results", "portal_listing", "careers_index", "unresolved"}:
+    elif destination_class in _REJECTED_APPLICATION_DESTINATIONS:
         mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", detail=application_kind)
         field_states["application_url"] = "invalid"
     else:
@@ -763,6 +821,7 @@ __all__ = [
     "is_blocked_body",
     "is_blank",
     "is_insufficient_description",
+    "is_missing_identity",
     "is_placeholder",
     "is_tracking_only_url",
     "is_unknown_token",

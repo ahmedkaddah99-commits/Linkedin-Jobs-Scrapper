@@ -308,6 +308,100 @@ def test_uncertain_dedupe_identity_is_unresolved_identity():
     assert REASON_UNCERTAIN_DEDUPE_IDENTITY in _codes(result)
 
 
+def test_slash_sentinel_canonical_company_id_is_missing():
+    # LinkedIn producer writes '//' for unresolved canonical company identity.
+    record = _complete_record(canonical_company_id="//")
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_UNRESOLVED_IDENTITY
+    assert REASON_MISSING_CANONICAL_COMPANY_ID in _codes(result)
+
+
+def test_job_detail_url_is_an_acceptable_application_url():
+    # A LinkedIn view URL / employer position URL is a valid user-facing
+    # application/job URL per the current product policy.
+    record = _complete_record(
+        apply_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_destination={
+            "destination_type": "job_detail_only",
+            "resolved_url": "",
+            "user_facing_url": "https://www.linkedin.com/jobs/view/4313287713",
+        },
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
+    assert REASON_LISTING_FALLBACK_APPLICATION_URL not in _codes(result)
+
+
+def test_careers_listing_url_is_still_rejected():
+    record = _complete_record(
+        apply_url="https://acme.example-careers.com/careers",
+        application_url="https://acme.example-careers.com/careers",
+        application_destination={
+            "destination_type": "listing_fallback",
+            "resolved_url": "",
+            "user_facing_url": "https://acme.example-careers.com/careers",
+        },
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+
+
+def test_html_description_is_evaluated_as_plain_text():
+    record = _complete_record(
+        description_text="<h1>About</h1><p>You will build backend services end to end.</p>",
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    # Short HTML with minimal real text is still insufficient.
+    assert result.status == STATUS_INVALID
+    assert REASON_INSUFFICIENT_DESCRIPTION in _codes(result)
+
+
+def test_posted_at_estimated_future_date_is_invalid():
+    future = (NOW + timedelta(days=5)).isoformat()[:10]
+    record = _complete_record(source_timestamps=None)
+    record.pop("source_timestamps", None)
+    record["posted_at_estimated"] = future
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert REASON_FUTURE_POSTED_AT in _codes(result)
+
+
+def test_lifecycle_status_closed_is_stale_or_closed():
+    record = _complete_record()
+    record.pop("lifecycle_state", None)
+    record["lifecycle_status"] = "closed"
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_STALE_OR_CLOSED
+    assert REASON_CLOSED_LIFECYCLE_STATE in _codes(result)
+
+
+def test_real_linkedin_shaped_record_blocks_only_on_company_identity():
+    # A realistic LinkedIn observation row: title/description/location/apply URL
+    # all present, lifecycle active, but canonical company id unresolved.
+    record = {
+        "canonical_company_id": "//",
+        "source_company_name": "Deutsche Bank",
+        "linkedin_job_id": "4313287713",
+        "job_title": "Fintech Specialist (d/m/w)",
+        "description": (
+            "Position Overview: plan and implement reporting solutions across the "
+            "private bank, working with stakeholders to deliver accurate results."
+        ),
+        "location": "Munich, Bavaria, Germany",
+        "apply_url_canonical": "https://www.linkedin.com/jobs/view/4313287713",
+        "last_seen_at": "2026-09-02T00:38:36Z",
+        "lifecycle_status": "active",
+        "source": "linkedin",
+    }
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_UNRESOLVED_IDENTITY
+    assert REASON_MISSING_CANONICAL_COMPANY_ID in _codes(result)
+    assert REASON_MISSING_TITLE not in _codes(result)
+    assert REASON_MISSING_DESCRIPTION not in _codes(result)
+
+
 def test_validation_never_mutates_input_record():
     record = _complete_record(title="", description_text="")
     before = dict(record)
