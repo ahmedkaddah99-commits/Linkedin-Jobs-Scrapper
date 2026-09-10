@@ -6,7 +6,7 @@
 | Worktree | `C:\Users\ahmed\Projects_Local\runr-opencode-e-employer-completeness` |
 | Branch | `temp/opencode-e-employer-completeness` |
 | Base SHA | `7f1d7be57836499930ebc99491d1d6354175c0c6` |
-| Final SHA | `TBD` |
+| Final SHA | `5890085f53ec9aa96b7bad9477bc9a367fcb8049` |
 | Owner | E (employer-site collector, career-page/ATS discovery, pagination/partition traversal, direct/proxy/browser connectors, per-company coverage receipts) |
 
 ## Scope
@@ -186,5 +186,5 @@ No reset, clean, push, deploy, live request, or production mutation was performe
 
 ## Clean branch tip
 
-Implementation commit: `TBD`
+Implementation commit: `5890085f53ec9aa96b7bad9477bc9a367fcb8049`
 Branch tip (`temp/opencode-e-employer-completeness`): `git rev-parse HEAD` — a documentation-only commit records the implementation SHA after this handoff.
