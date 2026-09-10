@@ -15,7 +15,7 @@ bounded concurrency for the existing 14-table LinkedIn producer
 | Worktree | `C:\Users\ahmed\Projects_Local\runr-opencode-d-linkedin-performance` |
 | Branch | `temp/opencode-d-linkedin-performance` |
 | Implementation SHA | `a9e9f33b7da0cdb1d57de64cdb3b4959b2200a21` |
-| Final tip | `948e1ffd1bbdc9a96d676a34843bd60928fc7c14` (docs-only descendant) |
+| Final tip | verify with `git rev-parse HEAD` (docs-only descendant of the implementation SHA) |
 
 The base SHA is the current committed tip of `deployment/render-turso-r2` and
 contains the reported baseline. No branch or worktree was overwritten; the new
