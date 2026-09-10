@@ -148,6 +148,22 @@ def test_fetch_browser_snapshot_keeps_same_origin_xhr_and_rendered_content(monke
     assert snapshot["jobs"][0]["job_detail_url"] == "https://acme.example/jobs/xhr-1"
 
 
+def test_browser_timeout_preserves_observed_jobs_and_request_count(monkeypatch):
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    def timeout(*_args):
+        raise fallbacks.PlaywrightTimeoutError("fixture timeout")
+
+    monkeypatch.setattr(fallbacks, "sync_playwright", lambda: _FakePlaywright())
+    monkeypatch.setattr(_FakePage, "wait_for_timeout", timeout)
+    result = fetch_browser_snapshot("https://acme.example/careers")
+    assert result["status"] == "partial"
+    assert result["error"] == "timeout"
+    assert result["requests_made"] == 1
+    assert len(result["jobs"]) == 1
+    assert result["complete_snapshot"] is False
+
+
 def test_browser_proxy_uses_separate_decoded_credentials(monkeypatch):
     import backend.connectors.employer_site_fallbacks as fallbacks
 

@@ -449,9 +449,19 @@ def fetch_browser_snapshot(
                 finally:
                     browser.close()
     except PlaywrightTimeoutError:
-        return _browser_failure(target_url, "browser_failed", "timeout")
+        return {
+            **_browser_failure(target_url, "partial" if jobs else "browser_failed", "timeout"),
+            "jobs": jobs,
+            "requests_made": browser_request_count,
+            "credible_evidence": bool(jobs),
+        }
     except Exception as exc:  # pragma: no cover - provider/browser-specific failures
-        return _browser_failure(target_url, "browser_failed", type(exc).__name__)
+        return {
+            **_browser_failure(target_url, "partial" if jobs else "browser_failed", type(exc).__name__),
+            "jobs": jobs,
+            "requests_made": browser_request_count,
+            "credible_evidence": bool(jobs),
+        }
 
     return {
         "jobs": jobs,
