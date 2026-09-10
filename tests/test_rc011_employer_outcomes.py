@@ -31,6 +31,28 @@ def _discovery(url: str = "https://company.example/careers", ats_type: str = "")
     )
 
 
+def test_browser_tries_direct_then_proxy_with_remaining_budget(monkeypatch):
+    import scripts.master_employer_jobs_catalog as catalog
+
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: _discovery())
+    monkeypatch.setattr(catalog, "fetch_generic_snapshot", lambda *_, **__: {
+        "jobs": [], "status": "completed", "complete_snapshot": False,
+    })
+    calls = []
+
+    def browser(_url, **kwargs):
+        calls.append((kwargs["proxy_url"], kwargs["max_requests"]))
+        return {"jobs": [], "status": "browser_failed", "error": "timeout", "requests_made": 2}
+
+    monkeypatch.setattr(catalog, "fetch_browser_snapshot", browser)
+    result = collect_company(
+        _company(), lambda _: SimpleNamespace(text="", final_url=""),
+        CollectorLimits(max_targets=1, max_browser_requests=5, proxy_url="http://proxy.example:80"),
+    )
+    assert calls == [("", 5), ("http://proxy.example:80", 3)]
+    assert result.outcome != "confirmed_zero"
+
+
 def test_uncertain_empty_source_is_not_confirmed_zero(monkeypatch) -> None:
     import scripts.master_employer_jobs_catalog as catalog
 

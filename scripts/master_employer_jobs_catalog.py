@@ -993,12 +993,23 @@ def collect_company(
             "max_job_links": limits.max_job_links,
             "timeout_seconds": limits.timeout_seconds,
             "max_requests": limits.max_browser_requests,
-            "proxy_url": limits.proxy_url,
+            "proxy_url": "",
         }
         if limits.transport_gate is not None:
             browser_kwargs["request_guard"] = limits.transport_gate.browser_request
             browser_kwargs["browser_process_guard"] = limits.transport_gate.browser_process
-        return fetch_browser_snapshot(url, **browser_kwargs)
+        snapshot = fetch_browser_snapshot(url, **browser_kwargs)
+        used = int(snapshot.get("requests_made") or 0)
+        remaining = limits.max_browser_requests - used
+        if (
+            limits.proxy_url and remaining > 0 and not snapshot.get("jobs")
+            and snapshot.get("status") == "browser_failed"
+        ):
+            browser_kwargs.update(proxy_url=limits.proxy_url, max_requests=remaining)
+            fallback = dict(fetch_browser_snapshot(url, **browser_kwargs))
+            fallback["requests_made"] = used + int(fallback.get("requests_made") or 0)
+            return fallback
+        return snapshot
 
     discovery = discover_career_url(
         homepage_url=company.website_url,
