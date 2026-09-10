@@ -952,10 +952,12 @@ class BackendApplication:
         if acquisition_store is not None and getattr(acquisition_store, "db_path", None):
             self._enrichment_operation_service = EnrichmentOperationService(acquisition_store.db_path)
 
-    def run_due_acquisition(self) -> dict[str, Any] | None:
+    def run_due_acquisition(
+        self, *, now: datetime | None = None
+    ) -> dict[str, Any] | None:
         """Worker-only entry point for the disabled-by-default Phase A scheduler."""
 
-        return self._acquisition_scheduler.run_due_cycle()
+        return self._acquisition_scheduler.run_due_cycle(now=now)
 
     def list_admin_job_import_sources(self) -> list[dict[str, Any]]:
         return self._admin_job_import_service.list_sources()

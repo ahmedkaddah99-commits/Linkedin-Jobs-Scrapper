@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.bootstrap import create_backend
@@ -113,6 +114,30 @@ class PhaseASchedulerTests(unittest.TestCase):
                 "SELECT event_name FROM analytics_events ORDER BY occurred_at ASC"
             )
             self.assertIn("acquisition_scheduler_noop", [row["event_name"] for row in events])
+
+    def test_scheduled_hour_utc_blocks_early_claim(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.phase_a.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.phase_a.global_enabled", True)
+            app.repositories.config_store.set_value("acquisition.phase_a.scheduler_enabled", True)
+            app.repositories.config_store.set_value("acquisition.phase_a.scheduled_hour_utc", 6)
+            for target_id in ("siemens",):
+                app.repositories.config_store.set_value(f"acquisition.phase_a.target.{target_id}.enabled", True)
+
+            before_hour = datetime(2026, 9, 10, 5, 0, 0, tzinfo=timezone.utc)
+            report = app.run_due_acquisition(now=before_hour)
+            self.assertIsNotNone(report)
+            self.assertEqual(report["status"], "no_op")
+            self.assertEqual(report["reason"], "before_scheduled_hour_utc")
+            self.assertEqual(report["scheduled_hour_utc"], 6)
+            self.assertEqual(report["current_hour"], 5)
+
+            at_hour = datetime(2026, 9, 10, 6, 0, 0, tzinfo=timezone.utc)
+            report = app.run_due_acquisition(now=at_hour)
+            self.assertIsNotNone(report)
+            self.assertIn(report["cycle"]["status"], {"completed", "degraded"})
+            self.assertTrue(report["cycle"]["cycle_id"])
 
 
 if __name__ == "__main__":
