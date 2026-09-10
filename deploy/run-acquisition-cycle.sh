@@ -7,6 +7,10 @@ cd "$PROJECT_DIR"
 python_bin="${RUNR_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 manifest="${RUNR_ACQUISITION_MANIFEST:-/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json}"
 state_root="${RUNR_ACQUISITION_STATE_ROOT:-/srv/runr/state}"
+linkedin_state_dir="${RUNR_LINKEDIN_STATE_DIR:-$state_root/linkedin}"
+employer_state_dir="${RUNR_EMPLOYER_STATE_DIR:-$state_root/employer}"
+linkedin_state_db="${RUNR_LINKEDIN_STATE_DB:-$linkedin_state_dir/master_linkedin_jobs_state.db}"
+employer_state_db="${RUNR_EMPLOYER_STATE_DB:-$employer_state_dir/master_employer_jobs_state.db}"
 export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 data_dir="${RUNR_DATA_DIR:-/var/lib/runr/acquisition-data}"
 include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
@@ -24,7 +28,7 @@ linkedin_status=0
 "$python_bin" scripts/run_manifested_linkedin.py \
   --manifest "$manifest" \
   --output-dir "$export_root/linkedin" \
-  --state-dir "$state_root/linkedin" \
+  --state-dir "$linkedin_state_dir" \
   --require-existing-state \
   --mode daily \
   --max-requests "${RUNR_LINKEDIN_MAX_REQUESTS:-${RUNR_ACQUISITION_MAX_REQUESTS:-0}}" \
@@ -35,7 +39,7 @@ employer_status=0
 "$python_bin" scripts/run_manifested_employer.py \
   --manifest "$manifest" \
   --output-dir "$export_root/employer" \
-  --state-dir "$state_root/employer" \
+  --state-dir "$employer_state_dir" \
   --require-existing-state \
   --full \
   --max-requests "${RUNR_EMPLOYER_MAX_REQUESTS:-${RUNR_ACQUISITION_MAX_REQUESTS:-0}}" \
@@ -47,8 +51,8 @@ employer_status=0
 # cannot erase or block the other source's observations.
 "$python_bin" scripts/publish_producer_states.py \
   --manifest "$manifest" \
-  --linkedin-state "$state_root/linkedin/master_linkedin_jobs_state.db" \
-  --employer-state "$state_root/employer/master_employer_jobs_state.db" \
+  --linkedin-state "$linkedin_state_db" \
+  --employer-state "$employer_state_db" \
   --data-dir "$data_dir" \
   --source-version "${RUNR_SOURCE_VERSION:-unknown}" \
   > "$export_root/producer-state-delivery.json"
