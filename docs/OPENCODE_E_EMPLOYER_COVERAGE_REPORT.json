@@ -1,0 +1,485 @@
+{
+  "mode": "read_only_employer_coverage_audit",
+  "state_db": ".backend_test_tmp\\employer_coverage_offline.db",
+  "generated_at": "2026-09-10T13:53:38Z",
+  "observed": {
+    "companies": 10,
+    "status_counts": {
+      "source_failed": 2,
+      "partial": 3,
+      "no_jobs": 2,
+      "completed": 3
+    },
+    "outcome_counts": {
+      "blocked": 1,
+      "partial": 3,
+      "confirmed_zero": 2,
+      "complete_with_jobs": 3,
+      "failed": 1
+    },
+    "classification_counts": {
+      "confirmed_complete": 5,
+      "partial": 3,
+      "blocked": 1,
+      "failed": 1
+    },
+    "recheck_disposition": {
+      "recheck_required": 7,
+      "covered": 3
+    },
+    "legacy_unverified_negative_rows": 7
+  },
+  "company_count": 10,
+  "classification_counts": {
+    "confirmed_complete": 5,
+    "partial": 3,
+    "blocked": 1,
+    "failed": 1,
+    "unknown": 0
+  },
+  "by_classification": {
+    "confirmed_complete": [
+      {
+        "company_id": "empty-co",
+        "company_name": "Empty Co",
+        "website_url": "https://empty.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://boards.greenhouse.io/empty-co",
+        "connector_family": "ats_native",
+        "discovery_method": "ats_signature",
+        "attempts": [
+          {
+            "url": "https://boards.greenhouse.io/empty-co",
+            "connector_family": "ats_native",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 1,
+            "partitions_attempted": 1,
+            "partitions_completed": 1,
+            "expected_count": null,
+            "observed_count": 0,
+            "accepted_count": 0,
+            "pending_detail_count": 0,
+            "complete": true,
+            "stop_reason": "pagination_complete",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 0,
+        "terminal_classification": "confirmed_complete",
+        "reasons": [],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "confirmed_zero",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "greenhouse-co",
+        "company_name": "Greenhouse Co",
+        "website_url": "https://greenhouse.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://boards.greenhouse.io/greenhouse-co",
+        "connector_family": "ats_native",
+        "discovery_method": "ats_signature",
+        "attempts": [
+          {
+            "url": "https://boards.greenhouse.io/greenhouse-co",
+            "connector_family": "ats_native",
+            "transport": "direct",
+            "pages_attempted": 3,
+            "pages_completed": 3,
+            "partitions_attempted": 1,
+            "partitions_completed": 1,
+            "expected_count": 1,
+            "observed_count": 1,
+            "accepted_count": 1,
+            "pending_detail_count": 0,
+            "complete": true,
+            "stop_reason": "pagination_complete",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 1,
+        "terminal_classification": "confirmed_complete",
+        "reasons": [],
+        "completeness_evidence": {
+          "complete_snapshot": true,
+          "outcome": "complete_with_jobs",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "lever-co",
+        "company_name": "Lever Co",
+        "website_url": "https://lever.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://jobs.lever.co/lever-co",
+        "connector_family": "ats_native",
+        "discovery_method": "ats_signature",
+        "attempts": [
+          {
+            "url": "https://jobs.lever.co/lever-co",
+            "connector_family": "ats_native",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 1,
+            "partitions_attempted": 1,
+            "partitions_completed": 1,
+            "expected_count": null,
+            "observed_count": 0,
+            "accepted_count": 0,
+            "pending_detail_count": 0,
+            "complete": true,
+            "stop_reason": "pagination_complete",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 0,
+        "terminal_classification": "confirmed_complete",
+        "reasons": [],
+        "completeness_evidence": {
+          "complete_snapshot": true,
+          "outcome": "confirmed_zero",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "personio-co",
+        "company_name": "Personio Co",
+        "website_url": "https://personio.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://personio-co.jobs.personio.de",
+        "connector_family": "ats_expansion",
+        "discovery_method": "ats_signature",
+        "attempts": [
+          {
+            "url": "https://personio-co.jobs.personio.de",
+            "connector_family": "ats_expansion",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 1,
+            "partitions_attempted": 1,
+            "partitions_completed": 1,
+            "expected_count": 1,
+            "observed_count": 1,
+            "accepted_count": 1,
+            "pending_detail_count": 0,
+            "complete": true,
+            "stop_reason": "pagination_complete",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 1,
+        "terminal_classification": "confirmed_complete",
+        "reasons": [],
+        "completeness_evidence": {
+          "complete_snapshot": true,
+          "outcome": "complete_with_jobs",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "workday-co",
+        "company_name": "Workday Co",
+        "website_url": "https://workday.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://workday.wd101.myworkdayjobs.com/workday-co",
+        "connector_family": "ats_expansion",
+        "discovery_method": "ats_signature",
+        "attempts": [
+          {
+            "url": "https://workday.wd101.myworkdayjobs.com/workday-co",
+            "connector_family": "ats_expansion",
+            "transport": "direct",
+            "pages_attempted": 2,
+            "pages_completed": 2,
+            "partitions_attempted": 1,
+            "partitions_completed": 1,
+            "expected_count": 1,
+            "observed_count": 1,
+            "accepted_count": 1,
+            "pending_detail_count": 0,
+            "complete": true,
+            "stop_reason": "pagination_complete",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 1,
+        "terminal_classification": "confirmed_complete",
+        "reasons": [],
+        "completeness_evidence": {
+          "complete_snapshot": true,
+          "outcome": "complete_with_jobs",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      }
+    ],
+    "partial": [
+      {
+        "company_id": "browser-co",
+        "company_name": "Browser Co",
+        "website_url": "https://browser.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://browser.example/jobs",
+        "connector_family": "generic_browser",
+        "discovery_method": "browser_rendered_discovery",
+        "attempts": [
+          {
+            "url": "https://browser.example/jobs",
+            "connector_family": "generic_browser",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 0,
+            "partitions_attempted": 1,
+            "partitions_completed": 0,
+            "expected_count": 1,
+            "observed_count": 1,
+            "accepted_count": 1,
+            "pending_detail_count": 0,
+            "complete": false,
+            "stop_reason": "pagination_unverified",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 1,
+        "terminal_classification": "partial",
+        "reasons": [
+          "collection_uncertain"
+        ],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "partial",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "generic-co",
+        "company_name": "Generic Co",
+        "website_url": "https://generic.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://generic.example/careers",
+        "connector_family": "generic_direct",
+        "discovery_method": "homepage_link",
+        "attempts": [
+          {
+            "url": "https://generic.example/careers",
+            "connector_family": "generic_direct",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 0,
+            "partitions_attempted": 1,
+            "partitions_completed": 0,
+            "expected_count": 1,
+            "observed_count": 1,
+            "accepted_count": 1,
+            "pending_detail_count": 0,
+            "complete": false,
+            "stop_reason": "pagination_unverified",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 1,
+        "terminal_classification": "partial",
+        "reasons": [
+          "collection_uncertain"
+        ],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "partial",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      },
+      {
+        "company_id": "suspicious-co",
+        "company_name": "Suspicious Co",
+        "website_url": "https://suspicious.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://suspicious.example/careers",
+        "connector_family": "generic_direct",
+        "discovery_method": "homepage_link",
+        "attempts": [
+          {
+            "url": "https://suspicious.example/careers",
+            "connector_family": "generic_direct",
+            "transport": "direct",
+            "pages_attempted": 1,
+            "pages_completed": 0,
+            "partitions_attempted": 1,
+            "partitions_completed": 0,
+            "expected_count": null,
+            "observed_count": 0,
+            "accepted_count": 0,
+            "pending_detail_count": 0,
+            "complete": false,
+            "stop_reason": "pagination_unverified",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 0,
+        "terminal_classification": "partial",
+        "reasons": [
+          "collection_uncertain"
+        ],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "partial",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      }
+    ],
+    "blocked": [
+      {
+        "company_id": "blocked-co",
+        "company_name": "Blocked Co",
+        "website_url": "https://blocked.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://blocked.example/careers",
+        "connector_family": "generic_direct",
+        "discovery_method": "homepage_link",
+        "attempts": [
+          {
+            "url": "https://blocked.example/careers",
+            "connector_family": "generic_direct",
+            "transport": "direct",
+            "pages_attempted": 0,
+            "pages_completed": 0,
+            "partitions_attempted": 1,
+            "partitions_completed": 0,
+            "expected_count": null,
+            "observed_count": 0,
+            "accepted_count": 0,
+            "pending_detail_count": 0,
+            "complete": false,
+            "stop_reason": "challenge_page",
+            "error": "challenge_page"
+          }
+        ],
+        "persisted_job_count": 0,
+        "terminal_classification": "blocked",
+        "reasons": [
+          "source:cf-chl- challenge page",
+          "challenge_page"
+        ],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "blocked",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      }
+    ],
+    "failed": [
+      {
+        "company_id": "timeout-co",
+        "company_name": "Timeout Co",
+        "website_url": "https://timeout.example",
+        "generation_id": "offline-fixture-generation",
+        "source_version": "fixture",
+        "created_at": "2026-09-10T13:53:38Z",
+        "endpoint_used": "https://timeout.example/careers",
+        "connector_family": "generic_browser",
+        "discovery_method": "homepage_link",
+        "attempts": [
+          {
+            "url": "https://timeout.example/careers",
+            "connector_family": "generic_browser",
+            "transport": "direct",
+            "pages_attempted": 0,
+            "pages_completed": 0,
+            "partitions_attempted": 1,
+            "partitions_completed": 0,
+            "expected_count": null,
+            "observed_count": 0,
+            "accepted_count": 0,
+            "pending_detail_count": 0,
+            "complete": false,
+            "stop_reason": "timeout",
+            "error": ""
+          }
+        ],
+        "persisted_job_count": 0,
+        "terminal_classification": "failed",
+        "reasons": [
+          "source:timeout",
+          "timeout"
+        ],
+        "completeness_evidence": {
+          "complete_snapshot": false,
+          "outcome": "failed",
+          "recheck_required": true,
+          "request_budget_exhausted": false,
+          "targets": 1
+        }
+      }
+    ],
+    "unknown": []
+  },
+  "expected_legacy_state": {
+    "records": 428,
+    "no_jobs": 194,
+    "discovery_failed": 146,
+    "partial": 82,
+    "source_failed": 5,
+    "completed": 1
+  },
+  "disposition": {
+    "confirmed_complete": {
+      "description": "Authoritative endpoint exhausted with no unvisited partitions, no pending details, and no active block.",
+      "disposition": "eligible_for_publication_decision"
+    },
+    "partial": {
+      "description": "Some evidence collected but completeness cannot be established.",
+      "disposition": "recheck_with_bounded_recovery_budget"
+    },
+    "blocked": {
+      "description": "Active challenge, CAPTCHA, rate limit, or access denial.",
+      "disposition": "recheck_source_with_explicit_failure_outcome"
+    },
+    "failed": {
+      "description": "Source error, unsupported ATS, or discovery failure.",
+      "disposition": "recheck_source_with_explicit_failure_outcome"
+    },
+    "unknown": {
+      "description": "No usable evidence or missing coverage receipt.",
+      "disposition": "recheck_discovery_and_record_coverage"
+    }
+  },
+  "source": "fixture_synthesis",
+  "evidence_limitation": "This report is synthesized from offline fixtures.  It does not claim universal live completeness or represent historical production state."
+}

@@ -101,8 +101,8 @@ def test_stalled_company_does_not_block_completed_checkpoint(tmp_path: Path, mon
             active_workers -= 1
         return EmployerCollectionResult(company=company, status="no_jobs", outcome="confirmed_zero")
 
-    def tracked_save(state, result):
-        real_save(state, result)
+    def tracked_save(state, result, **kwargs):
+        real_save(state, result, **kwargs)
         if result.company.canonical_company_id == "fast":
             fast_checkpointed.set()
 

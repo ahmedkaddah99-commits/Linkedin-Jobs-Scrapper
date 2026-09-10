@@ -47,6 +47,12 @@ from backend.connectors.company_career_discovery import (
 from backend.config.job_seeker import load_project_dotenv
 from backend.connectors.generic_jsonld import fetch_generic_snapshot
 from backend.connectors.employer_site_fallbacks import extract_embedded_jobs, fetch_browser_snapshot
+from backend.acquisition.employer_coverage import (
+    EndpointAttempt,
+    EmployerCoverageReceipt,
+    build_coverage_receipt,
+    merge_receipts,
+)
 
 
 DEFAULT_INPUT_CSV = (
@@ -1213,6 +1219,9 @@ class EmployerState:
             raise FileNotFoundError(f"Employer state database not found: {path}")
         self.connection = sqlite3.connect(str(path))
         self.connection.row_factory = sqlite3.Row
+        self._ensure_schema(create, path)
+
+    def _ensure_schema(self, create: bool, path: Path) -> None:
         if create:
             self.connection.executescript(
                 """
@@ -1223,11 +1232,26 @@ class EmployerState:
                 CREATE TABLE IF NOT EXISTS jobs (
                     source_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS coverage_receipts (
+                    company_key TEXT PRIMARY KEY, receipt_json TEXT NOT NULL, classification TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self.connection.commit()
         else:
             self._validate_existing_schema(path)
+            # Backward-compatible: older state databases may lack the receipt
+            # table.  Create it lazily without bumping the schema contract.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS coverage_receipts (
+                    company_key TEXT PRIMARY KEY, receipt_json TEXT NOT NULL, classification TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self.connection.commit()
 
     @classmethod
     def open_existing(cls, path: Path) -> "EmployerState":
@@ -1296,6 +1320,7 @@ class EmployerState:
         status_counts: dict[str, int] = {}
         outcome_counts: dict[str, int] = {}
         dispositions: dict[str, int] = {}
+        classification_counts: dict[str, int] = {}
         rows = self.connection.execute("SELECT status, payload_json FROM companies ORDER BY company_key")
         for row in rows:
             status = str(row["status"] or "unknown")
@@ -1313,17 +1338,140 @@ class EmployerState:
             outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
             disposition = "recheck_required" if status != "completed" or not isinstance(coverage, Mapping) else "covered"
             dispositions[disposition] = dispositions.get(disposition, 0) + 1
+        for row in self.connection.execute("SELECT classification FROM coverage_receipts"):
+            classification = str(row["classification"] or "unknown")
+            classification_counts[classification] = classification_counts.get(classification, 0) + 1
         return {
             "companies": sum(status_counts.values()),
             "status_counts": status_counts,
             "outcome_counts": outcome_counts,
+            "classification_counts": classification_counts,
             "recheck_disposition": dispositions,
             "legacy_unverified_negative_rows": sum(
                 count for status, count in status_counts.items() if status in {"no_jobs", "discovery_failed", "partial", "source_failed"}
             ),
         }
 
-    def save(self, result: EmployerCollectionResult) -> None:
+    def save_coverage_receipt(
+        self,
+        result: EmployerCollectionResult,
+        *,
+        generation_id: str = "",
+        source_version: str = "",
+    ) -> None:
+        """Persist the coverage receipt for a company result.
+
+        Receipts are merged so that a previously confirmed-complete company is
+        not downgraded by a later partial recheck.
+        """
+
+        from backend.acquisition.employer_coverage import EmployerCoverageReceipt
+
+        company_key = result.company.canonical_company_id or result.company.website_url
+        receipt = build_coverage_receipt(asdict(result), generation_id=generation_id, source_version=source_version)
+        prior = self.coverage_receipt(result.company)
+        if prior is not None:
+            receipt = merge_receipts(prior, receipt)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO coverage_receipts(company_key,receipt_json,classification,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(company_key) DO UPDATE SET receipt_json=excluded.receipt_json,"
+                "classification=excluded.classification,updated_at=excluded.updated_at",
+                (
+                    company_key,
+                    receipt.to_json(),
+                    receipt.terminal_classification,
+                    utc_now(),
+                ),
+            )
+
+    def coverage_receipt(self, company: EmployerCompany) -> "EmployerCoverageReceipt | None":
+        """Return the persisted coverage receipt for a company, if any."""
+
+        from backend.acquisition.employer_coverage import EmployerCoverageReceipt
+
+        key = company.canonical_company_id or company.website_url
+        try:
+            row = self.connection.execute(
+                "SELECT receipt_json FROM coverage_receipts WHERE company_key=?", (key,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Table may be missing in pre-receipt state databases.
+            return None
+        if not row:
+            return None
+        try:
+            payload = json.loads(row["receipt_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return EmployerCoverageReceipt(
+            company_id=payload.get("company_id", key),
+            company_name=payload.get("company_name", ""),
+            website_url=payload.get("website_url", ""),
+            generation_id=payload.get("generation_id", ""),
+            source_version=payload.get("source_version", ""),
+            created_at=payload.get("created_at", ""),
+            endpoint_used=payload.get("endpoint_used", ""),
+            connector_family=payload.get("connector_family", ""),
+            discovery_method=payload.get("discovery_method", ""),
+            attempts=[
+                EndpointAttempt(
+                    url=attempt.get("url", ""),
+                    connector_family=attempt.get("connector_family", ""),
+                    transport=attempt.get("transport", ""),
+                    pages_attempted=attempt.get("pages_attempted", 0),
+                    pages_completed=attempt.get("pages_completed", 0),
+                    partitions_attempted=attempt.get("partitions_attempted", 0),
+                    partitions_completed=attempt.get("partitions_completed", 0),
+                    expected_count=attempt.get("expected_count"),
+                    observed_count=attempt.get("observed_count", 0),
+                    accepted_count=attempt.get("accepted_count", 0),
+                    pending_detail_count=attempt.get("pending_detail_count", 0),
+                    complete=attempt.get("complete", False),
+                    stop_reason=attempt.get("stop_reason", ""),
+                    error=attempt.get("error", ""),
+                )
+                for attempt in payload.get("attempts", [])
+            ],
+            persisted_job_count=payload.get("persisted_job_count", 0),
+            terminal_classification=payload.get("terminal_classification", "unknown"),
+            reasons=payload.get("reasons", []),
+            completeness_evidence=payload.get("completeness_evidence", {}),
+        )
+
+    def coverage_receipts(self) -> list["EmployerCoverageReceipt"]:
+        """Yield all persisted coverage receipts."""
+
+        receipts: list[EmployerCoverageReceipt] = []
+        try:
+            rows = self.connection.execute(
+                "SELECT company_key, receipt_json FROM coverage_receipts ORDER BY company_key"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return receipts
+        for row in rows:
+            try:
+                company = EmployerCompany(
+                    canonical_company_id=str(row["company_key"]),
+                    company_name="",
+                    website_url="",
+                )
+                receipt = self.coverage_receipt(company)
+            except Exception:
+                continue
+            if receipt is not None:
+                receipts.append(receipt)
+        return receipts
+
+    def save(
+        self,
+        result: EmployerCollectionResult,
+        *,
+        generation_id: str = "",
+        source_version: str = "",
+    ) -> None:
         company_key = result.company.canonical_company_id or result.company.website_url
         result.outcome = result.resolved_outcome()
         with self.connection:
@@ -1344,6 +1492,7 @@ class EmployerState:
                     "INSERT INTO jobs(source_key,payload_json,updated_at) VALUES(?,?,?) ON CONFLICT(source_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at",
                     (key, json.dumps(job, ensure_ascii=False), utc_now()),
                 )
+        self.save_coverage_receipt(result, generation_id=generation_id, source_version=source_version)
 
     def jobs(self) -> list[dict[str, Any]]:
         return list(self.iter_jobs())
@@ -1695,6 +1844,8 @@ def run_collection(
     worker_count = metrics["concurrency"]["company_workers"]
     pending_limit = max(worker_count, metrics["concurrency"]["max_pending"])
     metrics["concurrency"]["max_pending"] = pending_limit
+    run_generation_id = str(uuid.uuid4())
+    source_version = os.getenv("RUNR_RELEASE_COMMIT", "") or os.getenv("RUNR_SOURCE_VERSION", "")
     try:
         if not resume:
             state.clear()
@@ -1755,7 +1906,7 @@ def run_collection(
             work.append(company)
 
         def record_checkpoint(result: EmployerCollectionResult) -> None:
-            state.save(result)
+            state.save(result, generation_id=run_generation_id, source_version=source_version)
             metrics["companies_processed"] += 1
             metrics["company_statuses"][result.status] = metrics["company_statuses"].get(result.status, 0) + 1
             for row in result.jobs:
