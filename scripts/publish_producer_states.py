@@ -445,7 +445,22 @@ def run_delivery(
     try:
         for source, companies, groups, marker_value in source_specs:
             source_metrics = {"companies": len(companies), "groups_with_jobs": len(groups), "jobs_delivered": 0, "partial_companies": 0, "failed_companies": 0, "source_marker": marker_value}
-            company_items = list(companies.items())
+            company_items = [
+                (company_id, company)
+                for company_id, company in companies.items()
+                if (
+                    company_id in groups
+                    or (
+                        source == SOURCE_LINKEDIN
+                        and company_id in linkedin_statuses_by_canonical
+                    )
+                    or (
+                        source == SOURCE_EMPLOYER
+                        and company_id in employer_statuses
+                    )
+                )
+            ]
+            source_metrics["companies_pending_source_state"] = len(companies) - len(company_items)
             for offset in range(0, len(company_items), 100):
                 with store.transaction_scope():
                     for company_id, company in company_items[offset : offset + 100]:
