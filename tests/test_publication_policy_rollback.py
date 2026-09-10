@@ -351,6 +351,50 @@ class PublicationPolicyRollbackTests(unittest.TestCase):
         finally:
             self._publication_test_directory.cleanup()
 
+    def test_blocking_policy_v2_escalates_completeness_and_apply_into_blockers(self):
+        from backend.acquisition.publication import BLOCKING_PUBLICATION_POLICY_VERSION
+
+        app, store, target = self._store_with_target()
+        try:
+            cycle_id, _ = self._seed_cycle(store, target, "preflight-v2", 9)
+            new_snapshot = [
+                {
+                    "canonical_job_id": "job-a",
+                    "title": "A",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/a",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-d",
+                    "title": "D",
+                    "company": "Acme",
+                    "location": "",
+                    "apply_url": "javascript:void(0)",
+                    "lifecycle_state": "active",
+                },
+            ]
+            with store._connect() as connection:
+                preflight = store._build_publication_preflight(
+                    connection,
+                    previous_publication_id="",
+                    next_snapshot=new_snapshot,
+                    cycle_id=cycle_id,
+                    policy_version=BLOCKING_PUBLICATION_POLICY_VERSION,
+                )
+            self.assertEqual(preflight["completeness_mode"], "blocking")
+            self.assertTrue(preflight["missing_apply_is_blocker"])
+            self.assertFalse(preflight["report_only"])
+            self.assertIn("job-d", preflight["broken_apply_destinations"])
+            self.assertIn("job-d", preflight["completeness_warnings"])
+            blocker_codes = {item["code"] for item in preflight["blockers"]}
+            self.assertIn("completeness", blocker_codes)
+            self.assertIn("broken_apply_destinations", blocker_codes)
+            self.assertEqual(preflight["blocker_count"], 2)
+        finally:
+            self._publication_test_directory.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

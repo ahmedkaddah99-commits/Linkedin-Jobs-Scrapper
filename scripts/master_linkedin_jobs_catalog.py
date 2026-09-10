@@ -20,6 +20,8 @@ import hashlib
 import html
 import json
 import os
+import queue
+import random
 import re
 import shutil
 import sqlite3
@@ -31,7 +33,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -394,6 +396,9 @@ class RunnerConfig:
     require_existing_state: bool = False
     dry_run: bool = False
     max_companies: int | None = None
+    pipeline_enabled: bool = True
+    pipeline_detail_queue_size: int = 1000
+    pipeline_flush_interval: int = 10
 
 
 @dataclass
@@ -410,6 +415,7 @@ class CompanyRunContext:
     recovery_partition_statuses: dict[str, str] | None = None
     detail_failures: int = 0
     no_results: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         self.card_by_job_id = self.card_by_job_id or {}
@@ -966,15 +972,19 @@ class WebshareTransport:
     def get(self, url: str, *, kind: str) -> ResponseEnvelope:
         last = ResponseEnvelope(0, "", "", 0.0, "request_budget_exhausted")
         for attempt in range(self.retry_limit + 1):
-            proxy = self._take_proxy()
-            if proxy is None:
-                return last
-            with self._lock:
-                self._request_counts_by_kind[kind] = self._request_counts_by_kind.get(kind, 0) + 1
-            started = time.monotonic()
-            with self._proxy_locks[proxy.identifier]:
-                self.request_limiter.acquire(self.provider)
-                try:
+            # Acquire the account/provider concurrency permit *before* taking a
+            # proxy so that proxies are not held idle while waiting for the
+            # global limiter.  This keeps the proxy pool available for other
+            # workers and prevents artificial throughput collapse.
+            self.request_limiter.acquire(self.provider)
+            try:
+                proxy = self._take_proxy()
+                if proxy is None:
+                    return last
+                with self._lock:
+                    self._request_counts_by_kind[kind] = self._request_counts_by_kind.get(kind, 0) + 1
+                started = time.monotonic()
+                with self._proxy_locks[proxy.identifier]:
                     session = self._session_for(proxy)
                     try:
                         response = session.get(url, proxies={"http": proxy.url, "https": proxy.url}, timeout=self.timeout)
@@ -985,12 +995,15 @@ class WebshareTransport:
                         elapsed = time.monotonic() - started
                         last = ResponseEnvelope(0, "", proxy.identifier, elapsed, "network_error")
                         should_retry = True
-                finally:
-                    self.request_limiter.release(self.provider)
-            self._record_proxy_result(proxy, last)
+                self._record_proxy_result(proxy, last)
+            finally:
+                self.request_limiter.release(self.provider)
             if not should_retry or attempt >= self.retry_limit:
                 return last
-            self.sleep(min(30.0, 0.5 * (2**attempt)) + 0.1 * (attempt + 1))
+            # Exponential backoff with bounded jitter to avoid retry storms.
+            base_seconds = 0.5 * (2**attempt)
+            jitter_seconds = random.uniform(0.0, 0.25 * (attempt + 1))
+            self.sleep(min(30.0, base_seconds + jitter_seconds))
         return last
 
     def close(self) -> None:
@@ -1877,6 +1890,11 @@ class StateStore:
                     last_request_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS collection_cursor (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cursor_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column("runs", "finished_at", "TEXT NOT NULL DEFAULT ''")
@@ -2031,6 +2049,24 @@ class StateStore:
             self.connection.execute(
                 "UPDATE runs SET status=?, finished_at=? WHERE run_id=?",
                 (status, finished_at or _utc_now(), str(run_id)),
+            )
+
+    def get_cursor(self) -> int:
+        """Return the durable bounded-cycle selection cursor."""
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT cursor_index FROM collection_cursor WHERE id=1"
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_cursor(self, index: int) -> None:
+        """Persist the bounded-cycle cursor after a completed selection window."""
+        value = max(0, int(index))
+        with self._lock, self.connection:
+            self.connection.execute(
+                "INSERT INTO collection_cursor(id, cursor_index, updated_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET cursor_index=excluded.cursor_index, updated_at=excluded.updated_at",
+                (value, _utc_now()),
             )
 
     def start_company_scan(self, run_id: str, group: SourceCompanyGroup, *, scan_id: str | None = None, started_at: str | None = None) -> str:
@@ -2834,6 +2870,14 @@ class CatalogRunner:
         self._generation_dir: Path | None = None
         self._alias_lock = threading.Lock()
         self.adaptive = request_limiter or AdaptiveConcurrency(config.workers, config.min_workers, config.max_workers)
+        self._detail_task_queue: queue.Queue[dict[str, object] | None] = queue.Queue(
+            maxsize=max(1, self.config.pipeline_detail_queue_size)
+        )
+        self._detail_workers: list[threading.Thread] = []
+        self._pending_enqueue_batch: list[dict[str, object]] = []
+        self._pending_cache_hit_batch: list[dict[str, object]] = []
+        self._batch_lock = threading.Lock()
+        self._pipeline_stop_event = threading.Event()
         self.metrics: dict[str, object] = {
             "companies_input": 0,
             "input_loader_reconciliation": {},
@@ -2884,6 +2928,20 @@ class CatalogRunner:
     def _state_db_path(self, output_dir: Path) -> Path:
         state_root = Path(self.config.state_dir) if self.config.state_dir is not None else output_dir
         return state_root / "master_linkedin_jobs_state.db"
+
+    def _selection_limit(self, total: int) -> int:
+        """Effective number of companies selected for this run.
+
+        ``max_companies`` is a bounded-cycle window; ``smoke``/``pilot`` are
+        bounded diagnostic windows; otherwise every eligible company is selected.
+        """
+        if self.config.max_companies is not None:
+            return min(total, max(0, int(self.config.max_companies)))
+        if self.config.mode == "smoke":
+            return min(total, 1)
+        if self.config.mode == "pilot":
+            return min(total, 25)
+        return total
 
     def _validate_required_state(self, output_dir: Path) -> Path:
         state_path = self._state_db_path(output_dir)
@@ -2954,6 +3012,123 @@ class CatalogRunner:
         self.metrics["recovery_partitions_pending"] = max(0, required_recovery - attempted_recovery)
         self.metrics["recovery_partitions_partial"] = max(0, attempted_recovery - completed_recovery)
 
+    def _start_pipeline(self) -> None:
+        """Start detail workers that consume from the bounded task queue."""
+        assert self.store is not None
+        detail_worker_count = max(1, self.config.detail_workers)
+        for index in range(detail_worker_count):
+            thread = threading.Thread(
+                target=self._detail_worker_loop,
+                name=f"linkedin-detail-{index}",
+                daemon=True,
+            )
+            thread.start()
+            self._detail_workers.append(thread)
+
+    def _stop_pipeline(self) -> None:
+        """Flush batched writes, drain the detail queue, and stop workers.
+
+        Joins without a fixed timeout so a worker that is legitimately parked in
+        a bounded proxy cooldown is still drained before the run is finalized.
+        Otherwise that worker could write a late observation/attempt after
+        ``reconcile_lifecycle`` and ``finish_run``, which would misclassify a
+        still-pending job as absent.  Cooldown is bounded, and budget
+        exhaustion closes the request path, so the join always terminates.
+        """
+        self._flush_enqueue_batch()
+        self._flush_cache_hit_batch()
+        for _ in self._detail_workers:
+            self._detail_task_queue.put(None)
+        for worker in self._detail_workers:
+            worker.join()
+        self._detail_workers.clear()
+        self._pipeline_stop_event.set()
+
+    def _detail_worker_loop(self) -> None:
+        while not self._pipeline_stop_event.is_set():
+            task = self._detail_task_queue.get()
+            if task is None:
+                self._detail_task_queue.task_done()
+                break
+            try:
+                self._process_detail(task)
+            except Exception as exc:  # pragma: no cover - defensive; _process_detail handles its own errors
+                self._record_event(
+                    {
+                        "record_type": "detail_worker_error",
+                        "schema_version": 1,
+                        "run_id": str(self.metrics.get("run_id") or ""),
+                        "error_class": type(exc).__name__,
+                    }
+                )
+            finally:
+                self._detail_task_queue.task_done()
+
+    def _flush_enqueue_batch(self) -> None:
+        """Persist pending detail enqueue rows and then publish tasks to workers."""
+        assert self.store is not None
+        with self._batch_lock:
+            batch = self._pending_enqueue_batch
+            self._pending_enqueue_batch = []
+        if not batch:
+            return
+        values = [
+            (
+                str(task["run_id"]),
+                str(task["linkedin_job_id"]),
+                str(task["linkedin_company_id"]),
+                str(task["company_scan_id"]),
+                str(task.get("refresh_reason") or ""),
+            )
+            for task in batch
+        ]
+        with self.store.batch():
+            self.store.connection.executemany(
+                "INSERT OR IGNORE INTO detail_queue(run_id, linkedin_job_id, linkedin_company_id, company_scan_id, refresh_reason) VALUES (?, ?, ?, ?, ?)",
+                values,
+            )
+        for task in batch:
+            self._detail_task_queue.put(task)
+
+    def _flush_cache_hit_batch(self) -> None:
+        assert self.store is not None
+        with self._batch_lock:
+            batch = self._pending_cache_hit_batch
+            self._pending_cache_hit_batch = []
+        if not batch:
+            return
+        with self.store.batch():
+            for task in batch:
+                self.store.record_detail_cache_hit(
+                    str(task["linkedin_company_id"]),
+                    str(task["linkedin_job_id"]),
+                    refresh_reason=str(task.get("refresh_reason") or ""),
+                    volatile_fields_stale=bool(task.get("volatile_fields_stale")),
+                    card_evidence_hash=str(task.get("card_evidence_hash") or ""),
+                    run_id=str(task.get("run_id") or ""),
+                    company_scan_id=str(task.get("company_scan_id") or ""),
+                    observed_at=str(task.get("observed_at") or ""),
+                )
+
+    def _maybe_flush_batches(self) -> None:
+        interval = max(1, self.config.pipeline_flush_interval)
+        with self._batch_lock:
+            enqueue_len = len(self._pending_enqueue_batch)
+            cache_len = len(self._pending_cache_hit_batch)
+        if enqueue_len >= interval:
+            self._flush_enqueue_batch()
+        if cache_len >= interval:
+            self._flush_cache_hit_batch()
+
+    def _flush_pending_writes(self) -> None:
+        """Flush any buffered state writes immediately.
+
+        Used at page/scan boundaries so detail workers are not starved while
+        the batch threshold is still accumulating.
+        """
+        self._flush_enqueue_batch()
+        self._flush_cache_hit_batch()
+
     def _get(self, url: str, *, kind: str) -> ResponseEnvelope:
         response = self.transport.get(url, kind=kind)
         self._increment("requests")
@@ -2986,6 +3161,78 @@ class CatalogRunner:
             }
         )
 
+    def _enqueue_detail_for_card(
+        self,
+        context: CompanyRunContext,
+        card: SearchCard,
+        refresh_reason: str,
+    ) -> None:
+        run_id = str(self.metrics["run_id"])
+        task = {
+            "run_id": run_id,
+            "company_scan_id": context.scan_id,
+            "linkedin_company_id": context.group.linkedin_company_id,
+            "linkedin_job_id": card.linkedin_job_id,
+            "refresh_reason": refresh_reason,
+        }
+        if self.config.pipeline_enabled:
+            with self._batch_lock:
+                self._pending_enqueue_batch.append(task)
+            self._maybe_flush_batches()
+        else:
+            assert self.store is not None
+            self.store.enqueue_detail(
+                run_id,
+                context.scan_id,
+                context.group.linkedin_company_id,
+                card.linkedin_job_id,
+                refresh_reason=refresh_reason,
+            )
+
+    def _record_cache_hit_for_card(
+        self,
+        context: CompanyRunContext,
+        card: SearchCard,
+        refresh_reason: str,
+        volatile_fields_stale: bool,
+        card_evidence_hash: str,
+    ) -> None:
+        run_id = str(self.metrics["run_id"])
+        observed_at = self.now()
+        task = {
+            "linkedin_company_id": context.group.linkedin_company_id,
+            "linkedin_job_id": card.linkedin_job_id,
+            "refresh_reason": refresh_reason,
+            "volatile_fields_stale": volatile_fields_stale,
+            "card_evidence_hash": card_evidence_hash,
+            "run_id": run_id,
+            "company_scan_id": context.scan_id,
+            "observed_at": observed_at,
+        }
+        if self.config.pipeline_enabled:
+            with self._batch_lock:
+                self._pending_cache_hit_batch.append(task)
+            self._maybe_flush_batches()
+        else:
+            assert self.store is not None
+            self.store.record_detail_cache_hit(
+                context.group.linkedin_company_id,
+                card.linkedin_job_id,
+                refresh_reason=refresh_reason,
+                volatile_fields_stale=volatile_fields_stale,
+                card_evidence_hash=card_evidence_hash,
+                run_id=run_id,
+                company_scan_id=context.scan_id,
+                observed_at=observed_at,
+            )
+        with context._lock:
+            context.observed_job_ids.add(card.linkedin_job_id)
+        self._increment("detail_cache_hits")
+        self._increment("detail_avoided_requests")
+        self._record_refresh_reason(refresh_reason)
+        if volatile_fields_stale:
+            self._increment("detail_volatile_stale_rows")
+
     def _queue_card(self, context: CompanyRunContext, card: SearchCard) -> None:
         assert self.store is not None
         decision = evaluate_ownership(card.company_url, context.group, self.store.verified_aliases(context.group.linkedin_company_id))
@@ -3010,22 +3257,13 @@ class CatalogRunner:
                 )
                 refresh_reason = refresh.reason
                 if not refresh.required:
-                    self.store.record_detail_cache_hit(
-                        context.group.linkedin_company_id,
-                        card.linkedin_job_id,
+                    self._record_cache_hit_for_card(
+                        context,
+                        card,
                         refresh_reason=refresh.reason,
                         volatile_fields_stale=refresh.volatile_fields_stale,
                         card_evidence_hash=compute_card_evidence_hash(card, decision.canonical_url),
-                        run_id=str(self.metrics["run_id"]),
-                        company_scan_id=context.scan_id,
-                        observed_at=self.now(),
                     )
-                    context.observed_job_ids.add(card.linkedin_job_id)
-                    self._increment("detail_cache_hits")
-                    self._increment("detail_avoided_requests")
-                    self._record_refresh_reason(refresh.reason)
-                    if refresh.volatile_fields_stale:
-                        self._increment("detail_volatile_stale_rows")
                     return
             elif previous and previous.get("lifecycle_status") == "inactive":
                 refresh_reason = "reactivated_job"
@@ -3042,13 +3280,7 @@ class CatalogRunner:
             return
         self._increment("detail_refresh_requests")
         self._record_refresh_reason(refresh_reason)
-        self.store.enqueue_detail(
-            str(self.metrics["run_id"]),
-            context.scan_id,
-            context.group.linkedin_company_id,
-            card.linkedin_job_id,
-            refresh_reason=refresh_reason,
-        )
+        self._enqueue_detail_for_card(context, card, refresh_reason)
 
     def _scan_recovery_partition(self, context: CompanyRunContext, partition: RecoveryPartition) -> bool:
         assert self.store is not None
@@ -3148,6 +3380,9 @@ class CatalogRunner:
         existing_status = self.store.existing_company_scan_status(run_id, group.linkedin_company_id)
         scan_id = existing_scan_id or self.store.start_company_scan(run_id, group)
         context = CompanyRunContext(group=group, scan_id=scan_id)
+        # Publish the context immediately so detail workers can resolve it while
+        # pagination is still in flight for this company.
+        self.contexts[context.scan_id] = context
         restored_cards = self.store.search_cards_for_run(run_id, group.linkedin_company_id) if existing_scan_id else ()
         for card in restored_cards:
             context.card_by_job_id[card.linkedin_job_id] = card
@@ -3158,7 +3393,7 @@ class CatalogRunner:
                 context.card_partition_by_job_id.setdefault(card.linkedin_job_id, "base")
                 context.card_partition_value_by_job_id.setdefault(card.linkedin_job_id, "")
                 self._queue_card(context, card)
-            self.contexts[context.scan_id] = context
+            self._flush_pending_writes()
             return context
         seen_body_hashes: set[str] = set()
         seen_job_sets: set[tuple[str, ...]] = set()
@@ -3179,6 +3414,7 @@ class CatalogRunner:
                         context.card_partition_by_job_id.setdefault(card.linkedin_job_id, "base")
                         context.card_partition_value_by_job_id.setdefault(card.linkedin_job_id, "")
                         self._queue_card(context, card)
+                    self._flush_pending_writes()
                     continue
                 url = build_search_url(group.linkedin_company_id, start=page_start)
                 response = self._get(url, kind="search")
@@ -3254,6 +3490,7 @@ class CatalogRunner:
                     context.card_partition_by_job_id[card.linkedin_job_id] = "base"
                     context.card_partition_value_by_job_id[card.linkedin_job_id] = ""
                     self._queue_card(context, card)
+                self._flush_pending_writes()
                 candidate_cards = len(context.card_by_job_id)
                 if parsed.is_no_results:
                     empty_pages += 1
@@ -3287,10 +3524,15 @@ class CatalogRunner:
                     "error_class": type(exc).__name__,
                 }
             )
-        self.contexts[context.scan_id] = context
+        # Ensure any pending detail/cache-hit writes for this company are
+        # persisted before the scan is considered finished.  In pipelined mode
+        # this makes rows visible to detail workers; in sequential mode it is a
+        # no-op because writes are immediate.
+        self._flush_enqueue_batch()
+        self._flush_cache_hit_batch()
         return context
 
-    def _process_detail(self, entry: sqlite3.Row) -> None:
+    def _process_detail(self, entry: Mapping[str, Any]) -> None:
         assert self.store is not None
         run_id = str(self.metrics["run_id"])
         company_id = str(entry["linkedin_company_id"])
@@ -3307,13 +3549,15 @@ class CatalogRunner:
             card = next((item for item in cards if item.linkedin_job_id == job_id), None)
         if card is None:
             self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class="missing_search_card")
-            context.detail_failures += 1
+            with context._lock:
+                context.detail_failures += 1
             self._increment("detail_failures")
             return
         response = self._get(f"{DETAIL_ENDPOINT}/{job_id}", kind="detail")
         if response.error == "request_budget_exhausted" or response.status_code != 200 or _blocked_body(response.text):
             self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class=classify_http_response(response.status_code, response.text, response.error))
-            context.detail_failures += 1
+            with context._lock:
+                context.detail_failures += 1
             self._increment("detail_failures")
             return
         detail = parse_job_detail(job_id, response.text)
@@ -3420,7 +3664,8 @@ class CatalogRunner:
         with self.store.batch():
             self.store.upsert_catalog_row(row)
             self.store.record_detail_attempt(run_id, job_id, status="SUCCESS", detail=detail.__dict__)
-        context.observed_job_ids.add(job_id)
+        with context._lock:
+            context.observed_job_ids.add(job_id)
         self._increment("detail_successes")
         self._increment("jobs_written")
         self._record_event({"record_type": "job_observation", "schema_version": 1, "run_id": run_id, **row})
@@ -3464,13 +3709,10 @@ class CatalogRunner:
             )
         else:
             self.metrics["proxy_count"] = len(getattr(self.transport, "proxies", ())) or 1
-        selected = list(self.groups.values())
-        if self.config.max_companies is not None:
-            selected = selected[: max(0, int(self.config.max_companies))]
-        elif self.config.mode == "smoke":
-            selected = selected[:1]
-        elif self.config.mode == "pilot":
-            selected = selected[:25]
+        ordered = sorted(self.groups.values(), key=lambda group: (int(group.linkedin_company_id), group.linkedin_company_id))
+        total = len(ordered)
+        limit = self._selection_limit(total)
+        selected = ordered[:limit]
         self.metrics["companies_selected"] = len(selected)
         if self.config.dry_run or self.config.mode in {"validate", "reconcile"}:
             try:
@@ -3509,13 +3751,31 @@ class CatalogRunner:
         self._event_journal = JsonlEventJournal(generation_dir / "master_linkedin_jobs.jsonl")
         self.store = self._open_state(output_dir)
         self.store.start_run(run_id, mode=self.config.mode, input_sha256=input_hash)
+        self._pipeline_stop_event.clear()
+        selection_cursor = 0
+        if limit < total:
+            selection_cursor = self.store.get_cursor() % total
+            if selection_cursor:
+                selected = ordered[selection_cursor:] + ordered[:selection_cursor]
+                selected = selected[:limit]
+            self.metrics["selection_cursor"] = selection_cursor
         try:
             if selected:
                 worker_count = min(max(1, self.config.workers), len(selected))
-                with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                    futures = [executor.submit(self._scan_company, group) for group in selected]
-                    for future in as_completed(futures):
-                        future.result()
+                if self.config.pipeline_enabled:
+                    self._start_pipeline()
+                    try:
+                        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                            futures = [executor.submit(self._scan_company, group) for group in selected]
+                            for future in as_completed(futures):
+                                future.result()
+                    finally:
+                        self._stop_pipeline()
+                else:
+                    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                        futures = [executor.submit(self._scan_company, group) for group in selected]
+                        for future in as_completed(futures):
+                            future.result()
             detail_entries = self.store.get_detail_queue_entries(run_id)
             if detail_entries:
                 detail_worker_count = min(max(1, self.config.detail_workers), len(detail_entries))
@@ -3590,6 +3850,8 @@ class CatalogRunner:
             self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
             self._capture_detail_provider_usage()
             self.store.finish_run(run_id, run_status, self.now())
+            if limit < total:
+                self.store.set_cursor((selection_cursor + limit) % total)
             if self._event_journal is not None:
                 self._event_journal.close()
                 self._event_journal = None
@@ -3674,10 +3936,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="fail instead of creating a missing restored state database",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--pipeline",
+        dest="pipeline_enabled",
+        action="store_true",
+        default=True,
+        help="enable pipelined search+detail execution (default)",
+    )
+    parser.add_argument(
+        "--no-pipeline",
+        dest="pipeline_enabled",
+        action="store_false",
+        help="disable pipelining and run search and detail sequentially",
+    )
+    parser.add_argument(
+        "--pipeline-detail-queue-size",
+        type=int,
+        default=RunnerConfig.pipeline_detail_queue_size,
+        help="maximum in-memory detail tasks before scan workers block",
+    )
+    parser.add_argument(
+        "--pipeline-flush-interval",
+        type=int,
+        default=RunnerConfig.pipeline_flush_interval,
+        help="detail rows to batch before persisting to SQLite",
+    )
+    parser.set_defaults(pipeline_enabled=True)
     return parser
 
 
 def config_from_args(args: argparse.Namespace) -> RunnerConfig:
+    env_disable_pipeline = os.environ.get("RUNR_LINKEDIN_PIPELINE", "1") == "0"
     return RunnerConfig(
         input_csv=args.input_csv,
         output_dir=args.output_dir,
@@ -3701,6 +3990,9 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         require_existing_state=args.require_existing_state,
         dry_run=args.dry_run,
         max_companies=args.max_companies,
+        pipeline_enabled=args.pipeline_enabled and not env_disable_pipeline,
+        pipeline_detail_queue_size=args.pipeline_detail_queue_size,
+        pipeline_flush_interval=args.pipeline_flush_interval,
     )
 
 

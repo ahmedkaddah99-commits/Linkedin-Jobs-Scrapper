@@ -84,6 +84,8 @@ npm --prefix "$INSTALL_DIR/frontend" install
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-api.service" /etc/systemd/system/runr-api.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-worker.service" /etc/systemd/system/runr-worker.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-worker.service" /etc/systemd/system/runr-acquisition-worker.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-cycle.service" /etc/systemd/system/runr-acquisition-cycle.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-cycle.timer" /etc/systemd/system/runr-acquisition-cycle.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-frontend.service" /etc/systemd/system/runr-frontend.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr.target" /etc/systemd/system/runr.target
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-journald.conf" /etc/systemd/journald.conf.d/runr.conf

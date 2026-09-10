@@ -62,12 +62,52 @@ ROLE_CONFIG: dict[str, dict[str, Any]] = {
             "ownership_exclusions",
             "lifecycle_events",
             "proxy_health",
+            "collection_cursor",
+        ),
+        "supported_table_sets": (
+            (
+                "runs",
+                "source_company_groups",
+                "company_slug_aliases",
+                "company_scans",
+                "query_partitions",
+                "search_pages",
+                "search_cards",
+                "jobs",
+                "job_company_observations",
+                "detail_queue",
+                "detail_attempts",
+                "ownership_exclusions",
+                "lifecycle_events",
+                "proxy_health",
+                "collection_cursor",
+            ),
+            (
+                "runs",
+                "source_company_groups",
+                "company_slug_aliases",
+                "company_scans",
+                "query_partitions",
+                "search_pages",
+                "search_cards",
+                "jobs",
+                "job_company_observations",
+                "detail_queue",
+                "detail_attempts",
+                "ownership_exclusions",
+                "lifecycle_events",
+                "proxy_health",
+            ),
         ),
     },
     "employer": {
         "logical_name": "employer_state",
         "db_filename": "master_employer_jobs_state.db",
-        "required_tables": ("companies", "jobs"),
+        "required_tables": ("companies", "jobs", "coverage_receipts", "collection_cursor"),
+        "supported_table_sets": (
+            ("companies", "jobs", "coverage_receipts", "collection_cursor"),
+            ("companies", "jobs"),
+        ),
     },
 }
 
@@ -223,10 +263,10 @@ def _sqlite_schema(path: Path, role: str, *, integrity: bool = True) -> dict[str
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         )
-        expected = sorted(config["required_tables"])
-        if tables != expected:
+        supported = [sorted(table_set) for table_set in config.get("supported_table_sets", (config["required_tables"],))]
+        if tables not in supported:
             raise CheckpointError(
-                f"{role} state schema mismatch: expected {expected}, got {tables}"
+                f"{role} state schema mismatch: expected one of {supported}, got {tables}"
             )
         integrity_result = "not_run"
         if integrity:

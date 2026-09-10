@@ -51,6 +51,19 @@ case "$role" in
       --worker-role "${WORKER_ROLE:-customer}" \
       "$@"
     ;;
+  acquisition)
+    # Dedicated VPS acquisition entrypoint. The role is pinned to acquisition
+    # so the Render customer worker cannot claim acquisition cycles.
+    emit_release_metadata worker acquisition
+    exec "$python_bin" workspace_runner.py \
+      --data-dir "$data_dir" \
+      --storage "$storage_backend" \
+      --log-level "$log_level" \
+      run-worker \
+      --worker-id "${WORKER_ID:-vps_acquisition_worker}" \
+      --worker-role acquisition \
+      "$@"
+    ;;
   process-next)
     emit_release_metadata worker "${WORKER_ROLE:-customer}"
     exec "$python_bin" workspace_runner.py \
@@ -68,7 +81,7 @@ case "$role" in
     ;;
   *)
     echo "Unknown role: $role" >&2
-    echo "Supported roles: api, worker, process-next, migrate" >&2
+    echo "Supported roles: api, worker, acquisition, process-next, migrate" >&2
     exit 64
     ;;
 esac

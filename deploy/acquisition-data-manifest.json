@@ -107,6 +107,10 @@
           "lifecycle_events": 187415,
           "proxy_health": 0
         },
+        "supported_tables": [
+          ["runs", "source_company_groups", "company_slug_aliases", "company_scans", "query_partitions", "search_pages", "search_cards", "jobs", "job_company_observations", "detail_queue", "detail_attempts", "ownership_exclusions", "lifecycle_events", "proxy_health"],
+          ["runs", "source_company_groups", "company_slug_aliases", "company_scans", "query_partitions", "search_pages", "search_cards", "jobs", "job_company_observations", "detail_queue", "detail_attempts", "ownership_exclusions", "lifecycle_events", "proxy_health", "collection_cursor"]
+        ],
         "integrity_check": "ok"
       },
       "committed_in_git": false,
@@ -121,7 +125,7 @@
       "server_path": "/srv/runr/state/employer/master_employer_jobs_state.db",
       "bytes": 83841024,
       "sha256": "b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737",
-      "schema": {"user_version": 0, "tables": {"companies": 428, "jobs": 2612}, "integrity_check": "ok"},
+      "schema": {"user_version": 0, "tables": {"companies": 428, "jobs": 2612}, "supported_tables": [["companies", "jobs"], ["companies", "jobs", "coverage_receipts", "collection_cursor"]], "integrity_check": "ok"},
       "committed_in_git": false,
       "restore_separately": true,
       "required_on_first_acquisition_start": true,

@@ -7,8 +7,6 @@ from pathlib import Path
 from backend.acquisition.collection_controls import collection_metadata, infer_stop_reason
 from backend.acquisition.manifest import load_phase_a_manifest
 from backend.bootstrap import create_backend
-from backend.api.routes import build_route_registry
-from backend.api.routes.registry import ApiRouteContext
 from backend.connectors.ats_router import fetch_ats_snapshot
 
 
@@ -25,26 +23,6 @@ class _Response:
         return self._payload
 
 
-class _AdminHandler:
-    def __init__(self, body=None):
-        self.body = body or {}
-        self.payload = None
-        self.admin_calls = 0
-
-    def _require_admin(self):
-        self.admin_calls += 1
-        return {"id": "admin-fixture"}, object()
-
-    def _read_json_body(self):
-        return self.body
-
-    def _send_json(self, payload, status=200, *, headers=None):
-        self.payload = (status, payload)
-
-    def _send_error(self, status, code, message, *, details=None, headers=None):
-        self.payload = (status, {"error": code, "message": message})
-
-
 def _greenhouse_job(job_id: str) -> dict[str, object]:
     return {
         "id": job_id,
@@ -56,117 +34,7 @@ def _greenhouse_job(job_id: str) -> dict[str, object]:
 
 
 class CollectionControlsTests(unittest.TestCase):
-    def test_validation_and_admin_authorization_contract(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-            with self.assertRaises(ValueError):
-                app.plan_admin_job_import(source_ids=["n26_greenhouse"], scope={"retrieval_mode": "unsafe"})
-            with self.assertRaises(ValueError):
-                app.plan_admin_job_import(source_ids=["n26_greenhouse"], scope={"max_jobs": -1})
 
-        registry = build_route_registry()
-        application = type("Application", (), {"list_admin_job_import_sources": lambda self: []})()
-        handler = _AdminHandler()
-        context = ApiRouteContext(
-            application=application,
-            handler=handler,
-            method="GET",
-            segments=("admin", "acquisition", "sources"),
-            query={},
-        )
-        self.assertTrue(registry.dispatch(context, auth_required=True))
-        self.assertEqual(handler.admin_calls, 1)
-
-        handler = _AdminHandler({"source_ids": ["n26_greenhouse"], "scope": {"retrieval_mode": "unsafe"}})
-        context = ApiRouteContext(
-            application=app,
-            handler=handler,
-            method="POST",
-            segments=("admin", "acquisition", "imports", "plan"),
-            query={},
-        )
-        self.assertTrue(registry.dispatch(context, auth_required=True))
-        self.assertEqual(handler.payload[0], 400)
-
-    def test_bounded_custom_and_all_available_are_planned_from_capabilities(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-
-            bounded = app.plan_admin_job_import(
-                source_ids=["n26_greenhouse"],
-                scope={},
-            )
-            custom = app.plan_admin_job_import(
-                source_ids=["n26_greenhouse"],
-                scope={"retrieval_mode": "custom", "max_jobs": 7, "max_pages": 2},
-            )
-            all_available = app.plan_admin_job_import(
-                source_ids=["n26_greenhouse"],
-                scope={"retrieval_mode": "all_available", "max_pages": 2, "max_requests": 2},
-            )
-            unsupported = app.plan_admin_job_import(
-                source_ids=["siemens"],
-                scope={"retrieval_mode": "all_available"},
-            )
-
-            self.assertEqual(bounded["scope"]["retrieval_mode"], "bounded")
-            self.assertEqual(custom["scope"]["max_jobs"], 7)
-            self.assertTrue(all_available["can_start"])
-            self.assertFalse(unsupported["can_start"])
-            self.assertIn("all_available_not_supported:siemens", unsupported["limit_errors"])
-            source = next(item for item in app.list_admin_job_import_sources() if item["id"] == "siemens")
-            self.assertFalse(source["all_available"]["available"])
-            self.assertEqual(source["all_available"]["reason"], "reliable_pagination_unavailable")
-
-    def test_max_jobs_caps_accepted_roles_and_has_no_publication_side_effect(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
-            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
-            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
-            app._acquisition_scheduler.requester = lambda url, **_: _Response(
-                url,
-                {"jobs": [_greenhouse_job(str(index)) for index in range(3)]},
-            )
-
-            queued = app.start_admin_job_import(
-                requested_by="admin-fixture",
-                idempotency_key="collection-cap-1",
-                source_ids=["n26_greenhouse"],
-                scope={"retrieval_mode": "custom", "max_jobs": 1},
-            )
-            processed = app.process_next_admin_job_import(worker_id="collection-worker")
-            target = processed["report"]["targets"][0]
-            collection = target["task"]["collection"]
-
-            self.assertEqual(queued["scope"]["max_jobs"], 1)
-            self.assertEqual(collection["requested_job_limit"], 1)
-            self.assertEqual(collection["effective_job_limit"], 1)
-            self.assertEqual(collection["observed_count"], 3)
-            self.assertEqual(collection["accepted_count"], 1)
-            self.assertEqual(collection["rejected_count"], 2)
-            self.assertEqual(collection["stop_reason"], "accepted_job_limit")
-            self.assertFalse(collection["complete_snapshot"])
-            self.assertFalse(collection["closure_safe"])
-            self.assertEqual(processed["report"]["cycle"]["publication_id"], "")
-            self.assertEqual(app.get_public_acquisition_catalog()["freshness"], "unpublished")
-
-    def test_legacy_full_source_import_is_not_all_available(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-            plan = app.plan_admin_job_import(
-                source_ids=["siemens"],
-                scope={
-                    "full_source_import": True,
-                    "retrieval_mode": "bounded",
-                    "country": "Germany",
-                    "keywords": ["analyst"],
-                },
-            )
-            self.assertEqual(plan["scope"]["retrieval_mode"], "bounded")
-            self.assertTrue(plan["scope"]["full_source_import"])
-            self.assertEqual(plan["scope"]["country"], "")
-            self.assertIn("does not imply", plan["compatibility"]["full_source_import"])
 
     def test_stop_reason_contract_covers_provider_and_ceiling_paths(self):
         cases = {
@@ -264,27 +132,6 @@ class CollectionControlsTests(unittest.TestCase):
             self.assertEqual(result["total"], 1)
             self.assertIsInstance(result["jobs"][0]["source"], str)
             self.assertEqual(result["jobs"][0]["source"], "greenhouse")
-
-    def test_idempotency_and_audit_are_preserved(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
-            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
-            first = app.start_admin_job_import(
-                requested_by="admin-fixture",
-                idempotency_key="audit-idempotency-1",
-                source_ids=["n26_greenhouse"],
-                scope={"retrieval_mode": "bounded"},
-            )
-            replay = app.start_admin_job_import(
-                requested_by="admin-fixture",
-                idempotency_key="audit-idempotency-1",
-                source_ids=["n26_greenhouse"],
-                scope={"retrieval_mode": "custom", "max_jobs": 2},
-            )
-            self.assertEqual(first["import_id"], replay["import_id"])
-            events = app.list_admin_job_import_history(import_id=first["import_id"])
-            self.assertEqual([event["event_type"] for event in events], ["import_queued"])
 
 
 if __name__ == "__main__":

@@ -51,6 +51,8 @@
     },
     "acquisition": {
       "unit": "runr-acquisition-worker.service",
+      "collector_unit": "runr-acquisition-cycle.timer",
+      "collector_entrypoint": "/opt/runr/deploy/run-acquisition-cycle.sh",
       "service_user": "runr-acquisition",
       "worker_role": "acquisition",
       "environment_file": "/opt/runr/.env.acquisition",

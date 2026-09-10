@@ -22,7 +22,6 @@ class WorkerRoleContractTests(unittest.TestCase):
         worker = WorkerService(application=app, worker_id="customer-1", role="customer")
 
         with (
-            patch.object(BackendApplication, "process_next_admin_job_import", side_effect=AssertionError("customer claimed admin import")),
             patch.object(BackendApplication, "process_next_personalized_intelligence", return_value=None) as intelligence,
             patch.object(BackendApplication, "claim_next_queued_run", return_value=None) as customer_runs,
         ):
@@ -39,16 +38,12 @@ class WorkerRoleContractTests(unittest.TestCase):
     def test_acquisition_worker_does_not_claim_customer_work(self):
         app = self._app("rc018_acquisition_worker")
         worker = WorkerService(application=app, worker_id="acquisition-1", role="acquisition")
-        acquisition_result = {"import_id": "job_import_1", "status": "completed"}
 
         with (
-            patch.object(BackendApplication, "process_next_admin_job_import", return_value=acquisition_result) as imports,
             patch.object(BackendApplication, "process_next_personalized_intelligence", side_effect=AssertionError("acquisition claimed intelligence")),
             patch.object(BackendApplication, "claim_next_queued_run", side_effect=AssertionError("acquisition claimed customer run")),
         ):
-            self.assertIs(worker.process_next(), acquisition_result)
-
-        imports.assert_called_once_with(worker_id="acquisition-1", worker_role="acquisition")
+            self.assertIsNone(worker.process_next())
 
     def test_store_claims_reject_wrong_role_before_mutating_queue(self):
         app = self._app("rc018_claim_gates")

@@ -154,7 +154,7 @@ def test_linkedin_explicit_state_keeps_generation_journal_and_db_outside_exports
         table_count = connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchone()[0]
-    assert table_count == 14
+    assert table_count == 15
 
 
 def test_linkedin_default_state_path_remains_output_dir(tmp_path: Path) -> None:

@@ -79,28 +79,16 @@ services:
         value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
         value: "false"
+      # Acquisition runs on the VPS, never on Render. These switches keep the
+      # API role from claiming acquisition cycles or issuing live source calls.
       - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
-        value: "true"
+        value: "false"
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
-        value: "true"
-      - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: scrapeops_linkedin
-      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
-        value: basic
-      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
-        value: basic
-      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
-        value: "1"
+        value: "false"
+      # Company enrichment is part of the acquisition workload; disabled on
+      # customer/API compute so it cannot run concurrently with the VPS role.
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
-        value: "100"
-      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
-        value: "100"
+        value: "0"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND
@@ -208,28 +196,16 @@ services:
         value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
         value: "false"
+      # Acquisition runs on the VPS, never on Render. The Render worker keeps
+      # the customer role only and cannot claim acquisition cycles.
       - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
-        value: "true"
+        value: "false"
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
-        value: "true"
-      - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: scrapeops_linkedin
-      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
-        value: basic
-      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
-        value: basic
-      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
-        value: "1"
+        value: "false"
+      # Company enrichment is part of the acquisition workload; disabled on
+      # customer compute so it cannot run concurrently with the VPS role.
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
-        value: "100"
-      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
-        value: "1"
-      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
-        value: "100"
+        value: "0"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND

@@ -8,18 +8,15 @@ import { SessionProvider, useSession } from "./context/SessionContext";
 import MarketingSite from "./pages/MarketingSite";
 import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
 import { logEvent } from "./lib/analytics";
-import { isAdminUser } from "./lib/auth";
 import { personalizedJobsDataMode, personalizedJobsExperienceEnabled } from "./lib/personalizedJobsConfig";
 import { hasAuthenticatedSession } from "./lib/sessionState";
 
-const AdminOperationsRouter = lazy(() => import("./admin/AdminOperationsRouter"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
 const appSubdomain = typeof window !== "undefined" && window.location.hostname === "app.userunr.com";
 
-const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
@@ -95,14 +92,6 @@ class RouteErrorBoundary extends Component {
       </section>
     );
   }
-}
-
-function RequireAdminRoute({ children }) {
-  const { user } = useSession();
-  if (!isAdminUser(user)) {
-    return <Navigate replace to="/" />;
-  }
-  return children;
 }
 
 function UpgradeModalHost() {
@@ -218,15 +207,7 @@ function AuthenticatedApp() {
 
   if (location.pathname === "/admin" || location.pathname.startsWith("/admin/")) {
     return (
-      <RouteErrorBoundary>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          {hasSession ? (
-            <RequireAdminRoute>
-              <AdminOperationsRouter />
-            </RequireAdminRoute>
-          ) : <BackendConnectionPanel />}
-        </Suspense>
-      </RouteErrorBoundary>
+      <Navigate replace to="/" />
     );
   }
 
@@ -245,7 +226,7 @@ function AuthenticatedApp() {
               <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/jobs/:jobId" element={personalizedJobsExperienceEnabled ? <PersonalizedJobDetailPage /> : <Navigate replace to="/" />} />
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
-              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/dashboard" element={<Navigate replace to="/jobs" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/quick-apply" element={<QuickApplyPage />} />
               <Route path="/runs" element={<RunsPage />} />

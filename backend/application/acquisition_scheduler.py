@@ -60,6 +60,8 @@ PHASE_A_DEFAULT_CONFIG: dict[str, Any] = {
     "global_request_ceiling": 100,
     "cycle_request_ceiling": 16,
     "cycle_credit_ceiling": 0,
+    # None means "any hour"; production pins this to 0 for 00:00 UTC daily.
+    "scheduled_hour_utc": None,
 }
 
 PHASE_A_PRODUCTION_CONFIG: dict[str, Any] = {
@@ -70,6 +72,7 @@ PHASE_A_PRODUCTION_CONFIG: dict[str, Any] = {
     "connector_validation_enabled": True,
     "publication_enabled": True,
     "allow_proxy": True,
+    "scheduled_hour_utc": 0,
 }
 
 PHASE_B_PRODUCTION_CONFIG: dict[str, Any] = {
@@ -147,6 +150,12 @@ class PhaseAAcquisitionScheduler:
         return getter(key, default)
 
     def _phase_a_config(self, name: str) -> Any:
+        if (
+            str(os.getenv("RUNR_ACQUISITION_SCHEDULER_DISABLED") or "").strip().casefold()
+            in {"1", "true", "yes", "on"}
+            and name in {"scheduler_enabled", "global_enabled", "publication_enabled"}
+        ):
+            return False
         if private_test_deployment_enabled():
             forced_values = {
                 "scheduler_enabled": False,
@@ -284,6 +293,20 @@ class PhaseAAcquisitionScheduler:
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
         current = current.astimezone(timezone.utc)
+        scheduled_hour_utc = self._phase_a_config("scheduled_hour_utc")
+        if scheduled_hour_utc is not None and current.hour < _as_int(scheduled_hour_utc, 0):
+            self._emit(
+                "acquisition_scheduler_noop",
+                reason="before_scheduled_hour_utc",
+                scheduled_hour_utc=scheduled_hour_utc,
+                current_hour=current.hour,
+            )
+            return {
+                "status": "no_op",
+                "reason": "before_scheduled_hour_utc",
+                "scheduled_hour_utc": scheduled_hour_utc,
+                "current_hour": current.hour,
+            }
         scheduled_at = current.isoformat()
         manifest = self._configured_manifest()
         manifest_version = self._manifest_version(manifest)

@@ -22,16 +22,26 @@ class PublicationPolicyError(ValueError):
 @dataclass(frozen=True)
 class PublicationPolicy:
     version: str
-    completeness_mode: Literal["report_only"] = "report_only"
+    completeness_mode: Literal["report_only", "blocking"] = "report_only"
     missing_apply_is_blocker: bool = False
 
+
+# publication_policy_v2 is opt-in only. It is registered so a future release can
+# promote it explicitly; the default version must remain v1 (report_only) until
+# the completeness gate has been audited against real stored records.
+BLOCKING_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
 
 PUBLICATION_POLICIES = {
     DEFAULT_PUBLICATION_POLICY_VERSION: PublicationPolicy(
         version=DEFAULT_PUBLICATION_POLICY_VERSION,
         completeness_mode="report_only",
         missing_apply_is_blocker=False,
-    )
+    ),
+    BLOCKING_PUBLICATION_POLICY_VERSION: PublicationPolicy(
+        version=BLOCKING_PUBLICATION_POLICY_VERSION,
+        completeness_mode="blocking",
+        missing_apply_is_blocker=True,
+    ),
 }
 
 

@@ -22,7 +22,11 @@ Environment=WORKER_ROLE=acquisition
 Environment=WORKER_ID=vps_acquisition_worker
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
 Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ExecStart=/opt/runr/deploy/start.sh worker
+# Source collectors and their shared-state bridge run from the daily oneshot.
+# Keep this long-lived worker available for leases/maintenance without letting
+# it run the legacy source scheduler in parallel.
+Environment=RUNR_ACQUISITION_SCHEDULER_DISABLED=true
+ExecStart=/opt/runr/deploy/start.sh acquisition
 Restart=always
 RestartSec=5
 TimeoutStopSec=300
