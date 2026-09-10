@@ -148,6 +148,27 @@ def test_fetch_browser_snapshot_keeps_same_origin_xhr_and_rendered_content(monke
     assert snapshot["jobs"][0]["job_detail_url"] == "https://acme.example/jobs/xhr-1"
 
 
+def test_browser_proxy_uses_separate_decoded_credentials(monkeypatch):
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    options = {}
+
+    def launch(self, **kwargs):
+        options.update(kwargs)
+        return _FakeBrowser()
+
+    monkeypatch.setattr(_FakeChromium, "launch", launch)
+    monkeypatch.setattr(fallbacks, "sync_playwright", lambda: _FakePlaywright())
+    result = fetch_browser_snapshot(
+        "https://acme.example/careers", proxy_url="http://test%40user:p%40ss%3Aword@proxy.example:80"
+    )
+    assert result["status"] == "completed"
+    assert options["proxy"] == {
+        "server": "http://proxy.example:80", "username": "test@user", "password": "p@ss:word"
+    }
+    assert "p@ss:word" not in json.dumps(result)
+
+
 def test_browser_empty_app_shell_is_not_authoritative_zero(monkeypatch):
     import backend.connectors.employer_site_fallbacks as fallbacks
 

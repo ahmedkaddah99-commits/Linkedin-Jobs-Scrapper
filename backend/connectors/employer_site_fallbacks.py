@@ -8,7 +8,7 @@ import re
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from typing import Any, Callable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -350,7 +350,17 @@ def fetch_browser_snapshot(
             with sync_playwright() as playwright:
                 launch_options: dict[str, Any] = {"headless": True}
                 if proxy_url:
-                    launch_options["proxy"] = {"server": proxy_url}
+                    parsed_proxy = urlsplit(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
+                    proxy_host = parsed_proxy.hostname or ""
+                    if ":" in proxy_host:
+                        proxy_host = f"[{proxy_host}]"
+                    proxy_port = f":{parsed_proxy.port}" if parsed_proxy.port is not None else ""
+                    proxy = {"server": f"{parsed_proxy.scheme}://{proxy_host}{proxy_port}"}
+                    if parsed_proxy.username is not None:
+                        proxy["username"] = unquote(parsed_proxy.username)
+                    if parsed_proxy.password is not None:
+                        proxy["password"] = unquote(parsed_proxy.password)
+                    launch_options["proxy"] = proxy
                 browser = playwright.chromium.launch(**launch_options)
                 try:
                     context = browser.new_context()
