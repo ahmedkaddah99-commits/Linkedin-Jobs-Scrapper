@@ -7,7 +7,7 @@ set -eu
 project_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$project_dir"
 python_bin="${RUNR_PYTHON_BIN:-$project_dir/.venv/bin/python}"
-manifest="${RUNR_ACQUISITION_MANIFEST:-/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json}"
+manifest="${RUNR_ACQUISITION_DATA_MANIFEST:-$project_dir/deploy/acquisition-data-manifest.json}"
 input_root="${RUNR_ACQUISITION_INPUT_ROOT:-/srv/runr/shared/inputs}"
 state_root="${RUNR_ACQUISITION_STATE_ROOT_PHYSICAL:-/srv/runr/state}"
 raw_state_root="${RUNR_ACQUISITION_RAW_STATE_ROOT:-$state_root}"
