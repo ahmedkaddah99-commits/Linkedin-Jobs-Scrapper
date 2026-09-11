@@ -72,16 +72,30 @@ def _host(value: object) -> str:
         return ""
 
 
-def _manifest_companies(manifest: Mapping[str, object], source: str, *, pilot_only: bool) -> dict[str, dict[str, object]]:
+def _resolve_company_id(value: object, crosswalk: Mapping[str, str] | None = None) -> str:
+    company_id = _text(value)
+    if not company_id:
+        return ""
+    mapping = crosswalk or {}
+    return _text(mapping.get(f"old-company:{company_id}")) or company_id
+
+
+def _manifest_companies(
+    manifest: Mapping[str, object],
+    source: str,
+    *,
+    pilot_only: bool,
+    crosswalk: Mapping[str, str] | None = None,
+) -> dict[str, dict[str, object]]:
     tasks = validate_manifest_for_source(manifest, source, pilot_only=pilot_only)
     rows = [item for item in (manifest.get("rows") or []) if isinstance(item, Mapping)]
     by_id: dict[str, dict[str, object]] = {}
     for task in tasks:
-        company_id = _text(task.get("canonical_company_id"))
+        company_id = _resolve_company_id(task.get("canonical_company_id"), crosswalk)
         if not company_id:
             continue
         representative = next(
-            (item for item in rows if _text(item.get("canonical_company_id")) == company_id),
+            (item for item in rows if _resolve_company_id(item.get("canonical_company_id"), crosswalk) == company_id),
             {},
         )
         website = ((representative.get("website") or {}).get("url") or {}).get("canonical", "") if isinstance(representative.get("website"), Mapping) else ""
@@ -142,9 +156,9 @@ def _iter_linkedin_groups(
     *,
     canonical_by_source_company: Mapping[str, str],
     selected_ids: set[str],
+    crosswalk: Mapping[str, str] | None = None,
 ) -> Iterator[tuple[str, list[dict[str, object]]]]:
-    current_id = ""
-    current_rows: list[dict[str, object]] = []
+    grouped: dict[str, list[dict[str, object]]] = {}
     cursor = connection.execute(
         """
         SELECT linkedin_company_id, linkedin_job_id, run_id, company_scan_id, row_json
@@ -157,7 +171,7 @@ def _iter_linkedin_groups(
         if not isinstance(payload, Mapping):
             continue
         source_company_id = _text(row["linkedin_company_id"])
-        canonical_id = _text(payload.get("canonical_company_id")) or _text(canonical_by_source_company.get(source_company_id))
+        canonical_id = _resolve_company_id(payload.get("canonical_company_id"), crosswalk) or _resolve_company_id(canonical_by_source_company.get(source_company_id), crosswalk)
         if canonical_id not in selected_ids:
             continue
         item = dict(payload)
@@ -165,23 +179,17 @@ def _iter_linkedin_groups(
         item.setdefault("linkedin_job_id", _text(row["linkedin_job_id"]))
         item.setdefault("run_id", _text(row["run_id"]))
         item.setdefault("company_scan_id", _text(row["company_scan_id"]))
-        if canonical_id != current_id:
-            if current_rows:
-                yield current_id, current_rows
-            current_id = canonical_id
-            current_rows = []
-        current_rows.append(item)
-    if current_rows:
-        yield current_id, current_rows
+        grouped.setdefault(canonical_id, []).append(item)
+    yield from grouped.items()
 
 
 def _iter_employer_groups(
     connection: sqlite3.Connection,
     *,
     selected_ids: set[str],
+    crosswalk: Mapping[str, str] | None = None,
 ) -> Iterator[tuple[str, list[dict[str, object]]]]:
-    current_id = ""
-    current_rows: list[dict[str, object]] = []
+    grouped: dict[str, list[dict[str, object]]] = {}
     cursor = connection.execute(
         """
         SELECT payload_json
@@ -193,17 +201,11 @@ def _iter_employer_groups(
         payload = _decode(row["payload_json"], {})
         if not isinstance(payload, Mapping):
             continue
-        canonical_id = _text(payload.get("canonical_company_id"))
+        canonical_id = _resolve_company_id(payload.get("canonical_company_id"), crosswalk)
         if canonical_id not in selected_ids:
             continue
-        if canonical_id != current_id:
-            if current_rows:
-                yield current_id, current_rows
-            current_id = canonical_id
-            current_rows = []
-        current_rows.append(dict(payload))
-    if current_rows:
-        yield current_id, current_rows
+        grouped.setdefault(canonical_id, []).append(dict(payload))
+    yield from grouped.items()
 
 
 def _target(company: Mapping[str, object], source: str) -> dict[str, object]:
@@ -286,10 +288,12 @@ def run_delivery(
     source_version: str,
     pilot_only: bool = False,
     company_ids: Iterable[str] | None = None,
+    identity_crosswalk: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     manifest = load_manifest(manifest_path)
-    linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only)
-    employer_companies = _manifest_companies(manifest, SOURCE_EMPLOYER, pilot_only=pilot_only)
+    crosswalk = dict(identity_crosswalk or {})
+    linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only, crosswalk=crosswalk)
+    employer_companies = _manifest_companies(manifest, SOURCE_EMPLOYER, pilot_only=pilot_only, crosswalk=crosswalk)
     requested = {value.strip() for value in (company_ids or ()) if value.strip()}
     if requested:
         linkedin_companies = {key: value for key, value in linkedin_companies.items() if key in requested}
@@ -303,7 +307,7 @@ def run_delivery(
         li_statuses = _latest_linkedin_statuses(li_connection)
         employer_statuses = _latest_employer_statuses(employer_connection)
         linkedin_org_to_canonical = {
-            _text(association.get("linkedin_org_id")): _text(task.get("canonical_company_id"))
+            _text(association.get("linkedin_org_id")): _resolve_company_id(task.get("canonical_company_id"), crosswalk)
             for task in validate_manifest_for_source(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only)
             for association in (task.get("organization_associations") or [])
             if isinstance(association, Mapping) and _text(association.get("linkedin_org_id"))
@@ -318,10 +322,11 @@ def run_delivery(
                 li_connection,
                 canonical_by_source_company=linkedin_org_to_canonical,
                 selected_ids=set(linkedin_companies),
+                crosswalk=crosswalk,
             )
         )
         employer_groups = dict(
-            _iter_employer_groups(employer_connection, selected_ids=set(employer_companies))
+            _iter_employer_groups(employer_connection, selected_ids=set(employer_companies), crosswalk=crosswalk)
         )
     finally:
         li_connection.close()
@@ -510,11 +515,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-version", default=os.getenv("RUNR_SOURCE_VERSION", ""))
     parser.add_argument("--company-ids", nargs="*")
     parser.add_argument("--pilot-only", action="store_true")
+    parser.add_argument("--identity-crosswalk", type=Path, help="optional reviewed company_identity_crosswalk.json")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    identity_crosswalk = {}
+    if args.identity_crosswalk:
+        document = json.loads(args.identity_crosswalk.resolve().read_text(encoding="utf-8"))
+        if not isinstance(document, Mapping):
+            raise ValueError("identity crosswalk must be a JSON object")
+        identity_crosswalk = {
+            _text(key): _text(value)
+            for key, value in (document.get("mapping_by_identity") or {}).items()
+            if _text(key) and _text(value)
+        }
     result = run_delivery(
         manifest_path=args.manifest.resolve(),
         linkedin_state=args.linkedin_state.resolve(),
@@ -523,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
         source_version=_text(args.source_version) or "unknown",
         pilot_only=bool(args.pilot_only),
         company_ids=args.company_ids,
+        identity_crosswalk=identity_crosswalk,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0

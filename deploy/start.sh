@@ -12,12 +12,10 @@ fi
 data_dir="${RUNR_DATA_DIR:-.backend_data}"
 storage_backend="${RUNR_STORAGE_BACKEND:-sqlite}"
 log_level="${RUNR_LOG_LEVEL:-INFO}"
-python_bin="${RUNR_PYTHON_BIN:-}"
-if [ -z "$python_bin" ] && [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
-  python_bin="$PROJECT_DIR/.venv/bin/python"
-fi
-if [ -z "$python_bin" ]; then
-  python_bin="python"
+python_bin="${RUNR_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
+if [ ! -x "$python_bin" ]; then
+  echo "Missing required project interpreter: $python_bin" >&2
+  exit 1
 fi
 
 emit_release_metadata() {

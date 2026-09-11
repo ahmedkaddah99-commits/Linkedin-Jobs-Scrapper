@@ -77,12 +77,12 @@ def _validate_seed(item: dict[str, Any], manifest_path: Path, roots: dict[str, P
     return {"logical_name": item["logical_name"], "path": str(path), "bytes": actual_size, "sha256": actual_hash}
 
 
-def _validate_state(item: dict[str, Any], roots: dict[str, Path], *, deep: bool) -> dict[str, Any]:
+def _validate_state(item: dict[str, Any], roots: dict[str, Path], *, deep: bool, allow_state_drift: bool = False) -> dict[str, Any]:
     path = _runtime_path(str(item["server_path"]), roots).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"required state database is missing: {path}")
     actual_size = path.stat().st_size
-    if actual_size != int(item["bytes"]):
+    if not allow_state_drift and actual_size != int(item["bytes"]):
         raise ValueError(f"state database size mismatch for {path}: expected {item['bytes']}, got {actual_size}")
     connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
     try:
@@ -108,29 +108,47 @@ def _validate_state(item: dict[str, Any], roots: dict[str, Path], *, deep: bool)
     result = {"logical_name": item["logical_name"], "path": str(path), "bytes": actual_size}
     if deep:
         actual_hash = _sha256(path)
-        if actual_hash != item["sha256"]:
+        if not allow_state_drift and actual_hash != item["sha256"]:
             raise ValueError(f"state database SHA-256 mismatch for {path}: expected {item['sha256']}, got {actual_hash}")
         result["sha256"] = actual_hash
     return result
 
 
-def validate_manifest(manifest_path: Path, role: str, *, deep: bool = False) -> dict[str, Any]:
+def validate_manifest(manifest_path: Path, role: str, *, deep: bool = False, allow_state_drift: bool = False) -> dict[str, Any]:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != "runr.acquisition.data-manifest.v1":
         raise ValueError(f"unsupported acquisition data manifest schema: {payload.get('schema_version')}")
     roots = _resolve_roots()
     if role == "all":
         requirements = {
-            "seed_inputs": {"company_registry_canonical", "company_sources_linkedin_ids"},
+            "seed_inputs": {
+                "company_registry_canonical",
+                "company_sources_linkedin_ids",
+            },
             "states": {"linkedin_authoritative_state", "employer_state"},
         }
     else:
         requirements = ROLE_REQUIREMENTS[role]
     seeds = {item["logical_name"]: item for item in payload.get("seed_inputs", [])}
     states = {item["logical_name"]: item for item in payload.get("state_snapshots", [])}
+    # Older test/recovery manifests predate the explicit LinkedIn evidence
+    # entries.  The production manifest contains both and therefore makes
+    # them mandatory without breaking validation of historical fixtures.
+    if role in {"linkedin", "all"} and {"linkedin_pagination_report", "linkedin_filters_report"}.issubset(seeds):
+        requirements["seed_inputs"].update({"linkedin_pagination_report", "linkedin_filters_report"})
     checked_seeds = [_validate_seed(seeds[name], manifest_path, roots) for name in sorted(requirements["seed_inputs"])]
-    checked_states = [_validate_state(states[name], roots, deep=deep) for name in sorted(requirements["states"])]
-    return {"manifest": str(manifest_path.resolve()), "role": role, "deep": deep, "seeds": checked_seeds, "states": checked_states}
+    checked_states = [
+        _validate_state(states[name], roots, deep=deep, allow_state_drift=allow_state_drift)
+        for name in sorted(requirements["states"])
+    ]
+    return {
+        "manifest": str(manifest_path.resolve()),
+        "role": role,
+        "deep": deep,
+        "allow_state_drift": allow_state_drift,
+        "seeds": checked_seeds,
+        "states": checked_states,
+    }
 
 
 def main() -> int:
@@ -138,9 +156,10 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--role", choices=("linkedin", "employer", "enrichment", "all"), required=True)
     parser.add_argument("--deep", action="store_true", help="also run SQLite integrity and state hash checks")
+    parser.add_argument("--allow-state-drift", action="store_true", help="allow mutable producer state size/hash changes while retaining schema validation")
     args = parser.parse_args()
     try:
-        result = validate_manifest(args.manifest.resolve(), args.role, deep=args.deep)
+        result = validate_manifest(args.manifest.resolve(), args.role, deep=args.deep, allow_state_drift=args.allow_state_drift)
     except (OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))

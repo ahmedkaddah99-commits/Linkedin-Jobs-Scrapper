@@ -37,7 +37,6 @@ function text(value) {
 }
 
 const INTERNAL_JOB_KEYS = new Set([
-  "source",
   "source_ats",
   "source_observation_id",
   "observation_url",
@@ -283,6 +282,24 @@ function descriptionSummary(description) {
   return normalized.length > 190 ? `${normalized.slice(0, 187)}…` : normalized;
 }
 
+function isLinkedInJobDetailUrl(value) {
+  try {
+    const parsed = new URL(text(value));
+    const host = text(parsed.hostname).toLowerCase().replace(/^www\./, "");
+    return (host === "linkedin.com" || host.endsWith(".linkedin.com"))
+      && parsed.pathname.toLowerCase().startsWith("/jobs/view/");
+  } catch {
+    return false;
+  }
+}
+
+function approvedApplyUrl(job) {
+  const value = text(job.apply_url || job.direct_apply_url);
+  if (!value || isLinkedInJobDetailUrl(value)) return "";
+  if (text(job.source).toLowerCase() === "linkedin" && text(job.easy_apply_status).toLowerCase() !== "false") return "";
+  return value;
+}
+
 export function evaluationLabel(evaluation = {}) {
   const status = text(evaluation.status).toLowerCase();
   if (status === "eligible") return "Eligible match";
@@ -297,7 +314,10 @@ export function evaluationLabel(evaluation = {}) {
 }
 
 export function toPersonalizedJobView(job = {}) {
-  const safeJob = stripInternalJobFields(job);
+  const safeJob = stripInternalJobFields({
+    ...job,
+    source: job.source || job.source_ats || "",
+  });
   const id = text(safeJob.canonical_job_id || safeJob.posting_id);
   const company = unknown(safeJob.company, "Unknown company");
   const experienceLevel = unknown(safeJob.experience_level);
@@ -311,7 +331,9 @@ export function toPersonalizedJobView(job = {}) {
     ? safeJob.match_intelligence
     : (evaluation.match_intelligence && typeof evaluation.match_intelligence === "object" ? evaluation.match_intelligence : {});
   const companyDetail = safeJob.company_detail && typeof safeJob.company_detail === "object" ? safeJob.company_detail : {};
-  const companyProfile = companyDetail.profile && typeof companyDetail.profile === "object" ? companyDetail.profile : {};
+  const companyProfile = companyDetail.profile && typeof companyDetail.profile === "object"
+    ? companyDetail.profile
+    : (safeJob.company_profile && typeof safeJob.company_profile === "object" ? safeJob.company_profile : {});
   const languages = Array.isArray(safeJob.languages) ? safeJob.languages.map(text).filter(Boolean) : [];
   const unknownFields = Array.isArray(evaluation.unknown_fields) ? evaluation.unknown_fields.map(text).filter(Boolean) : [];
   const applicantIntelligence = safeJob.applicant_intelligence && typeof safeJob.applicant_intelligence === "object" ? safeJob.applicant_intelligence : {};
@@ -321,12 +343,19 @@ export function toPersonalizedJobView(job = {}) {
   const applicantLabel = Number.isFinite(Number(exactApplicantCount))
     ? `${Number(exactApplicantCount).toLocaleString()} applicants`
     : text(latestApplicants.label) || (applicantIntelligence.state === "available" ? "Applicant data available in Runr Pro" : "Unknown");
+  const applyUrl = approvedApplyUrl(safeJob);
+  const companyLogoUrl = text(companyProfile.logo_url || companyProfile.fields?.logo?.value);
+  const companyMonogram = text(companyProfile.monogram);
   return {
     ...safeJob,
     id,
     company,
     companyDetail,
     companyProfile,
+    companyLogoUrl,
+    companyMonogram,
+    source: text(safeJob.source) || null,
+    sourceJobId: text(safeJob.source_job_id) || null,
     title: unknown(safeJob.title, "Untitled job"),
     location: unknown(safeJob.location),
     experienceLevel,
@@ -339,7 +368,8 @@ export function toPersonalizedJobView(job = {}) {
     languages,
     postedAt: safeJob.posted_at || safeJob.first_seen_at || safeJob.last_verified_at || "",
     lastVerifiedAt: safeJob.last_verified_at || "",
-    applyUrl: text(safeJob.apply_url),
+    applyUrl,
+    directApplyUrl: applyUrl,
     lifecycleState: unknown(safeJob.lifecycle_state),
     userState: text(safeJob.user_state) || "none",
     evaluation,

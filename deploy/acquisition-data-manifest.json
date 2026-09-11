@@ -56,6 +56,30 @@
       "startup_validation": "exact SHA-256, 118-column contract, and required eligibility columns"
     },
     {
+      "logical_name": "linkedin_pagination_report",
+      "repo_path": null,
+      "server_path": "/srv/runr/shared/inputs/linkedin_endpoint_pagination_validation.json",
+      "format": "JSON pagination evidence",
+      "bytes": 67015,
+      "sha256": "5e3b67346bc05e42575f709c55c381c58bcec837e53e4c2bacf03220aa1d9bea",
+      "committed_in_git": false,
+      "restore_separately": true,
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/linkedin_endpoint_pagination_validation.json",
+      "startup_validation": "exact SHA-256, endpoint match, numeric page step, and bounded maximum start"
+    },
+    {
+      "logical_name": "linkedin_filters_report",
+      "repo_path": null,
+      "server_path": "/srv/runr/shared/inputs/linkedin_guest_endpoint_filter_validation.json",
+      "format": "JSON filter evidence",
+      "bytes": 25198,
+      "sha256": "697f739ac636c208b19f2fe515ff3f73f82eb89c65354f4e43d121dd82353d2e",
+      "committed_in_git": false,
+      "restore_separately": true,
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-acquisition-snapshots/rc023-20260908/feature-worktree-recovery/jobs-urls-preserved/Jobs-Urls/linkedin_guest_endpoint_filter_validation.json",
+      "startup_validation": "exact SHA-256, endpoint match, and only explicitly SUPPORTED filters enabled"
+    },
+    {
       "logical_name": "rc005_reconciled_source_eligibility_manifest",
       "repo_path": null,
       "server_path": "/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json",
@@ -176,7 +200,7 @@
     {
       "path": "scripts/master_linkedin_jobs_catalog.py",
       "classification": "canonical_producer",
-      "runtime_command": "python scripts/master_linkedin_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/master_linkedin_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state",
       "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
       "required_state_databases": ["linkedin_authoritative_state"],
       "required_output_directories": ["/srv/runr/exports/linkedin"],
@@ -189,7 +213,7 @@
     {
       "path": "scripts/master_employer_jobs_catalog.py",
       "classification": "canonical_producer",
-      "runtime_command": "python scripts/master_employer_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/master_employer_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
       "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
       "required_state_databases": ["employer_state"],
       "required_output_directories": ["/srv/runr/exports/employer"],
@@ -202,7 +226,7 @@
     {
       "path": "scripts/build_master_jobs_catalog.py",
       "classification": "canonical_publication_builder",
-      "runtime_command": "python scripts/build_master_jobs_catalog.py --linkedin-csv /srv/runr/exports/linkedin/master_linkedin_jobs.csv --employer-csv /srv/runr/exports/employer/master_employer_jobs.csv --output /srv/runr/exports/combined/master_jobs.csv",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/build_master_jobs_catalog.py --linkedin-csv /srv/runr/exports/linkedin/master_linkedin_jobs.csv --employer-csv /srv/runr/exports/employer/master_employer_jobs.csv --output /srv/runr/exports/combined/master_jobs.csv",
       "required_input_files": ["linkedin_catalog_export", "employer_catalog_export"],
       "required_state_databases": [],
       "required_output_directories": ["/srv/runr/exports/combined"],
@@ -215,7 +239,7 @@
     {
       "path": "scripts/run_manifested_linkedin.py",
       "classification": "production_wrapper",
-      "runtime_command": "python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state --pagination-report /srv/runr/shared/inputs/linkedin_endpoint_pagination_validation.json --filters-report /srv/runr/shared/inputs/linkedin_guest_endpoint_filter_validation.json",
       "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
       "required_state_databases": ["linkedin_authoritative_state"],
       "required_output_directories": ["/srv/runr/exports/linkedin"],
@@ -228,7 +252,7 @@
     {
       "path": "scripts/run_manifested_employer.py",
       "classification": "production_wrapper",
-      "runtime_command": "python scripts/run_manifested_employer.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/run_manifested_employer.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/employer --state-dir /srv/runr/state/employer --require-existing-state",
       "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
       "required_state_databases": ["employer_state"],
       "required_output_directories": ["/srv/runr/exports/employer"],
@@ -239,9 +263,48 @@
       "startup_validation": "manifest loader plus role validation"
     },
     {
+      "path": "deploy/restore-acquisition-states.sh",
+      "classification": "versioned_state_restore_and_activation",
+      "runtime_command": "/opt/runr/deploy/restore-acquisition-states.sh",
+      "required_input_files": ["company_registry_canonical", "linkedin_pagination_report", "linkedin_filters_report"],
+      "required_state_databases": ["linkedin_authoritative_state", "employer_state"],
+      "required_output_directories": ["/srv/runr/state/versions", "/srv/runr/state/active"],
+      "environment_variables": ["RUNR_ACQUISITION_INPUT_ROOT", "RUNR_ACQUISITION_RAW_STATE_ROOT", "RUNR_ACQUISITION_STATE_ROOT_PHYSICAL", "RUNR_SOURCE_VERSION"],
+      "committed_in_git": true,
+      "restore_separately": false,
+      "schema_checks": ["immutable seed hashes", "SQLite integrity and producer tables", "canonical crosswalk report", "atomic active-release switch"],
+      "startup_validation": "deploy/validate_acquisition_runtime.py before canonicalization"
+    },
+    {
+      "path": "deploy/run-acquisition-source.sh",
+      "classification": "independent_source_service_wrapper",
+      "runtime_command": "/opt/runr/deploy/run-acquisition-source.sh linkedin|employer",
+      "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar", "linkedin_pagination_report", "linkedin_filters_report"],
+      "required_state_databases": ["linkedin_authoritative_state", "employer_state"],
+      "required_output_directories": ["/srv/runr/exports/linkedin", "/srv/runr/exports/employer", "/srv/runr/exports/receipts"],
+      "environment_variables": ["RUNR_ACQUISITION_MAX_REQUESTS", "RUNR_LINKEDIN_MAX_REQUESTS", "RUNR_EMPLOYER_MAX_REQUESTS", "RUNR_LINKEDIN_PAGINATION_REPORT", "RUNR_LINKEDIN_FILTERS_REPORT"],
+      "committed_in_git": true,
+      "restore_separately": false,
+      "schema_checks": ["positive total/per-source cap contract", "source lock and receipt", "state drift-tolerant schema validation before provider requests"],
+      "startup_validation": "deploy/validate_acquisition_runtime.py with immutable seed checks and mutable state drift allowed"
+    },
+    {
+      "path": "deploy/run-acquisition-publisher.sh",
+      "classification": "independent_publisher_service_wrapper",
+      "runtime_command": "/opt/runr/deploy/run-acquisition-publisher.sh",
+      "required_input_files": ["rc005_reconciled_source_eligibility_manifest"],
+      "required_state_databases": ["linkedin_authoritative_state", "employer_state"],
+      "required_output_directories": ["/srv/runr/exports/receipts"],
+      "environment_variables": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "RUNR_DATA_DIR", "RUNR_COMPANY_IDENTITY_CROSSWALK"],
+      "committed_in_git": true,
+      "restore_separately": false,
+      "schema_checks": ["source states read-only", "publication policy v2 completeness gate", "durable delivery receipt"],
+      "startup_validation": "publisher preserves last valid head on failure"
+    },
+    {
       "path": "scripts/audit_employer_coverage.py",
       "classification": "supporting_read_only_audit",
-      "runtime_command": "python scripts/audit_employer_coverage.py --state-db /srv/runr/state/employer/master_employer_jobs_state.db --output /srv/runr/exports/employer/coverage-audit.json",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/audit_employer_coverage.py --state-db /srv/runr/state/employer/master_employer_jobs_state.db --output /srv/runr/exports/employer/coverage-audit.json",
       "required_input_files": [],
       "required_state_databases": ["employer_state"],
       "required_output_directories": ["/srv/runr/exports/employer"],
@@ -254,7 +317,7 @@
     {
       "path": "scripts/run_linkedin_company_id_resolution.py",
       "classification": "supporting_enrichment_not_first_start",
-      "runtime_command": "python scripts/run_linkedin_company_id_resolution.py --input /srv/runr/shared/inputs/company_registry_canonical.csv --output /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --state-dir /srv/runr/state/enrichment/linkedin_id_resolution",
+      "runtime_command": "/opt/runr/.venv/bin/python scripts/run_linkedin_company_id_resolution.py --input /srv/runr/shared/inputs/company_registry_canonical.csv --output /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --state-dir /srv/runr/state/enrichment/linkedin_id_resolution",
       "required_input_files": ["company_registry_canonical"],
       "required_state_databases": ["linkedin_id_resolution_state"],
       "required_output_directories": ["/srv/runr/shared/inputs"],

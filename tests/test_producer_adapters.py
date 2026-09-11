@@ -210,6 +210,22 @@ def test_missing_fields_are_unknown_and_zero_job_state_is_empty(tmp_path) -> Non
         state.close()
 
 
+def test_linkedin_subdomain_view_url_is_kept_as_rejected_apply_evidence() -> None:
+    observation = adapt_linkedin_job(
+        {
+            "canonical_company_id": "company-acme",
+            "linkedin_job_id": "42",
+            "linkedin_job_url": "https://www.linkedin.com/jobs/view/42",
+            "apply_url_canonical": "https://jobs.linkedin.com/jobs/view/42",
+            "easy_apply_status": "false",
+        },
+        cycle_id="cycle",
+    )
+
+    assert observation.apply_url == "https://jobs.linkedin.com/jobs/view/42"
+    assert observation.apply_type == "linkedin_job_detail"
+
+
 def test_batches_are_bounded_and_replay_is_idempotent() -> None:
     first = adapt_linkedin_job(
         {

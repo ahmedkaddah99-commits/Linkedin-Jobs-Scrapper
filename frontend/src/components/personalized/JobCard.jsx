@@ -16,7 +16,7 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
     <article className="preview-job-card">
       <div className="preview-job-card__topline">
         <div className="preview-company-mark" aria-hidden="true">
-          {job.company.slice(0, 1)}
+          {job.companyLogoUrl ? <img alt="" src={job.companyLogoUrl} /> : (job.companyMonogram || job.company.slice(0, 1))}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

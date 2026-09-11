@@ -80,6 +80,8 @@ REASON_MISSING_APPLICATION_URL = "missing_application_url"
 REASON_INVALID_APPLICATION_URL = "invalid_application_url"
 REASON_TRACKING_ONLY_APPLICATION_URL = "tracking_only_application_url"
 REASON_LISTING_FALLBACK_APPLICATION_URL = "listing_fallback_application_url"
+REASON_EASY_APPLY_NOT_SUPPORTED = "easy_apply_not_supported"
+REASON_UNRESOLVED_APPLICATION_METHOD = "unresolved_application_method"
 
 # Description
 REASON_MISSING_DESCRIPTION = "missing_description"
@@ -118,6 +120,8 @@ REASON_CODES = (
     REASON_INVALID_APPLICATION_URL,
     REASON_TRACKING_ONLY_APPLICATION_URL,
     REASON_LISTING_FALLBACK_APPLICATION_URL,
+    REASON_EASY_APPLY_NOT_SUPPORTED,
+    REASON_UNRESOLVED_APPLICATION_METHOD,
     REASON_MISSING_DESCRIPTION,
     REASON_PLACEHOLDER_DESCRIPTION,
     REASON_INSUFFICIENT_DESCRIPTION,
@@ -150,6 +154,8 @@ _REASON_STATUS = {
     REASON_INVALID_APPLICATION_URL: STATUS_INVALID,
     REASON_TRACKING_ONLY_APPLICATION_URL: STATUS_INVALID,
     REASON_LISTING_FALLBACK_APPLICATION_URL: STATUS_INVALID,
+    REASON_EASY_APPLY_NOT_SUPPORTED: STATUS_INVALID,
+    REASON_UNRESOLVED_APPLICATION_METHOD: STATUS_INVALID,
     REASON_MISSING_DESCRIPTION: STATUS_MISSING_REQUIRED,
     REASON_PLACEHOLDER_DESCRIPTION: STATUS_PLACEHOLDER,
     REASON_INSUFFICIENT_DESCRIPTION: STATUS_INVALID,
@@ -340,7 +346,7 @@ def is_insufficient_description(value: Any, *, min_chars: int = 80) -> bool:
 
 def _hostname(url: str) -> str:
     try:
-        return (urlparse(url).netloc or "").lower().lstrip("www.")
+        return (urlparse(url).hostname or "").lower().removeprefix("www.")
     except ValueError:
         return ""
 
@@ -363,7 +369,17 @@ def is_linkedin_job_detail_url(value: Any) -> bool:
     if not canonical:
         return False
     parsed = urlparse(canonical)
-    return _hostname(canonical) == "linkedin.com" and parsed.path.casefold().startswith("/jobs/view/")
+    host = _hostname(canonical)
+    return (host == "linkedin.com" or host.endswith(".linkedin.com")) and parsed.path.casefold().startswith("/jobs/view/")
+
+
+def _is_linkedin_source(record: Mapping[str, Any]) -> bool:
+    source = _norm(_first(record, "source", "source_ats", "connector"))
+    return source in {"linkedin", "linkedin jobs", "linkedin source"} or source.startswith("linkedin ")
+
+
+def _easy_apply_status(record: Mapping[str, Any]) -> str:
+    return _norm(_first(record, "easy_apply_status", "easyApply", "easy_apply"))
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -687,6 +703,18 @@ def validate_job_for_publication(
     else:
         field_states["application_url"] = "present"
 
+    # LinkedIn's embedded Easy Apply flow is intentionally not a supported
+    # Runr destination.  An unknown method is equally unsafe: a producer row
+    # must establish that it has an employer/ATS destination before it can be
+    # shown to a customer.  Keep this check independent from the URL check so
+    # rejected source evidence retains both facts.
+    if _is_linkedin_source(record):
+        easy_apply_status = _easy_apply_status(record)
+        if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
+            mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
+        elif easy_apply_status != "false":
+            mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
+
     # --- description ---
     description = _description(record)
     if not description:
@@ -816,6 +844,8 @@ __all__ = [
     "RECOMMENDED_FIELDS",
     "REQUIRED_FIELDS",
     "REASON_CODES",
+    "REASON_EASY_APPLY_NOT_SUPPORTED",
+    "REASON_UNRESOLVED_APPLICATION_METHOD",
     "STATUSES",
     "STATUS_INVALID",
     "STATUS_MISSING_REQUIRED",

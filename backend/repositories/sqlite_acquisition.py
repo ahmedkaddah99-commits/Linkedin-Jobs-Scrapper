@@ -4954,6 +4954,240 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         return self._run_transaction(write)
 
+    def apply_company_identity_crosswalk(
+        self,
+        *,
+        mapping_by_identity: Mapping[str, str],
+        merge_receipts: Iterable[Mapping[str, Any]] = (),
+        canonical_rows: Iterable[Mapping[str, Any]] = (),
+        provenance: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a reviewed crosswalk and repoint mutable company state.
+
+        Source observations, identity evidence, and URL occurrences are
+        append-only historical evidence and are deliberately not rewritten.
+        Their company IDs remain resolvable through
+        ``company_identity_crosswalk``.  Mutable projections are repointed in
+        one transaction and loser records remain explicitly quarantined until
+        a later retention decision.
+        """
+
+        mapping = {
+            str(key).strip(): str(value).strip()
+            for key, value in mapping_by_identity.items()
+            if str(key).strip() and str(value).strip()
+        }
+        receipts = [dict(item) for item in merge_receipts if isinstance(item, Mapping)]
+        registry_rows = [dict(item) for item in canonical_rows if isinstance(item, Mapping)]
+        now = utc_now_iso()
+        source_provenance = dict(provenance or {})
+
+        def table_exists(connection, table: str) -> bool:
+            return connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone() is not None
+
+        def columns(connection, table: str) -> set[str]:
+            return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+
+        def count_company(connection, company_id: str) -> dict[str, int]:
+            result: dict[str, int] = {}
+            for table in (
+                "canonical_jobs", "canonical_company_profiles", "canonical_company_urls",
+                "company_identity_keys", "company_identity_evidence",
+                "canonical_company_url_occurrences", "company_logo_enrichments",
+                "company_enrichment_targets", "company_enrichment_attempts",
+            ):
+                if not table_exists(connection, table):
+                    continue
+                table_columns = columns(connection, table)
+                column = "company_id" if "company_id" in table_columns else ""
+                if column:
+                    result[table] = int(connection.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {column}=?", (company_id,)
+                    ).fetchone()[0])
+            return result
+
+        def merge(connection) -> dict[str, Any]:
+            for identity_key, winner_company_id in sorted(mapping.items()):
+                identity_type = identity_key.split(":", 1)[0] or "external"
+                crosswalk_id = "company_crosswalk_" + hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:24]
+                connection.execute(
+                    """
+                    INSERT INTO company_identity_crosswalk (
+                        crosswalk_id, source_identity_key, winner_company_id,
+                        identity_type, provenance_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_identity_key) DO UPDATE SET
+                        winner_company_id=excluded.winner_company_id,
+                        identity_type=excluded.identity_type,
+                        provenance_json=excluded.provenance_json,
+                        updated_at=excluded.updated_at
+                    """,
+                    (crosswalk_id, identity_key, winner_company_id, identity_type,
+                     _json(source_provenance), now, now),
+                )
+
+            # Create IDs allocated by the registry crosswalk before repointing
+            # jobs or enrichment projections to them.
+            rows_by_id: dict[str, Mapping[str, Any]] = {}
+            for row in registry_rows:
+                company_id = str(row.get("canonical_CompanyID") or row.get("canonical_company_id") or "").strip()
+                if company_id and company_id not in rows_by_id:
+                    rows_by_id[company_id] = row
+            for company_id, row in rows_by_id.items():
+                existing = connection.execute(
+                    "SELECT 1 FROM canonical_companies WHERE company_id=?", (company_id,)
+                ).fetchone()
+                if existing:
+                    continue
+                name = " ".join(str(row.get("company_name") or "Unknown employer").split()).strip() or "Unknown employer"
+                connection.execute(
+                    """
+                    INSERT INTO canonical_companies (
+                        company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at
+                    ) VALUES (?, ?, 'employer', ?, ?, ?)
+                    """,
+                    (company_id, name, str(row.get("website_url") or row.get("linkedin_company_url") or ""), now, now),
+                )
+
+            merged: list[dict[str, Any]] = []
+            for receipt in receipts:
+                winner = str(receipt.get("winner_company_id") or "").strip()
+                loser = str(receipt.get("loser_company_id") or "").strip()
+                if not winner or not loser or winner == loser:
+                    continue
+                before = count_company(connection, loser)
+                loser_company = connection.execute(
+                    "SELECT canonical_name, provenance_url FROM canonical_companies WHERE company_id=?",
+                    (loser,),
+                ).fetchone()
+
+                # These tables are mutable projections.  They are handled
+                # explicitly where a uniqueness conflict needs a deterministic
+                # winner; immutable source evidence is intentionally absent.
+                if table_exists(connection, "canonical_jobs"):
+                    connection.execute("UPDATE canonical_jobs SET company_id=? WHERE company_id=?", (winner, loser))
+                if table_exists(connection, "company_enrichment_targets"):
+                    if connection.execute("SELECT 1 FROM company_enrichment_targets WHERE company_id=?", (winner,)).fetchone():
+                        connection.execute("DELETE FROM company_enrichment_targets WHERE company_id=?", (loser,))
+                    else:
+                        connection.execute("UPDATE company_enrichment_targets SET company_id=? WHERE company_id=?", (winner, loser))
+                if table_exists(connection, "company_link_candidates"):
+                    connection.execute("UPDATE company_link_candidates SET candidate_company_id=? WHERE candidate_company_id=?", (winner, loser))
+                if table_exists(connection, "acquisition_quality_events"):
+                    connection.execute("UPDATE acquisition_quality_events SET company_id=? WHERE company_id=?", (winner, loser))
+
+                if table_exists(connection, "canonical_company_profiles"):
+                    loser_profile = connection.execute(
+                        "SELECT profile_json, logo_object_key, logo_source_url, logo_content_hash, logo_content_type, logo_verified_at FROM canonical_company_profiles WHERE company_id=?",
+                        (loser,),
+                    ).fetchone()
+                    winner_profile = connection.execute(
+                        "SELECT profile_json, logo_object_key, logo_source_url, logo_content_hash, logo_content_type, logo_verified_at FROM canonical_company_profiles WHERE company_id=?",
+                        (winner,),
+                    ).fetchone()
+                    if loser_profile and not winner_profile:
+                        connection.execute("UPDATE canonical_company_profiles SET company_id=?, updated_at=? WHERE company_id=?", (winner, now, loser))
+                    elif loser_profile and winner_profile:
+                        loser_json = _decode(loser_profile[0], {})
+                        winner_json = _decode(winner_profile[0], {})
+                        if isinstance(loser_json, Mapping) and isinstance(winner_json, Mapping):
+                            merged_profile = dict(loser_json)
+                            merged_profile.update(dict(winner_json))
+                            connection.execute(
+                                "UPDATE canonical_company_profiles SET profile_json=?, logo_object_key=?, logo_source_url=?, logo_content_hash=?, logo_content_type=?, logo_verified_at=?, updated_at=? WHERE company_id=?",
+                                (_json(merged_profile), str(winner_profile[1] or loser_profile[1] or ""), str(winner_profile[2] or loser_profile[2] or ""), str(winner_profile[3] or loser_profile[3] or ""), str(winner_profile[4] or loser_profile[4] or ""), str(winner_profile[5] or loser_profile[5] or ""), now, winner),
+                            )
+                        connection.execute("DELETE FROM canonical_company_profiles WHERE company_id=?", (loser,))
+
+                if table_exists(connection, "company_identity_keys"):
+                    for row in connection.execute("SELECT identity_key FROM company_identity_keys WHERE company_id=?", (loser,)).fetchall():
+                        identity_key = str(row[0] or "")
+                        if connection.execute("SELECT 1 FROM company_identity_keys WHERE identity_key=? AND company_id=?", (identity_key, winner)).fetchone():
+                            connection.execute("DELETE FROM company_identity_keys WHERE identity_key=? AND company_id=?", (identity_key, loser))
+                        else:
+                            connection.execute("UPDATE company_identity_keys SET company_id=?, updated_at=? WHERE identity_key=?", (winner, now, identity_key))
+
+                if table_exists(connection, "canonical_company_aliases"):
+                    for row in connection.execute("SELECT alias_id, alias_key FROM canonical_company_aliases WHERE company_id=?", (loser,)).fetchall():
+                        if connection.execute("SELECT 1 FROM canonical_company_aliases WHERE alias_key=? AND company_id=?", (row[1], winner)).fetchone():
+                            connection.execute("DELETE FROM canonical_company_aliases WHERE alias_id=?", (row[0],))
+                        else:
+                            connection.execute("UPDATE canonical_company_aliases SET company_id=?, updated_at=? WHERE alias_id=?", (winner, now, row[0]))
+
+                if table_exists(connection, "canonical_company_urls"):
+                    for row in connection.execute("SELECT company_url_id, url_type, canonical_url FROM canonical_company_urls WHERE company_id=?", (loser,)).fetchall():
+                        if connection.execute("SELECT 1 FROM canonical_company_urls WHERE company_id=? AND url_type=? AND canonical_url=?", (winner, row[1], row[2])).fetchone():
+                            connection.execute("DELETE FROM canonical_company_urls WHERE company_url_id=?", (row[0],))
+                        else:
+                            connection.execute("UPDATE canonical_company_urls SET company_id=?, updated_at=? WHERE company_url_id=?", (winner, now, row[0]))
+
+                # Preserve the loser's display name as explicit alias evidence
+                # before removing the duplicate company row itself.
+                if loser_company is not None and table_exists(connection, "canonical_company_aliases"):
+                    loser_name = str(loser_company[0] or "").strip()
+                    if loser_name:
+                        alias_key = f"merged-company:{loser}"
+                        connection.execute(
+                            """
+                            INSERT OR IGNORE INTO canonical_company_aliases (
+                                alias_id, company_id, alias_key, alias_display, source,
+                                confidence, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, 'company_identity_crosswalk', 'verified', ?, ?)
+                            """,
+                            (f"company_alias_{hashlib.sha256(alias_key.encode('utf-8')).hexdigest()[:24]}", winner, alias_key, loser_name, now, now),
+                        )
+
+                for table, unique_columns in (
+                    ("company_enrichment_attempts", ("cycle_key",)),
+                    ("company_logo_enrichments", ("provider", "content_hash", "rule_version")),
+                ):
+                    if not table_exists(connection, table):
+                        continue
+                    table_columns = columns(connection, table)
+                    if "company_id" not in table_columns or not all(column in table_columns for column in unique_columns):
+                        continue
+                    id_column = "attempt_id" if "attempt_id" in table_columns else "logo_enrichment_id"
+                    for row in connection.execute(f"SELECT {id_column}, {', '.join(unique_columns)} FROM {table} WHERE company_id=?", (loser,)).fetchall():
+                        predicates = " AND ".join(f"{column}=?" for column in unique_columns)
+                        values = tuple(row[index + 1] for index in range(len(unique_columns)))
+                        if connection.execute(f"SELECT 1 FROM {table} WHERE company_id=? AND {predicates}", (winner, *values)).fetchone():
+                            connection.execute(f"DELETE FROM {table} WHERE {id_column}=?", (row[0],))
+                        else:
+                            connection.execute(f"UPDATE {table} SET company_id=? WHERE {id_column}=?", (winner, row[0]))
+
+                # All mutable dependents now point at the winner. Immutable
+                # source evidence keeps the old ID and is resolved through the
+                # durable crosswalk, so only the duplicate company row is
+                # removed here.
+                connection.execute("DELETE FROM canonical_companies WHERE company_id=?", (loser,))
+                after = count_company(connection, loser)
+                receipt_id = str(receipt.get("receipt_id") or f"company_merge_{hashlib.sha256(f'{loser}:{winner}'.encode('utf-8')).hexdigest()[:24]}")
+                connection.execute(
+                    """
+                    INSERT INTO company_merge_receipts (
+                        receipt_id, winner_company_id, loser_company_id, basis,
+                        before_counts_json, after_counts_json, provenance_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(loser_company_id, winner_company_id) DO UPDATE SET
+                        basis=excluded.basis, before_counts_json=excluded.before_counts_json,
+                        after_counts_json=excluded.after_counts_json, provenance_json=excluded.provenance_json
+                    """,
+                    (receipt_id, winner, loser, str(receipt.get("basis") or "strong_identity_crosswalk"),
+                     _json(before), _json(after), _json({**source_provenance, "identity_keys": receipt.get("identity_keys") or [receipt.get("identity_key", "")]}), now),
+                )
+                merged.append({"winner_company_id": winner, "loser_company_id": loser, "before": before, "after": after})
+
+            return {
+                "status": "completed",
+                "crosswalk_rows": len(mapping),
+                "merge_receipts": len(merged),
+                "merged": merged,
+            }
+
+        return self._run_transaction(merge)
+
     def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
         company_id = str(company_id or "").strip()
         if not company_id:

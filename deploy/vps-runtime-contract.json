@@ -51,8 +51,18 @@
     },
     "acquisition": {
       "unit": "runr-acquisition-worker.service",
-      "collector_unit": "runr-acquisition-cycle.timer",
-      "collector_entrypoint": "/opt/runr/deploy/run-acquisition-cycle.sh",
+      "collector_units": [
+        "runr-acquisition-linkedin.timer",
+        "runr-acquisition-employer.timer",
+        "runr-acquisition-publisher.timer"
+      ],
+      "collector_entrypoints": [
+        "/opt/runr/deploy/run-acquisition-source.sh linkedin",
+        "/opt/runr/deploy/run-acquisition-source.sh employer",
+        "/opt/runr/deploy/run-acquisition-publisher.sh"
+      ],
+      "state_restore_entrypoint": "/opt/runr/deploy/restore-acquisition-states.sh",
+      "active_state_root": "/srv/runr/state/active",
       "service_user": "runr-acquisition",
       "worker_role": "acquisition",
       "environment_file": "/opt/runr/.env.acquisition",

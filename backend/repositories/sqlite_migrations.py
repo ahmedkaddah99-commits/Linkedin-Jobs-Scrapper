@@ -3169,6 +3169,40 @@ def _apply_phase_a_scheduler_fencing_migration(connection: DatabaseConnection) -
     )
 
 
+def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
+    """Persist source-identity resolution and transactional company merges."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS company_identity_crosswalk (
+            crosswalk_id TEXT PRIMARY KEY,
+            source_identity_key TEXT NOT NULL UNIQUE,
+            winner_company_id TEXT NOT NULL,
+            identity_type TEXT NOT NULL,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_identity_crosswalk_winner
+            ON company_identity_crosswalk(winner_company_id, identity_type);
+
+        CREATE TABLE IF NOT EXISTS company_merge_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            winner_company_id TEXT NOT NULL,
+            loser_company_id TEXT NOT NULL,
+            basis TEXT NOT NULL,
+            before_counts_json TEXT NOT NULL DEFAULT '{}',
+            after_counts_json TEXT NOT NULL DEFAULT '{}',
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(loser_company_id, winner_company_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_merge_receipts_winner
+            ON company_merge_receipts(winner_company_id, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3488,5 +3522,10 @@ MIGRATIONS = (
         "058_customer_task_queue",
         "Create the user-scoped durable queue for slow customer operations.",
         _apply_customer_task_queue_migration,
+    ),
+    Migration.from_callable(
+        "059_company_identity_crosswalk",
+        "Persist deterministic company identity crosswalks and merge receipts.",
+        _apply_company_identity_crosswalk_migration,
     ),
 )

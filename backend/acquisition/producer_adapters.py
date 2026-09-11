@@ -16,6 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from backend.acquisition.job_publication_completeness import is_linkedin_job_detail_url
 from backend.acquisition.unified_mapping import map_job_fields
 
 
@@ -105,6 +106,8 @@ def _observed_at(record: Mapping[str, Any], fallback: str) -> str:
 
 
 def _application_type(record: Mapping[str, Any], source: str, apply_url: str) -> str:
+    if source == SOURCE_LINKEDIN and is_linkedin_job_detail_url(apply_url):
+        return "linkedin_job_detail"
     explicit = _first(record, "apply_type", "application_type", "apply_url_type")
     if explicit != UNKNOWN:
         return explicit
@@ -159,6 +162,7 @@ def _mapping_input(
         {
             "classification": {
                 "linkedin_easy_apply": "linkedin_easy_apply",
+                "linkedin_job_detail": "job_detail_only",
                 "linkedin_external": "employer_application",
                 "employer_ats": "ats_application",
                 "employer_site": "employer_application",

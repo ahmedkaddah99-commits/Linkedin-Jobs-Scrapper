@@ -1,9 +1,12 @@
+import json
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
+from backend.application.personalized_jobs_service import _approved_apply_url
 from backend.bootstrap import create_backend
 from tests.test_phase_c_personalized_jobs import _seed_catalog
 
@@ -39,6 +42,33 @@ class PhaseDJobsCutoverTests(unittest.TestCase):
 
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["jobs"][0]["posting_id"], "job-a")
+
+    def test_public_apply_projection_rejects_linkedin_view_and_easy_apply_destinations(self):
+        linkedin_view = {
+            "apply_url": "https://jobs.linkedin.com/jobs/view/4313287713",
+            "source_ats": "linkedin",
+            "version_payload_json": json.dumps({
+                "application_destination": {
+                    "status": "verified",
+                    "resolved_url": "https://jobs.linkedin.com/jobs/view/4313287713",
+                },
+                "easy_apply_status": "false",
+            }),
+        }
+        easy_apply = {
+            "apply_url": "https://jobs.acme.example/jobs/4313287713/apply",
+            "source_ats": "linkedin",
+            "version_payload_json": json.dumps({
+                "application_destination": {
+                    "status": "verified",
+                    "resolved_url": "https://jobs.acme.example/jobs/4313287713/apply",
+                },
+                "easy_apply_status": "true",
+            }),
+        }
+
+        self.assertIsNone(_approved_apply_url(linkedin_view))
+        self.assertIsNone(_approved_apply_url(easy_apply))
 
 
 if __name__ == "__main__":

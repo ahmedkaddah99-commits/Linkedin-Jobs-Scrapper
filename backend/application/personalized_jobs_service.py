@@ -28,6 +28,7 @@ from backend.application.production_rollout import catalog_user_access
 from backend.application.company_logo import cache_logo, deterministic_monogram, validate_logo
 from backend.acquisition.phase_g import build_applicant_competition, build_priority
 from backend.acquisition.quality import DIRECT_APPLICATION_CLASSIFICATIONS, classify_job_url, posted_age_hours
+from backend.acquisition.job_publication_completeness import is_linkedin_job_detail_url
 from backend.acquisition.public_contract import serialize_public_contract
 
 
@@ -138,6 +139,13 @@ def _approved_apply_url(row: Mapping[str, Any]) -> str | None:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    if is_linkedin_job_detail_url(value):
+        return None
+    if _norm(row.get("source_ats")) == "linkedin":
+        easy_apply_status = _norm(payload.get("easy_apply_status"))
+        application_method = _norm(payload.get("application_method") or (destination or {}).get("application_method"))
+        if easy_apply_status != "false" or application_method in {"linkedin easy apply", "easy apply", "embedded apply"}:
+            return None
     if value == _text(row.get("observation_url")):
         return None
     return value
@@ -548,6 +556,8 @@ def _job_projection(
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
         "company_id": str(row.get("company_id") or ""),
         "company": _text(row.get("company")) or None,
+        "source": _text(row.get("source_ats") or payload.get("source")) or None,
+        "source_job_id": _text(row.get("source_job_id") or payload.get("source_job_id")) or None,
         "company_detail": {
             "company_id": str(row.get("company_id") or ""),
             "name": _text(row.get("company")) or None,
@@ -573,6 +583,7 @@ def _job_projection(
         "last_verified_at": _text(row.get("last_verified_at")) or None,
         "canonical_url": canonical_url,
         "apply_url": apply_url,
+        "direct_apply_url": apply_url,
         "user_facing_url": _text(application_destination.get("user_facing_url") or canonical_url) or None,
         "job_detail_url": _text(payload.get("job_detail_url") or canonical_url) or None,
         "application_method": _text(payload.get("application_method") or application_destination.get("application_method")) or "unknown",
@@ -630,6 +641,12 @@ def _job_card_projection(
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
         "company_id": str(row.get("company_id") or ""),
         "company": _text(row.get("company")) or None,
+        "company_profile": {
+            "logo_url": _text(row.get("company_logo_source_url")) or None,
+            "monogram": deterministic_monogram(_text(row.get("company"))),
+        },
+        "source": _text(row.get("source_ats") or payload.get("source")) or None,
+        "source_job_id": _text(row.get("source_job_id") or payload.get("source_job_id")) or None,
         "title": title or None,
         "location": location or None,
         "work_arrangement": arrangement,
@@ -641,8 +658,10 @@ def _job_card_projection(
         "posted_age_hours": posted_age_hours(posted_at),
         "first_seen_at": _text(row.get("first_seen_at")) or None,
         "last_verified_at": _text(row.get("last_verified_at")) or None,
+        "last_seen_at": _text(row.get("last_seen_at")) or None,
         "canonical_url": _text(row.get("canonical_url")) or None,
         "apply_url": _approved_apply_url(row) or None,
+        "direct_apply_url": _approved_apply_url(row) or None,
         "user_facing_url": _text(application_destination.get("user_facing_url") or row.get("canonical_url")) or None,
         "job_detail_url": _text(payload.get("job_detail_url") or row.get("canonical_url")) or None,
         "application_method": _text(payload.get("application_method") or application_destination.get("application_method")) or "unknown",

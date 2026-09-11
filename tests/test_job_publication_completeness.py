@@ -343,6 +343,57 @@ def test_linkedin_view_url_is_rejected_even_when_legacy_apply_field_is_used():
     assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
 
 
+def test_linkedin_subdomain_view_url_is_rejected_as_an_application_destination():
+    record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        apply_url="https://jobs.linkedin.com/jobs/view/4313287713",
+        application_url="https://jobs.linkedin.com/jobs/view/4313287713",
+        application_destination={
+            "destination_type": "dedicated_apply",
+            "resolved_url": "https://jobs.linkedin.com/jobs/view/4313287713",
+        },
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+
+
+def test_linkedin_easy_apply_true_is_rejected_even_with_an_external_url():
+    record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="true",
+        apply_url="https://jobs.acme.example/4313287713/apply",
+        application_url="https://jobs.acme.example/4313287713/apply",
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert "easy_apply_not_supported" in _codes(result)
+
+
+def test_linkedin_easy_apply_unknown_is_rejected_as_unresolved_method():
+    record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="unknown",
+        apply_url="https://jobs.acme.example/4313287713/apply",
+        application_url="https://jobs.acme.example/4313287713/apply",
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_INVALID
+    assert "unresolved_application_method" in _codes(result)
+
+
+def test_employer_application_method_remains_valid_when_easy_apply_field_is_absent():
+    result = validate_job_for_publication(
+        _complete_record(source="employer_site", source_ats="greenhouse"),
+        now=NOW,
+        company_registry=REGISTRY,
+    )
+    assert result.publishable
+
+
 def test_careers_listing_url_is_still_rejected():
     record = _complete_record(
         apply_url="https://acme.example-careers.com/careers",

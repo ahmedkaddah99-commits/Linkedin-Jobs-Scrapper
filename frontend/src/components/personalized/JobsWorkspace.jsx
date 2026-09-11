@@ -51,7 +51,7 @@ function JobListCard({ isSaved, job, onSave, onSelect, selected }) {
   const arrangement = job.workArrangement === "onsite" ? "On-site" : job.workArrangement === "unknown" ? "Unknown" : job.workArrangement;
   return <article className={["jobs-list-card", selected ? "is-selected" : ""].join(" ")}>
     <button className="jobs-list-card__select" onClick={onSelect} type="button">
-      <div className="jobs-list-card__company"><CompanyMark company={job.company} monogram={job.companyProfile?.monogram} /><span>{job.company}</span></div>
+      <div className="jobs-list-card__company"><CompanyMark company={job.company} logoUrl={job.companyLogoUrl} monogram={job.companyMonogram || job.companyProfile?.monogram} /><span>{job.company}</span></div>
       <strong>{job.title}</strong>
       <div className="jobs-list-card__meta">
         <span><Icon>calendar_month</Icon>{job.experienceLevel}</span>
@@ -218,7 +218,7 @@ function OriginalPosting({ job }) {
 
 function FullPostingPanel({ job }) {
   return <section className="jobs-full-posting">
-    <div className="jobs-full-posting__metadata"><InfoRow icon="category" label="Category">{job.category}</InfoRow><InfoRow icon="language" label="Languages">{job.languages.length ? job.languages.join(", ") : "Unknown"}</InfoRow><InfoRow icon="verified_user" label="Work authorization">{job.work_authorization || "Unknown"}</InfoRow><InfoRow icon="business_center" label="Sponsorship">{job.sponsorship || "Unknown"}</InfoRow><InfoRow icon="schedule" label="Lifecycle">{job.lifecycleState}</InfoRow><InfoRow icon="update" label="Last verified">{formatJobDate(job.lastVerifiedAt)}</InfoRow></div>
+    <div className="jobs-full-posting__metadata"><InfoRow icon="category" label="Category">{job.category}</InfoRow><InfoRow icon="language" label="Languages">{job.languages.length ? job.languages.join(", ") : "Unknown"}</InfoRow><InfoRow icon="verified_user" label="Work authorization">{job.work_authorization || "Unknown"}</InfoRow><InfoRow icon="business_center" label="Sponsorship">{job.sponsorship || "Unknown"}</InfoRow><InfoRow icon="public" label="Source">{job.source || "Unknown"}</InfoRow><InfoRow icon="schedule" label="Lifecycle">{job.lifecycleState}</InfoRow><InfoRow icon="update" label="Last verified">{formatJobDate(job.lastVerifiedAt)}</InfoRow></div>
     <StructuredDescription job={job} />
     <OriginalPosting job={job} />
     <p className="jobs-apply-note">Apply opens only the verified employer or official ATS destination for this job.</p>
@@ -262,7 +262,7 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
   return <div className="jobs-overview-grid">
     <main className="jobs-overview-main">
       <div className="jobs-detail-heading"><span className="jobs-season-pill">{formatJobDate(job.postedAt)}</span><h1>{job.title}</h1><p>{job.company}</p><div className="jobs-detail-heading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button aria-label="Share job" className="jobs-round-button" onClick={() => navigator.clipboard?.writeText(window.location.href)} type="button"><Icon>share</Icon></button><button aria-label="Report job" className="jobs-round-button" onClick={onReport} type="button"><Icon>flag</Icon></button><button aria-label={job.userState === "hidden" ? "Restore job" : "Hide job"} className={["jobs-round-button", job.userState === "hidden" ? "is-selected" : ""].join(" ")} onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon></button></div></div>
-      <div className="jobs-company-inline"><CompanyMark company={job.company} large monogram={job.companyProfile?.monogram} /><div><h2>{job.company}</h2><p>{job.companyDetail?.entity_kind || "Employer"} · {job.location}</p></div></div>
+      <div className="jobs-company-inline"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram || job.companyProfile?.monogram} /><div><h2>{job.company}</h2><p>{job.companyDetail?.entity_kind || "Employer"} · {job.location}</p></div></div>
       <p className="jobs-role-summary">{job.descriptionSummary}</p>
       <div className="jobs-info-grid"><InfoRow icon="payments" label="Salary">{job.salaryLabel}</InfoRow><InfoRow icon="work_history" label="Job type">{job.employmentType}</InfoRow><InfoRow icon="location_on" label="Location">{job.location}</InfoRow><InfoRow icon={job.workArrangement === "remote" ? "wifi" : "business"} label="Workplace">{arrangement}</InfoRow></div>
       <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Category</h3><p>How this role is grouped</p></div></div><div className="jobs-category-card"><Icon>category</Icon><div><strong>{job.category}</strong><span>Role category</span></div><small>Verified</small></div></section>

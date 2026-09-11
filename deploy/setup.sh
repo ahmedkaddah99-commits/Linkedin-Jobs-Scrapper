@@ -51,6 +51,8 @@ sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 \
   /var/lib/runr/acquisition-data \
   /srv/runr/state \
   /srv/runr/exports \
+  /srv/runr/state/locks \
+  /srv/runr/exports/receipts \
   /srv/runr/backups
 sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 /var/log/runr/acquisition
 sudo install -d -o root -g runr-acquisition -m 0750 /srv/runr/shared/inputs
@@ -86,12 +88,22 @@ sudo cp "$INSTALL_DIR/deploy/systemd/runr-worker.service" /etc/systemd/system/ru
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-worker.service" /etc/systemd/system/runr-acquisition-worker.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-cycle.service" /etc/systemd/system/runr-acquisition-cycle.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-cycle.timer" /etc/systemd/system/runr-acquisition-cycle.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.service" /etc/systemd/system/runr-acquisition-linkedin.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.timer" /etc/systemd/system/runr-acquisition-linkedin.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.service" /etc/systemd/system/runr-acquisition-employer.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer" /etc/systemd/system/runr-acquisition-employer.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.service" /etc/systemd/system/runr-acquisition-publisher.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer" /etc/systemd/system/runr-acquisition-publisher.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-frontend.service" /etc/systemd/system/runr-frontend.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr.target" /etc/systemd/system/runr.target
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-journald.conf" /etc/systemd/journald.conf.d/runr.conf
 
 sudo systemctl daemon-reload
 sudo systemctl restart systemd-journald
+# The legacy combined timer must not compete with the independent source
+# timers. Keep its unit available for compatibility, but disable any old
+# activation left by a previous release.
+sudo systemctl disable --now runr-acquisition-cycle.timer 2>/dev/null || true
 sudo systemctl enable runr.target
 
 cat <<'EOF'
