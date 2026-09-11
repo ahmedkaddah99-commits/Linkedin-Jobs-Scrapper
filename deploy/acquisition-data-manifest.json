@@ -1,7 +1,7 @@
 {
   "schema_version": "runr.acquisition.data-manifest.v1",
   "branch": "deployment/render-turso-r2",
-  "release_commit": "39d15b8f3da9870b03102525ed03431194edaad6",
+  "release_commit": "9ba1d5515b30d48914e54acbd0a017748e769d4f",
   "generated_at": "2026-09-08T00:00:00Z",
   "policy": {
     "no_live_acquisition": true,

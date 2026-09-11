@@ -3,7 +3,7 @@
   "primary_mechanism": "systemd",
   "release": {
     "branch": "deployment/render-turso-r2",
-    "commit": "record-the-approved-commit-at-deployment",
+    "commit": "9ba1d5515b30d48914e54acbd0a017748e769d4f",
     "compatibility_contract": "runr-contract-v1",
     "migration_owner": "api-pre-deploy-only",
     "dependency_lock": "requirements-linux.txt"
