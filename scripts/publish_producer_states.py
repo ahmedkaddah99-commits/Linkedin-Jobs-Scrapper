@@ -289,6 +289,7 @@ def run_delivery(
     pilot_only: bool = False,
     company_ids: Iterable[str] | None = None,
     identity_crosswalk: Mapping[str, str] | None = None,
+    identity_crosswalk_document: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     manifest = load_manifest(manifest_path)
     crosswalk = dict(identity_crosswalk or {})
@@ -333,6 +334,20 @@ def run_delivery(
         employer_connection.close()
 
     store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+    crosswalk_result: dict[str, object] = {}
+    if identity_crosswalk_document:
+        crosswalk_report = identity_crosswalk_document.get("report")
+        crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
+        crosswalk_result = store.apply_company_identity_crosswalk(
+            mapping_by_identity=crosswalk,
+            merge_receipts=crosswalk_report.get("merge_receipts") or [],
+            canonical_rows=crosswalk_report.get("canonical_rows") or [],
+            provenance={
+                "actor": "producer_state_publisher",
+                "schema_version": _text(identity_crosswalk_document.get("schema_version")),
+                "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256")),
+            },
+        )
     source_specs = (
         (SOURCE_LINKEDIN, linkedin_companies, linkedin_groups, linkedin_marker),
         (SOURCE_EMPLOYER, employer_companies, employer_groups, employer_marker),
@@ -378,6 +393,7 @@ def run_delivery(
         "source_version": source_version,
         "sources": {},
         "unresolved_observations": 0,
+        "identity_crosswalk": crosswalk_result,
     }
 
     def deliver_company(
@@ -522,10 +538,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     identity_crosswalk = {}
+    identity_crosswalk_document: Mapping[str, object] | None = None
     if args.identity_crosswalk:
         document = json.loads(args.identity_crosswalk.resolve().read_text(encoding="utf-8"))
         if not isinstance(document, Mapping):
             raise ValueError("identity crosswalk must be a JSON object")
+        identity_crosswalk_document = document
         identity_crosswalk = {
             _text(key): _text(value)
             for key, value in (document.get("mapping_by_identity") or {}).items()
@@ -540,6 +558,7 @@ def main(argv: list[str] | None = None) -> int:
         pilot_only=bool(args.pilot_only),
         company_ids=args.company_ids,
         identity_crosswalk=identity_crosswalk,
+        identity_crosswalk_document=identity_crosswalk_document,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0
