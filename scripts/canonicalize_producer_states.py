@@ -16,6 +16,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -78,10 +80,54 @@ def _json_load(value: Any) -> dict[str, Any]:
     return dict(decoded) if isinstance(decoded, dict) else {}
 
 
-def _canonical_payload(payload: dict[str, Any], crosswalk: CompanyCrosswalk) -> tuple[dict[str, Any], bool]:
-    identity_keys = [key for _identity_type, key in _strong_identity_keys(payload)]
-    resolved = resolve_company_id(payload, crosswalk)
-    old_id = str(payload.get("canonical_CompanyID") or payload.get("canonical_company_id") or "").strip()
+def _identity_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose nested employer company identity without changing source shape."""
+
+    merged = dict(payload)
+    nested = payload.get("company")
+    if isinstance(nested, Mapping):
+        for key, value in nested.items():
+            current = str(merged.get(key) or "").strip().casefold()
+            if not current or current in {"//", "-", "null", "none", "nan", "n/a", "na", "unknown", "pending"}:
+                merged[str(key)] = value
+    return merged
+
+
+def _url_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").casefold().removeprefix("www.")
+    if not host:
+        return ""
+    path = "/" + "/".join(part for part in parsed.path.split("/") if part)
+    return f"{host}{path.rstrip('/')}".casefold()
+
+
+def _canonical_payload(
+    payload: dict[str, Any],
+    crosswalk: CompanyCrosswalk,
+    fallback_company_id: str = "",
+) -> tuple[dict[str, Any], bool]:
+    identity_payload = _identity_payload(payload)
+    identity_keys = [key for _identity_type, key in _strong_identity_keys(identity_payload)]
+    old_id = str(
+        identity_payload.get("canonical_CompanyID")
+        or identity_payload.get("canonical_company_id")
+        or ""
+    ).strip()
+    if identity_keys or old_id:
+        resolved = resolve_company_id(identity_payload, crosswalk)
+    elif fallback_company_id:
+        resolved = fallback_company_id
+    else:
+        resolved = resolve_company_id(identity_payload, crosswalk)
     evidence = {
         "schema_version": SCHEMA_VERSION,
         "original_company_id": old_id,
@@ -93,9 +139,54 @@ def _canonical_payload(payload: dict[str, Any], crosswalk: CompanyCrosswalk) -> 
     updated["canonical_CompanyID"] = resolved
     updated["canonical_company_id"] = resolved
     updated["source_identity_crosswalk"] = evidence
+    nested = payload.get("company")
+    if isinstance(nested, Mapping):
+        nested_updated = dict(nested)
+        nested_updated["canonical_CompanyID"] = resolved
+        nested_updated["canonical_company_id"] = resolved
+        updated["company"] = nested_updated
     if old_id and old_id != resolved:
         updated["canonical_company_id_before"] = old_id
     return updated, updated != payload
+
+
+def _employer_company_context(connection: sqlite3.Connection, crosswalk: CompanyCrosswalk) -> tuple[dict[str, str], dict[str, str]]:
+    """Build exact producer-company-key and URL context for employer job rows."""
+
+    by_key: dict[str, str] = {}
+    by_url: dict[str, str] = {}
+    rows = connection.execute("SELECT company_key, payload_json FROM companies").fetchall()
+    for row in rows:
+        company_key = str(row[0] or "").strip()
+        payload = _json_load(row[1])
+        candidate = _identity_payload(payload)
+        explicit_id = str(
+            candidate.get("canonical_CompanyID")
+            or candidate.get("canonical_company_id")
+            or ""
+        ).strip()
+        strong_keys = _strong_identity_keys(candidate)
+        if strong_keys or explicit_id:
+            resolved = resolve_company_id(candidate, crosswalk)
+        elif company_key and "://" not in company_key:
+            # master_employer_jobs_catalog uses canonical IDs as non-URL keys.
+            resolved = company_key
+        else:
+            resolved = resolve_company_id(candidate, crosswalk)
+        if not resolved:
+            continue
+        if company_key:
+            by_key[company_key] = resolved
+        for field in ("website_url", "linkedin_company_url", "source_company_url"):
+            url = _url_key(candidate.get(field))
+            if url:
+                previous = by_url.get(url)
+                if previous is None or previous == resolved:
+                    by_url[url] = resolved
+                else:
+                    # Ambiguous exact URLs are deliberately not used as a job fallback.
+                    by_url.pop(url, None)
+    return by_key, by_url
 
 
 def _integrity_and_counts(path: Path) -> dict[str, Any]:
@@ -143,25 +234,60 @@ def _backup_state(source: Path, destination: Path, kind: str, crosswalk: Company
         else:
             raise ValueError(f"unknown producer state kind: {kind}")
 
+        employer_company_by_key: dict[str, str] = {}
+        employer_company_by_url: dict[str, str] = {}
+        if kind == "employer":
+            employer_company_by_key, employer_company_by_url = _employer_company_context(
+                destination_connection,
+                crosswalk,
+            )
+
         for table, payload_column in targets:
             columns = {str(row[1]) for row in destination_connection.execute(f"PRAGMA table_info(\"{table}\")")}
-            if payload_column not in columns:
-                continue
             # These producer tables are ordinary rowid tables.  Using rowid
             # avoids accidentally updating multiple observations that share a
             # component of a composite primary key.
             select_key = "rowid"
-            rows = destination_connection.execute(
-                f"SELECT {select_key}, \"{payload_column}\" FROM \"{table}\""
-            ).fetchall()
-            for key, raw_payload in rows:
-                updated_payload, changed = _canonical_payload(_json_load(raw_payload), crosswalk)
-                if changed:
-                    destination_connection.execute(
-                        f"UPDATE \"{table}\" SET \"{payload_column}\"=? WHERE \"{select_key}\"=?",
-                        (json.dumps(updated_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")), key),
+            if payload_column and payload_column in columns:
+                if kind == "employer" and table == "companies":
+                    rows = destination_connection.execute(
+                        f"SELECT {select_key}, company_key, \"{payload_column}\" FROM \"{table}\""
+                    ).fetchall()
+                elif kind == "employer" and table == "jobs":
+                    rows = destination_connection.execute(
+                        f"SELECT {select_key}, source_key, \"{payload_column}\" FROM \"{table}\""
+                    ).fetchall()
+                else:
+                    rows = destination_connection.execute(
+                        f"SELECT {select_key}, \"{payload_column}\" FROM \"{table}\""
+                    ).fetchall()
+                for row in rows:
+                    key = row[0]
+                    if kind == "employer" and table == "companies":
+                        raw_payload = row[2]
+                        fallback_company_id = employer_company_by_key.get(str(row[1] or "").strip(), "")
+                    elif kind == "employer" and table == "jobs":
+                        raw_payload = row[2]
+                        source_key = str(row[1] or "").strip()
+                        payload = _json_load(raw_payload)
+                        source_url = _url_key(payload.get("source_company_url"))
+                        fallback_company_id = employer_company_by_url.get(source_url, "")
+                        if not fallback_company_id and source_key:
+                            fallback_company_id = employer_company_by_key.get(source_key.split("|", 1)[0], "")
+                    else:
+                        raw_payload = row[1]
+                        fallback_company_id = ""
+                    updated_payload, changed = _canonical_payload(
+                        _json_load(raw_payload),
+                        crosswalk,
+                        fallback_company_id,
                     )
-                    updated_rows += 1
+                    if changed:
+                        destination_connection.execute(
+                            f"UPDATE \"{table}\" SET \"{payload_column}\"=? WHERE \"{select_key}\"=?",
+                            (json.dumps(updated_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")), key),
+                        )
+                        updated_rows += 1
 
             for direct_column in ("canonical_company_id", "canonical_CompanyID", "primary_canonical_company_id"):
                 if direct_column not in columns:
@@ -179,7 +305,31 @@ def _backup_state(source: Path, destination: Path, kind: str, crosswalk: Company
                             or source_id
                         )
                     else:
-                        resolved = resolve_company_id(row_map, crosswalk)
+                        fallback_company_id = ""
+                        if kind == "employer":
+                            if table == "companies":
+                                fallback_company_id = employer_company_by_key.get(
+                                    str(row_map.get("company_key") or "").strip(),
+                                    "",
+                                )
+                            elif table == "jobs":
+                                source_url = _url_key(row_map.get("source_company_url"))
+                                fallback_company_id = employer_company_by_url.get(source_url, "")
+                                if not fallback_company_id:
+                                    source_key = str(row_map.get("source_key") or "").strip()
+                                    fallback_company_id = employer_company_by_key.get(
+                                        source_key.split("|", 1)[0],
+                                        "",
+                                    )
+                        old_id = str(
+                            row_map.get("canonical_CompanyID")
+                            or row_map.get("canonical_company_id")
+                            or ""
+                        ).strip()
+                        if fallback_company_id and not old_id and not _strong_identity_keys(row_map):
+                            resolved = fallback_company_id
+                        else:
+                            resolved = resolve_company_id(row_map, crosswalk)
                     destination_connection.execute(
                         f"UPDATE \"{table}\" SET \"{direct_column}\"=? WHERE \"{select_key}\"=?",
                         (resolved, row_map[select_key]),
