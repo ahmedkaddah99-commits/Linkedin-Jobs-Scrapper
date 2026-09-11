@@ -23,8 +23,8 @@ if [ "$source_name" = "linkedin" ]; then
   output_dir="$export_root/linkedin"
   state_role="linkedin"
   source_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-20}"
-  pagination_report="${RUNR_LINKEDIN_PAGINATION_REPORT:-/srv/runr/shared/inputs/linkedin_endpoint_pagination_validation.json}"
-  filters_report="${RUNR_LINKEDIN_FILTERS_REPORT:-/srv/runr/shared/inputs/linkedin_guest_endpoint_filter_validation.json}"
+  pagination_report="${RUNR_LINKEDIN_PAGINATION_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_endpoint_pagination_validation.json}"
+  filters_report="${RUNR_LINKEDIN_FILTERS_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_guest_endpoint_filter_validation.json}"
 else
   state_dir="${RUNR_EMPLOYER_STATE_DIR:-$state_root/employer}"
   output_dir="$export_root/employer"

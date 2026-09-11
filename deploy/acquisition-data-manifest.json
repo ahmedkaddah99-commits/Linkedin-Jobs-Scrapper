@@ -58,7 +58,7 @@
     {
       "logical_name": "linkedin_pagination_report",
       "repo_path": null,
-      "server_path": "/srv/runr/shared/inputs/linkedin_endpoint_pagination_validation.json",
+      "server_path": "/srv/runr/shared/inputs/linkedin/linkedin_endpoint_pagination_validation.json",
       "format": "JSON pagination evidence",
       "bytes": 67015,
       "sha256": "5e3b67346bc05e42575f709c55c381c58bcec837e53e4c2bacf03220aa1d9bea",
@@ -70,7 +70,7 @@
     {
       "logical_name": "linkedin_filters_report",
       "repo_path": null,
-      "server_path": "/srv/runr/shared/inputs/linkedin_guest_endpoint_filter_validation.json",
+      "server_path": "/srv/runr/shared/inputs/linkedin/linkedin_guest_endpoint_filter_validation.json",
       "format": "JSON filter evidence",
       "bytes": 25198,
       "sha256": "697f739ac636c208b19f2fe515ff3f73f82eb89c65354f4e43d121dd82353d2e",
