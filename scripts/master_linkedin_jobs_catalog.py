@@ -279,8 +279,7 @@ class AdaptiveConcurrency:
         self.maximum = max(self.minimum, int(maximum))
         self._workers = min(self.maximum, max(self.minimum, int(initial)))
         self._provider_limits = {
-            str(provider): max(1, min(self.maximum, int(limit)))
-            for provider, limit in (provider_limits or {}).items()
+            str(provider): max(1, min(self.maximum, int(limit))) for provider, limit in (provider_limits or {}).items()
         }
         self._healthy_observations = 0
         self._condition = threading.Condition()
@@ -317,11 +316,9 @@ class AdaptiveConcurrency:
     def acquire(self, provider: str = "default") -> None:
         provider = str(provider or "default")
         with self._condition:
-            while (
-                self._in_flight >= self._workers
-                or self._provider_in_flight.get(provider, 0)
-                >= self._provider_limits.get(provider, self._workers)
-            ):
+            while self._in_flight >= self._workers or self._provider_in_flight.get(
+                provider, 0
+            ) >= self._provider_limits.get(provider, self._workers):
                 self._condition.wait()
             self._in_flight += 1
             self._provider_in_flight[provider] = self._provider_in_flight.get(provider, 0) + 1
@@ -374,11 +371,13 @@ class WebshareProxy:
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    input_csv: Path = Path("Company-Urls/Master-Company-Url/cleaned/Master-Company-Url-canonical_cleaned_linkedin_ids.csv")
+    input_csv: Path = Path(
+        "Company-Urls/Master-Company-Url/cleaned/Master-Company-Url-canonical_cleaned_linkedin_ids.csv"
+    )
     output_dir: Path = Path("Jobs-Urls/master linkedin jobs url")
     state_dir: Path | None = None
-    pagination_report: Path = Path("Jobs-Urls/linkedin_endpoint_pagination_validation.json")
-    filters_report: Path = Path("Jobs-Urls/linkedin_guest_endpoint_filter_validation.json")
+    pagination_report: Path | None = None
+    filters_report: Path | None = None
     mode: str = "full"
     workers: int = 10
     detail_workers: int = 5
@@ -426,9 +425,24 @@ class CompanyRunContext:
         self.recovery_partition_statuses = self.recovery_partition_statuses or {}
 
 
-
 def _clean(value: object) -> str:
     return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+
+
+def is_linkedin_host(raw_url: object) -> bool:
+    """Return True when ``raw_url`` is hosted on linkedin.com or any subdomain.
+
+    This treats ``www.linkedin.com``, ``de.linkedin.com``, ``uk.linkedin.com``,
+    and similar localized hosts as LinkedIn-owned.  It is intentionally strict:
+    any other host is considered external.
+    """
+
+    raw = _clean(raw_url)
+    if not raw:
+        return False
+    parsed = urlsplit(raw if "://" in raw else f"https://{raw}")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
 
 
 def canonical_company_slug(raw_url: object) -> str:
@@ -438,8 +452,7 @@ def canonical_company_slug(raw_url: object) -> str:
     if not raw:
         return ""
     parsed = urlsplit(raw if "://" in raw else f"https://{raw}")
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if not host or not (host == "linkedin.com" or host.endswith(".linkedin.com")):
+    if not is_linkedin_host(raw):
         return ""
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) != 2 or parts[0].lower() != "company":
@@ -465,8 +478,14 @@ def canonical_apply_url(raw_url: object) -> str:
         redirected = params.get("url") or params.get("redirect")
         if redirected:
             return canonical_apply_url(redirected)
-    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key not in _TRACKING_PARAMS and not key.lower().startswith("utm_")]
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/") or "/", urlencode(query), ""))
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key not in _TRACKING_PARAMS and not key.lower().startswith("utm_")
+    ]
+    return urlunsplit(
+        (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/") or "/", urlencode(query), "")
+    )
 
 
 def _is_placeholder(value: str) -> bool:
@@ -531,7 +550,11 @@ def load_source_company_groups(
                 item.linkedin_company_url,
             ),
         )
-        ids = tuple(dict.fromkeys(row.canonical_company_id for row in unique_rows if not _is_placeholder(row.canonical_company_id)))
+        ids = tuple(
+            dict.fromkeys(
+                row.canonical_company_id for row in unique_rows if not _is_placeholder(row.canonical_company_id)
+            )
+        )
         names = tuple(dict.fromkeys(row.company_name for row in unique_rows if row.company_name))
         urls = tuple(dict.fromkeys(row.linkedin_company_url for row in unique_rows))
         primary_url = urls[0] if urls else ""
@@ -634,16 +657,29 @@ def evaluate_ownership(
     source_ids = group.source_slug_to_canonical_ids.get(slug, ())
     if source_ids:
         if len(source_ids) != 1:
-            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "source_slug_maps_to_multiple_canonical_ids")
+            return OwnershipDecision(
+                COMPANY_MATCH_AMBIGUOUS, observed_canonical, "source_slug_maps_to_multiple_canonical_ids"
+            )
         status = COMPANY_MATCH_EXACT_PRIMARY if slug == group.primary_slug else COMPANY_MATCH_EXACT_PRIMARY
-        return OwnershipDecision(status, observed_canonical, "primary_slug_match" if slug == group.primary_slug else "source_mapping_slug_match", source_ids[0])
+        return OwnershipDecision(
+            status,
+            observed_canonical,
+            "primary_slug_match" if slug == group.primary_slug else "source_mapping_slug_match",
+            source_ids[0],
+        )
     if slug in aliases:
         if len(group.source_company_ids) > 1:
-            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "verified_alias_has_ambiguous_source_ownership")
-        return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, observed_canonical, "verified_alias_match", group.primary_canonical_company_id)
+            return OwnershipDecision(
+                COMPANY_MATCH_AMBIGUOUS, observed_canonical, "verified_alias_has_ambiguous_source_ownership"
+            )
+        return OwnershipDecision(
+            COMPANY_MATCH_VERIFIED_ALIAS, observed_canonical, "verified_alias_match", group.primary_canonical_company_id
+        )
     if slug:
         if len(group.source_company_ids) > 1:
-            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "unverified_slug_has_ambiguous_source_ownership")
+            return OwnershipDecision(
+                COMPANY_MATCH_AMBIGUOUS, observed_canonical, "unverified_slug_has_ambiguous_source_ownership"
+            )
         return OwnershipDecision(COMPANY_MATCH_ALIAS_PENDING, observed_canonical, "unverified_company_slug")
     return OwnershipDecision(COMPANY_MATCH_CARD_DETAIL_MISMATCH, observed_canonical, "company_url_mismatch")
 
@@ -756,10 +792,14 @@ def load_webshare_proxies(
         load_project_dotenv()
     except Exception:
         pass
-    explicit_file = str(proxy_file or os.environ.get("WEBSHARE_PROXY_FILE") or os.environ.get("WEBSHARE_PROXY_LIST_FILE") or "").strip()
+    explicit_file = str(
+        proxy_file or os.environ.get("WEBSHARE_PROXY_FILE") or os.environ.get("WEBSHARE_PROXY_LIST_FILE") or ""
+    ).strip()
     if explicit_file:
         path = Path(explicit_file)
-        proxies = tuple(proxy for line in path.read_text(encoding="utf-8").splitlines() if (proxy := _proxy_from_line(line)))
+        proxies = tuple(
+            proxy for line in path.read_text(encoding="utf-8").splitlines() if (proxy := _proxy_from_line(line))
+        )
         if proxies:
             return proxies
     raw_proxy_list = os.environ.get("WEBSHARE_PROXIES", "")
@@ -821,16 +861,39 @@ def load_webshare_proxies(
                 "142.111.67.146:5611",
                 "191.96.254.138:6185",
             )
-            return tuple(_proxy_from_line(f"{host}:{username}:{password}") for host in fallback if _proxy_from_line(f"{host}:{username}:{password}"))
+            return tuple(
+                _proxy_from_line(f"{host}:{username}:{password}")
+                for host in fallback
+                if _proxy_from_line(f"{host}:{username}:{password}")
+            )
         raise ValueError("Webshare proxy API returned no usable proxies")
     return tuple(proxies)
 
 
 def _blocked_body(body: str) -> bool:
     lowered = str(body or "").lower()
-    if any(marker in lowered for marker in ("sign in to linkedin", "captcha", "verify you are human", "unusual traffic", "authwall", "checkpoint")):
+    if any(
+        marker in lowered
+        for marker in (
+            "sign in to linkedin",
+            "captcha",
+            "verify you are human",
+            "unusual traffic",
+            "authwall",
+            "checkpoint",
+        )
+    ):
         return True
-    return any(marker in lowered for marker in ("challenge-page", "challenge_page", "challenge-container", "challenge_container", "id=\"challenge\""))
+    return any(
+        marker in lowered
+        for marker in (
+            "challenge-page",
+            "challenge_page",
+            "challenge-container",
+            "challenge_container",
+            'id="challenge"',
+        )
+    )
 
 
 class WebshareTransport:
@@ -884,7 +947,9 @@ class WebshareTransport:
         }
         self._cooldown_until: dict[str, float] = {proxy.identifier: 0.0 for proxy in self.proxies}
         self._closed = False
-        self._proxy_locks = {proxy.identifier: threading.BoundedSemaphore(max(1, int(per_proxy_concurrency))) for proxy in self.proxies}
+        self._proxy_locks = {
+            proxy.identifier: threading.BoundedSemaphore(max(1, int(per_proxy_concurrency))) for proxy in self.proxies
+        }
 
     def _take_proxy(self) -> WebshareProxy | None:
         while True:
@@ -895,18 +960,14 @@ class WebshareTransport:
                 if self.max_requests is not None and self._request_count >= self.max_requests:
                     return None
                 now = time.monotonic()
-                available = [
-                    proxy
-                    for proxy in self.proxies
-                    if self._cooldown_until.get(proxy.identifier, 0.0) <= now
-                ]
+                available = [proxy for proxy in self.proxies if self._cooldown_until.get(proxy.identifier, 0.0) <= now]
                 if available:
                     proxy = available[self._next_proxy % len(available)]
                     self._next_proxy += 1
                     self._request_count += 1
-                    self._proxy_health[proxy.identifier]["request_count"] = int(
-                        self._proxy_health[proxy.identifier]["request_count"]
-                    ) + 1
+                    self._proxy_health[proxy.identifier]["request_count"] = (
+                        int(self._proxy_health[proxy.identifier]["request_count"]) + 1
+                    )
                     return proxy
                 wait_seconds = max(0.0, min(self._cooldown_until.values()) - now)
             if wait_seconds:
@@ -951,8 +1012,11 @@ class WebshareTransport:
                 cooldown_seconds = min(300.0, self.cooldown_base_seconds * (2 ** (failures - 1)))
                 self._cooldown_until[proxy.identifier] = time.monotonic() + cooldown_seconds
                 health["cooldown_until"] = (
-                    datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
-                ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds))
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
             else:
                 health["consecutive_failure_count"] = 0
                 self._cooldown_until[proxy.identifier] = 0.0
@@ -987,10 +1051,14 @@ class WebshareTransport:
                 with self._proxy_locks[proxy.identifier]:
                     session = self._session_for(proxy)
                     try:
-                        response = session.get(url, proxies={"http": proxy.url, "https": proxy.url}, timeout=self.timeout)
+                        response = session.get(
+                            url, proxies={"http": proxy.url, "https": proxy.url}, timeout=self.timeout
+                        )
                         elapsed = time.monotonic() - started
                         last = ResponseEnvelope(response.status_code, response.text, proxy.identifier, elapsed)
-                        should_retry = response.status_code == 429 or response.status_code >= 500 or _blocked_body(response.text)
+                        should_retry = (
+                            response.status_code == 429 or response.status_code >= 500 or _blocked_body(response.text)
+                        )
                     except requests.RequestException:
                         elapsed = time.monotonic() - started
                         last = ResponseEnvelope(0, "", proxy.identifier, elapsed, "network_error")
@@ -1060,7 +1128,9 @@ def parse_search_page(body: str) -> SearchPageResult:
         return SearchPageResult(blocked_reason="login_or_challenge", body_class="blocked")
     soup = BeautifulSoup(raw_body, "html.parser")
     visible_text = _clean(soup.get_text(" ", strip=True)).lower()
-    if soup.select_one(".jobs-search-no-results, .jobs-search__no-results") or re.search(r"\bno jobs found\b", visible_text):
+    if soup.select_one(".jobs-search-no-results, .jobs-search__no-results") or re.search(
+        r"\bno jobs found\b", visible_text
+    ):
         return SearchPageResult(is_usable=True, is_no_results=True, body_class="no_results")
 
     card_nodes = list(soup.select("li.job-card-container, li.base-card, .job-card-container"))
@@ -1165,25 +1235,20 @@ def parse_job_detail(linkedin_job_id: str, body: str) -> DetailRecord:
     apply_anchors = [anchor for anchor in soup.select("a[href]") if _is_apply_anchor(anchor)]
     # Prefer a real off-site destination when both an internal CTA and an
     # external application link are present.  A job detail URL by itself is
-    # not an application URL and must remain explicitly missing.
+    # not an application URL and must remain explicitly missing; localized
+    # LinkedIn hosts such as de.linkedin.com/jobs/view/ are still LinkedIn
+    # detail/listing URLs, not employer application destinations.
     apply_anchor = next(
-        (
-            anchor
-            for anchor in apply_anchors
-            if (urlsplit(_clean(anchor.get("href"))).hostname or "").lower()
-            not in {"", "linkedin.com", "www.linkedin.com"}
-        ),
-        apply_anchors[0] if apply_anchors else None,
+        (anchor for anchor in apply_anchors if not is_linkedin_host(_clean(anchor.get("href")))),
+        None,
     )
     raw_apply = _clean(apply_anchor.get("href")) if apply_anchor else ""
-    host = (urlsplit(raw_apply).hostname or "").lower()
-    if host and not host.endswith("linkedin.com"):
-        apply_source = "external"
-    elif apply_anchor:
-        apply_source = "linkedin"
-    else:
-        apply_source = ""
-    info_text = _clean(soup.select_one(".top-card-layout__entity-info").get_text(" ", strip=True) if soup.select_one(".top-card-layout__entity-info") else "")
+    apply_source = "external" if apply_anchor else ""
+    info_text = _clean(
+        soup.select_one(".top-card-layout__entity-info").get_text(" ", strip=True)
+        if soup.select_one(".top-card-layout__entity-info")
+        else ""
+    )
     applicant_match = re.search(r"([0-9][0-9,]*)\s+applicants?", info_text, flags=re.IGNORECASE)
     applicant_text = applicant_match.group(0) if applicant_match else ""
     posted_text, posted_at_estimated = _detail_posted_fields(soup, applicant_text)
@@ -1196,7 +1261,9 @@ def parse_job_detail(linkedin_job_id: str, body: str) -> DetailRecord:
     detail_text = _clean(soup.get_text(" ", strip=True)).lower()
     if "easy apply" in detail_text or "einfach bewerben" in detail_text:
         easy_apply = "true"
-    elif "offsite" in _clean(apply_anchor.get("data-tracking-control-name") if apply_anchor else "").lower() or "apply on company website" in detail_text:
+    elif apply_anchor:
+        # A real off-site employer/ATS anchor is publish-candidate evidence
+        # that this job is not Easy Apply.
         easy_apply = "false"
     else:
         easy_apply = "unknown"
@@ -1228,17 +1295,36 @@ def evaluate_card_detail_ownership(
     card = evaluate_ownership(card_url, group, verified_aliases)
     detail = evaluate_ownership(detail_url, group, verified_aliases)
     if not card.canonical_url or not detail.canonical_url:
-        return OwnershipDecision(COMPANY_MATCH_REJECTED, detail.canonical_url or card.canonical_url, "missing_card_or_detail_company_url")
+        return OwnershipDecision(
+            COMPANY_MATCH_REJECTED, detail.canonical_url or card.canonical_url, "missing_card_or_detail_company_url"
+        )
     if card.canonical_url != detail.canonical_url:
-        return OwnershipDecision(COMPANY_MATCH_CARD_DETAIL_MISMATCH, detail.canonical_url, "card_detail_company_url_mismatch")
+        return OwnershipDecision(
+            COMPANY_MATCH_CARD_DETAIL_MISMATCH, detail.canonical_url, "card_detail_company_url_mismatch"
+        )
     if card.status == COMPANY_MATCH_AMBIGUOUS or detail.status == COMPANY_MATCH_AMBIGUOUS:
         return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, detail.canonical_url, "card_or_detail_ownership_is_ambiguous")
     accepted = {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}
     if card.status in accepted and detail.status in accepted:
         if COMPANY_MATCH_VERIFIED_ALIAS in {card.status, detail.status}:
-            return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, detail.canonical_url, "card_detail_verified_alias_match", card.canonical_company_id or detail.canonical_company_id)
-        return OwnershipDecision(COMPANY_MATCH_EXACT_PRIMARY, detail.canonical_url, "card_detail_primary_match", card.canonical_company_id or detail.canonical_company_id)
-    return OwnershipDecision(COMPANY_MATCH_ALIAS_PENDING, detail.canonical_url, "card_detail_alias_pending_verification", card.canonical_company_id or detail.canonical_company_id)
+            return OwnershipDecision(
+                COMPANY_MATCH_VERIFIED_ALIAS,
+                detail.canonical_url,
+                "card_detail_verified_alias_match",
+                card.canonical_company_id or detail.canonical_company_id,
+            )
+        return OwnershipDecision(
+            COMPANY_MATCH_EXACT_PRIMARY,
+            detail.canonical_url,
+            "card_detail_primary_match",
+            card.canonical_company_id or detail.canonical_company_id,
+        )
+    return OwnershipDecision(
+        COMPANY_MATCH_ALIAS_PENDING,
+        detail.canonical_url,
+        "card_detail_alias_pending_verification",
+        card.canonical_company_id or detail.canonical_company_id,
+    )
 
 
 def load_pagination_evidence(path: str | Path, endpoint: str = SEARCH_ENDPOINT) -> PaginationEvidence:
@@ -1276,11 +1362,26 @@ _FILTER_PARAMETER_MAP = {
     "freshness": ("f_TPR", lambda value: str(value)),
     "job_type": (
         "f_JT",
-        {"full-time": "F", "part-time": "P", "contract": "C", "temporary": "T", "volunteer": "V", "internship": "I", "other": "O"}.__getitem__,
+        {
+            "full-time": "F",
+            "part-time": "P",
+            "contract": "C",
+            "temporary": "T",
+            "volunteer": "V",
+            "internship": "I",
+            "other": "O",
+        }.__getitem__,
     ),
     "experience": (
         "f_E",
-        {"internship": "1", "entry-level": "2", "associate": "3", "mid-senior": "4", "director": "5", "executive": "6"}.__getitem__,
+        {
+            "internship": "1",
+            "entry-level": "2",
+            "associate": "3",
+            "mid-senior": "4",
+            "director": "5",
+            "executive": "6",
+        }.__getitem__,
     ),
     "workplace": (
         "f_WT",
@@ -1296,7 +1397,11 @@ def build_recovery_partitions(path: str | Path, endpoint: str = SEARCH_ENDPOINT)
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid filter validation evidence: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("endpoint") != endpoint or payload.get("status") not in {"COMPLETE", "completed"}:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("endpoint") != endpoint
+        or payload.get("status") not in {"COMPLETE", "completed"}
+    ):
         raise ValueError("filter validation evidence is missing, incomplete, or for another endpoint")
     allowed_statuses = set(payload.get("enable_only_statuses") or ["SUPPORTED"])
     filters = payload.get("filters")
@@ -1364,7 +1469,10 @@ def classify_germany_location(raw_location: object) -> tuple[str, str]:
     foreign_hits = [term for term in _FOREIGN_TERMS if term in lowered]
     is_remote = "remote" in lowered or "work from home" in lowered
     if german_hits and foreign_hits:
-        return LOCATION_MULTI_LOCATION_INCLUDES_GERMANY, f"German location ({german_hits[0]}) and other location ({foreign_hits[0]})"
+        return (
+            LOCATION_MULTI_LOCATION_INCLUDES_GERMANY,
+            f"German location ({german_hits[0]}) and other location ({foreign_hits[0]})",
+        )
     if german_hits and is_remote and ("remote" in lowered or "from germany" in lowered):
         return LOCATION_REMOTE_GERMANY_ELIGIBLE, f"remote work explicitly permits Germany ({german_hits[0]})"
     if german_hits:
@@ -1495,7 +1603,9 @@ def detail_refresh_decision(
     volatile_stale = volatile_age_hours >= float(volatile_refresh_hours)
     if age_hours >= float(durable_refresh_hours):
         return DetailRefreshDecision(True, "durable_ttl_expired", volatile_stale)
-    return DetailRefreshDecision(False, "volatile_fields_stale_reused" if volatile_stale else "cache_hit_fresh", volatile_stale)
+    return DetailRefreshDecision(
+        False, "volatile_fields_stale_reused" if volatile_stale else "cache_hit_fresh", volatile_stale
+    )
 
 
 def union_job_ids(partitions: Iterable[Iterable[object]]) -> tuple[str, ...]:
@@ -2054,9 +2164,7 @@ class StateStore:
     def get_cursor(self) -> int:
         """Return the durable bounded-cycle selection cursor."""
         with self._lock:
-            row = self.connection.execute(
-                "SELECT cursor_index FROM collection_cursor WHERE id=1"
-            ).fetchone()
+            row = self.connection.execute("SELECT cursor_index FROM collection_cursor WHERE id=1").fetchone()
         return int(row[0]) if row else 0
 
     def set_cursor(self, index: int) -> None:
@@ -2069,7 +2177,9 @@ class StateStore:
                 (value, _utc_now()),
             )
 
-    def start_company_scan(self, run_id: str, group: SourceCompanyGroup, *, scan_id: str | None = None, started_at: str | None = None) -> str:
+    def start_company_scan(
+        self, run_id: str, group: SourceCompanyGroup, *, scan_id: str | None = None, started_at: str | None = None
+    ) -> str:
         scan_id = scan_id or uuid.uuid4().hex
         with self._lock, self.connection:
             existing = self.connection.execute(
@@ -2137,7 +2247,17 @@ class StateStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(run_id, linkedin_company_id, query_partition_type, page_start) DO UPDATE SET
                    status=excluded.status, job_ids_json=excluded.job_ids_json, body_hash=excluded.body_hash, detail_json=excluded.detail_json""",
-                (run_id, company_scan_id, linkedin_company_id, partition_type, int(page_start), status, json.dumps(ids), body_hash, json.dumps(detail or {})),
+                (
+                    run_id,
+                    company_scan_id,
+                    linkedin_company_id,
+                    partition_type,
+                    int(page_start),
+                    status,
+                    json.dumps(ids),
+                    body_hash,
+                    json.dumps(detail or {}),
+                ),
             )
             for card in cards:
                 self.connection.execute(
@@ -2145,7 +2265,9 @@ class StateStore:
                     (run_id, company_scan_id, linkedin_company_id, card.linkedin_job_id, json.dumps(card.__dict__)),
                 )
 
-    def successful_page_exists(self, run_id: str, linkedin_company_id: str, page_start: int, partition_type: str = "base") -> bool:
+    def successful_page_exists(
+        self, run_id: str, linkedin_company_id: str, page_start: int, partition_type: str = "base"
+    ) -> bool:
         with self._lock:
             row = self.connection.execute(
                 "SELECT 1 FROM search_pages WHERE run_id=? AND linkedin_company_id=? AND query_partition_type=? AND page_start=? AND status IN ('COMPLETE', 'COMPLETE_ZERO_CONFIRMED')",
@@ -2153,7 +2275,9 @@ class StateStore:
             ).fetchone()
         return row is not None
 
-    def page_job_ids(self, run_id: str, linkedin_company_id: str, page_start: int, partition_type: str = "base") -> tuple[str, ...]:
+    def page_job_ids(
+        self, run_id: str, linkedin_company_id: str, page_start: int, partition_type: str = "base"
+    ) -> tuple[str, ...]:
         with self._lock:
             row = self.connection.execute(
                 "SELECT job_ids_json FROM search_pages WHERE run_id=? AND linkedin_company_id=? AND query_partition_type=? AND page_start=?",
@@ -2172,7 +2296,9 @@ class StateStore:
 
     def finish_query_partition(self, partition_id: str, status: str) -> None:
         with self._lock, self.connection:
-            self.connection.execute("UPDATE query_partitions SET status=? WHERE query_partition_id=?", (status, partition_id))
+            self.connection.execute(
+                "UPDATE query_partitions SET status=? WHERE query_partition_id=?", (status, partition_id)
+            )
 
     def search_cards_for_run(self, run_id: str, linkedin_company_id: str) -> tuple[SearchCard, ...]:
         with self._lock:
@@ -2245,7 +2371,11 @@ class StateStore:
                 (str(linkedin_company_id), str(slug)),
             ).fetchone()
             attempts = int(row[0] or 0) if row else 0
-            maximum = max(1, int(row[1] or DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET)) if row else DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET
+            maximum = (
+                max(1, int(row[1] or DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET))
+                if row
+                else DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET
+            )
             if row and (row[2] == COMPANY_MATCH_VERIFIED_ALIAS or row[3] or attempts >= maximum):
                 return False
             attempts += 1
@@ -2256,7 +2386,17 @@ class StateStore:
                 """INSERT INTO company_slug_aliases(linkedin_company_id, slug, status, first_seen_at, last_seen_at, verification_method, verification_attempt_count, max_verification_attempts, next_verification_at, verification_terminal_status)
                    VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?)
                    ON CONFLICT(linkedin_company_id, slug) DO UPDATE SET status=excluded.status, last_seen_at=excluded.last_seen_at, verification_attempt_count=excluded.verification_attempt_count, max_verification_attempts=excluded.max_verification_attempts, next_verification_at=excluded.next_verification_at, verification_terminal_status=excluded.verification_terminal_status""",
-                (str(linkedin_company_id), str(slug), COMPANY_MATCH_ALIAS_PENDING, timestamp, timestamp, attempts, maximum, next_at, terminal_status),
+                (
+                    str(linkedin_company_id),
+                    str(slug),
+                    COMPANY_MATCH_ALIAS_PENDING,
+                    timestamp,
+                    timestamp,
+                    attempts,
+                    maximum,
+                    next_at,
+                    terminal_status,
+                ),
             )
         return True
 
@@ -2282,7 +2422,15 @@ class StateStore:
         with self._lock, self.connection:
             self.connection.execute(
                 "INSERT INTO ownership_exclusions(exclusion_id, run_id, linkedin_company_id, linkedin_job_id, reason, observation_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, str(run_id), str(linkedin_company_id), str(linkedin_job_id or ""), reason, json.dumps(dict(observation), ensure_ascii=False), _utc_now()),
+                (
+                    uuid.uuid4().hex,
+                    str(run_id),
+                    str(linkedin_company_id),
+                    str(linkedin_job_id or ""),
+                    reason,
+                    json.dumps(dict(observation), ensure_ascii=False),
+                    _utc_now(),
+                ),
             )
 
     def upsert_proxy_health(
@@ -2445,7 +2593,14 @@ class StateStore:
                 (str(run_id), str(linkedin_job_id)),
             ).fetchone()
             current_attempts = int(queue_row[0] or 0) if queue_row else 0
-            budget = max(1, int(max_attempts or (queue_row[1] if queue_row else DEFAULT_DETAIL_ATTEMPT_BUDGET) or DEFAULT_DETAIL_ATTEMPT_BUDGET))
+            budget = max(
+                1,
+                int(
+                    max_attempts
+                    or (queue_row[1] if queue_row else DEFAULT_DETAIL_ATTEMPT_BUDGET)
+                    or DEFAULT_DETAIL_ATTEMPT_BUDGET
+                ),
+            )
             attempt_number = current_attempts + 1 if status not in {"SUCCESS", "EXCLUDED"} else current_attempts
             self.connection.execute(
                 "INSERT INTO detail_attempts(attempt_id, run_id, linkedin_job_id, status, attempted_at, error_class, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -2467,7 +2622,17 @@ class StateStore:
                 self.connection.execute(
                     """UPDATE detail_queue SET status=?, next_attempt_at=?, attempt_count=?, max_attempts=?, last_attempt_at=?, last_error_class=?, terminal_status=?
                        WHERE run_id=? AND linkedin_job_id=?""",
-                    (queue_status, due_at, attempt_number if status not in {"SUCCESS", "EXCLUDED"} else current_attempts, budget, timestamp, error_class, terminal_status, run_id, str(linkedin_job_id)),
+                    (
+                        queue_status,
+                        due_at,
+                        attempt_number if status not in {"SUCCESS", "EXCLUDED"} else current_attempts,
+                        budget,
+                        timestamp,
+                        error_class,
+                        terminal_status,
+                        run_id,
+                        str(linkedin_job_id),
+                    ),
                 )
         return attempt_id
 
@@ -2516,7 +2681,11 @@ class StateStore:
             payload = json.dumps(
                 {
                     **_json_row(data),
-                    **({"company_scan_id": _clean(data.get("company_scan_id", ""))} if data.get("company_scan_id") else {}),
+                    **(
+                        {"company_scan_id": _clean(data.get("company_scan_id", ""))}
+                        if data.get("company_scan_id")
+                        else {}
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -2526,7 +2695,14 @@ class StateStore:
             )
             self.connection.execute(
                 "UPDATE job_company_observations SET run_id=?, company_scan_id=?, last_seen_at=?, row_json=? WHERE linkedin_company_id=? AND linkedin_job_id=?",
-                (current_run_id, current_scan_id, current_last_seen, payload, str(linkedin_company_id), str(linkedin_job_id)),
+                (
+                    current_run_id,
+                    current_scan_id,
+                    current_last_seen,
+                    payload,
+                    str(linkedin_company_id),
+                    str(linkedin_job_id),
+                ),
             )
 
     def upsert_catalog_row(self, row: Mapping[str, object]) -> None:
@@ -2551,6 +2727,37 @@ class StateStore:
                     normalized["absence_count"] = old["absence_count"]
                 if old.get("lifecycle_status") and not normalized["lifecycle_status"]:
                     normalized["lifecycle_status"] = old["lifecycle_status"]
+                # Preserve a previously valid non-Easy-Apply observation when a
+                # partial refresh returns inconclusive evidence.  This keeps
+                # historical external-apply evidence from being erased by an
+                # ambiguous re-parse while still requiring false to have been
+                # backed by a real off-site destination.
+                old_easy = _clean(old.get("easy_apply_status", ""))
+                old_apply = _clean(old.get("apply_url_canonical", ""))
+                if (
+                    old_easy == "false"
+                    and old_apply
+                    and _clean(normalized.get("easy_apply_status", "")) in {"unknown", ""}
+                ):
+                    normalized["easy_apply_status"] = old_easy
+                    normalized["apply_url_raw"] = _clean(old.get("apply_url_raw", "")) or normalized.get(
+                        "apply_url_raw", ""
+                    )
+                    normalized["apply_url_canonical"] = old_apply
+                    normalized["apply_url_source"] = _clean(old.get("apply_url_source", "")) or normalized.get(
+                        "apply_url_source", ""
+                    )
+                    normalized["content_hash"] = compute_content_hash(
+                        {
+                            "job_title": normalized.get("job_title", ""),
+                            "description": normalized.get("description", ""),
+                            "location": normalized.get("location", ""),
+                            "employment_type": normalized.get("employment_type", ""),
+                            "workplace_type": normalized.get("workplace_type", ""),
+                            "canonical_apply_url": normalized.get("apply_url_canonical", ""),
+                            "observed_company_url": normalized.get("observed_company_url", ""),
+                        }
+                    )
             normalized["first_seen_at"] = normalized["first_seen_at"] or now
             normalized["last_seen_at"] = normalized["last_seen_at"] or now
             normalized["absence_count"] = normalized["absence_count"] or "0"
@@ -2639,7 +2846,11 @@ class StateStore:
                         json.dumps(
                             {
                                 **_json_row(data),
-                                **({"company_scan_id": _clean(data.get("company_scan_id", ""))} if data.get("company_scan_id") else {}),
+                                **(
+                                    {"company_scan_id": _clean(data.get("company_scan_id", ""))}
+                                    if data.get("company_scan_id")
+                                    else {}
+                                ),
                             },
                             ensure_ascii=False,
                         ),
@@ -2650,9 +2861,13 @@ class StateStore:
                 )
         return newly_inactive
 
-    def finish_company_scan(self, company_scan_id: str, status: str, observed_job_ids: Iterable[str], finished_at: str | None = None) -> None:
+    def finish_company_scan(
+        self, company_scan_id: str, status: str, observed_job_ids: Iterable[str], finished_at: str | None = None
+    ) -> None:
         with self._lock, self.connection:
-            row = self.connection.execute("SELECT linkedin_company_id FROM company_scans WHERE company_scan_id=?", (company_scan_id,)).fetchone()
+            row = self.connection.execute(
+                "SELECT linkedin_company_id FROM company_scans WHERE company_scan_id=?", (company_scan_id,)
+            ).fetchone()
             if row is None:
                 raise KeyError(company_scan_id)
             self.connection.execute(
@@ -2675,7 +2890,11 @@ class StateStore:
                         json.dumps(
                             {
                                 **_json_row(data),
-                                **({"company_scan_id": _clean(data.get("company_scan_id", ""))} if data.get("company_scan_id") else {}),
+                                **(
+                                    {"company_scan_id": _clean(data.get("company_scan_id", ""))}
+                                    if data.get("company_scan_id")
+                                    else {}
+                                ),
                             },
                             ensure_ascii=False,
                         ),
@@ -2692,7 +2911,9 @@ class StateStore:
                 "SELECT company_scan_id, run_id, linkedin_company_id, status, finished_at, observed_job_ids_json FROM company_scans ORDER BY started_at, company_scan_id"
             ).fetchall()
             suspicious_pages = int(
-                self.connection.execute("SELECT COUNT(*) FROM search_pages WHERE status='SUSPICIOUS_EMPTY'").fetchone()[0]
+                self.connection.execute("SELECT COUNT(*) FROM search_pages WHERE status='SUSPICIOUS_EMPTY'").fetchone()[
+                    0
+                ]
             )
             retry_rows = self.connection.execute(
                 "SELECT status, next_attempt_at, attempt_count, max_attempts FROM detail_queue WHERE status IN ('RETRY', 'QUARANTINED')"
@@ -2739,9 +2960,13 @@ class StateStore:
                 "revalidation_required_zero_scan_count": sum(bool(row["revalidation_required"]) for row in audit_rows),
                 "scans": audit_rows,
                 "detail_retry_count": sum(str(row[0]) == "RETRY" for row in retry_rows),
-                "detail_retry_missing_due_count": sum(str(row[0]) == "RETRY" and not _clean(row[1]) for row in retry_rows),
+                "detail_retry_missing_due_count": sum(
+                    str(row[0]) == "RETRY" and not _clean(row[1]) for row in retry_rows
+                ),
                 "detail_quarantined_count": sum(str(row[0]) == "QUARANTINED" for row in retry_rows),
-                "alias_pending_count": sum(str(row[0]) == COMPANY_MATCH_ALIAS_PENDING and not str(row[1]) for row in alias_rows),
+                "alias_pending_count": sum(
+                    str(row[0]) == COMPANY_MATCH_ALIAS_PENDING and not str(row[1]) for row in alias_rows
+                ),
                 "alias_terminal_count": sum(bool(str(row[1])) for row in alias_rows),
             }
 
@@ -2750,7 +2975,15 @@ class StateStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary_name = ""
         try:
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False) as handle:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8-sig",
+                newline="",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
                 temporary_name = handle.name
                 writer = csv.DictWriter(handle, fieldnames=CATALOG_FIELDS, extrasaction="ignore")
                 writer.writeheader()
@@ -2858,7 +3091,9 @@ class InterProcessLock:
 
 
 class CatalogRunner:
-    def __init__(self, config: RunnerConfig, *, transport=None, request_limiter: AdaptiveConcurrency | None = None, now=_utc_now):
+    def __init__(
+        self, config: RunnerConfig, *, transport=None, request_limiter: AdaptiveConcurrency | None = None, now=_utc_now
+    ):
         self.config = config
         self.transport = transport
         self.now = now
@@ -2995,18 +3230,13 @@ class CatalogRunner:
 
     def _update_recovery_metrics(self) -> None:
         required_recovery = sum(
-            len(self.recovery_partitions)
-            for context in self.contexts.values()
-            if context.recovery_required
+            len(self.recovery_partitions) for context in self.contexts.values() if context.recovery_required
         )
         completed_recovery = sum(
             sum(status == "COMPLETE" for status in context.recovery_partition_statuses.values())
             for context in self.contexts.values()
         )
-        attempted_recovery = sum(
-            len(context.recovery_partition_statuses)
-            for context in self.contexts.values()
-        )
+        attempted_recovery = sum(len(context.recovery_partition_statuses) for context in self.contexts.values())
         self.metrics["recovery_partitions_required"] = required_recovery
         self.metrics["recovery_partitions_completed"] = completed_recovery
         self.metrics["recovery_partitions_pending"] = max(0, required_recovery - attempted_recovery)
@@ -3142,7 +3372,9 @@ class CatalogRunner:
             self._increment("rate_limited")
         if _blocked_body(response.text):
             self._increment("blocked_responses")
-        self.adaptive.observe(status_code=response.status_code, blocked=_blocked_body(response.text), provider="linkedin")
+        self.adaptive.observe(
+            status_code=response.status_code, blocked=_blocked_body(response.text), provider="linkedin"
+        )
         return response
 
     def _persist_exclusion(self, company_id: str, job_id: str, reason: str, observation: Mapping[str, object]) -> None:
@@ -3235,9 +3467,13 @@ class CatalogRunner:
 
     def _queue_card(self, context: CompanyRunContext, card: SearchCard) -> None:
         assert self.store is not None
-        decision = evaluate_ownership(card.company_url, context.group, self.store.verified_aliases(context.group.linkedin_company_id))
+        decision = evaluate_ownership(
+            card.company_url, context.group, self.store.verified_aliases(context.group.linkedin_company_id)
+        )
         if decision.status in {COMPANY_MATCH_REJECTED, COMPANY_MATCH_AMBIGUOUS}:
-            self._persist_exclusion(context.group.linkedin_company_id, card.linkedin_job_id, decision.reason, card.__dict__)
+            self._persist_exclusion(
+                context.group.linkedin_company_id, card.linkedin_job_id, decision.reason, card.__dict__
+            )
             return
         refresh_reason = "new_job"
         cache_enabled = self.config.mode in {"daily", "pilot"} or bool(self.config.resume_run_id)
@@ -3246,7 +3482,11 @@ class CatalogRunner:
                 previous = self.store.get_catalog_row(context.group.linkedin_company_id, card.linkedin_job_id)
             except KeyError:
                 previous = None
-            if previous and previous.get("lifecycle_status") != "inactive" and decision.status in {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}:
+            if (
+                previous
+                and previous.get("lifecycle_status") != "inactive"
+                and decision.status in {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}
+            ):
                 refresh = detail_refresh_decision(
                     previous,
                     card,
@@ -3292,8 +3532,12 @@ class CatalogRunner:
         suspicious_empty_streak = 0
         suspicious_empty_seen = False
         try:
-            for page_start in range(0, self.pagination.max_start + self.pagination.page_step, self.pagination.page_step):
-                if self.store.successful_page_exists(run_id, context.group.linkedin_company_id, page_start, partition.parameter):
+            for page_start in range(
+                0, self.pagination.max_start + self.pagination.page_step, self.pagination.page_step
+            ):
+                if self.store.successful_page_exists(
+                    run_id, context.group.linkedin_company_id, page_start, partition.parameter
+                ):
                     continue
                 response = self._get(
                     build_search_url(
@@ -3306,29 +3550,71 @@ class CatalogRunner:
                 )
                 if response.status_code == 400 and page_start >= self.pagination.max_start:
                     complete = not suspicious_empty_seen
-                    self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="COMPLETE", job_ids=(), partition_type=partition.parameter, detail={"terminal": "http_400"})
+                    self.store.record_search_page(
+                        run_id,
+                        context.scan_id,
+                        context.group.linkedin_company_id,
+                        page_start,
+                        status="COMPLETE",
+                        job_ids=(),
+                        partition_type=partition.parameter,
+                        detail={"terminal": "http_400"},
+                    )
                     break
                 if response.status_code == 200 and is_suspicious_empty_body(response.text):
                     suspicious_empty_seen = True
                     body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
-                    self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), partition_type=partition.parameter, body_hash=body_hash, cards=())
+                    self.store.record_search_page(
+                        run_id,
+                        context.scan_id,
+                        context.group.linkedin_company_id,
+                        page_start,
+                        status="SUSPICIOUS_EMPTY",
+                        job_ids=(),
+                        partition_type=partition.parameter,
+                        body_hash=body_hash,
+                        cards=(),
+                    )
                     suspicious_empty_streak += 1
                     if suspicious_empty_streak >= 2:
                         break
                     continue
-                if response.error or classify_http_response(response.status_code, response.text, response.error) != "SUCCESS":
+                if (
+                    response.error
+                    or classify_http_response(response.status_code, response.text, response.error) != "SUCCESS"
+                ):
                     break
                 parsed = parse_search_page(response.text)
                 body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
                 if not parsed.is_usable or parsed.is_partial:
                     if is_suspicious_empty_body(response.text):
                         suspicious_empty_seen = True
-                        self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), partition_type=partition.parameter, body_hash=body_hash, cards=())
+                        self.store.record_search_page(
+                            run_id,
+                            context.scan_id,
+                            context.group.linkedin_company_id,
+                            page_start,
+                            status="SUSPICIOUS_EMPTY",
+                            job_ids=(),
+                            partition_type=partition.parameter,
+                            body_hash=body_hash,
+                            cards=(),
+                        )
                         suspicious_empty_streak += 1
                         if suspicious_empty_streak >= 2:
                             break
                         continue
-                    self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="PARTIAL", job_ids=tuple(card.linkedin_job_id for card in parsed.cards), partition_type=partition.parameter, body_hash=body_hash, cards=parsed.cards)
+                    self.store.record_search_page(
+                        run_id,
+                        context.scan_id,
+                        context.group.linkedin_company_id,
+                        page_start,
+                        status="PARTIAL",
+                        job_ids=tuple(card.linkedin_job_id for card in parsed.cards),
+                        partition_type=partition.parameter,
+                        body_hash=body_hash,
+                        cards=parsed.cards,
+                    )
                     for card in parsed.cards:
                         context.card_by_job_id[card.linkedin_job_id] = card
                         context.card_start_by_job_id[card.linkedin_job_id] = page_start
@@ -3350,7 +3636,9 @@ class CatalogRunner:
                     body_hash=body_hash,
                     cards=parsed.cards,
                 )
-                if not parsed.is_no_results and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)):
+                if not parsed.is_no_results and (
+                    body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)
+                ):
                     break
                 seen_body_hashes.add(body_hash)
                 if page_job_ids:
@@ -3421,11 +3709,28 @@ class CatalogRunner:
                 classification = classify_http_response(response.status_code, response.text, response.error)
                 if response.error == "request_budget_exhausted":
                     context.search_status = "BUDGET_EXHAUSTED"
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=(), detail={"classification": classification})
+                    self.store.record_search_page(
+                        run_id,
+                        scan_id,
+                        group.linkedin_company_id,
+                        page_start,
+                        status=context.search_status,
+                        job_ids=(),
+                        detail={"classification": classification},
+                    )
                     break
                 if response.status_code == 200 and is_suspicious_empty_body(response.text):
                     body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), body_hash=body_hash, detail={"body_class": "suspicious_empty"})
+                    self.store.record_search_page(
+                        run_id,
+                        scan_id,
+                        group.linkedin_company_id,
+                        page_start,
+                        status="SUSPICIOUS_EMPTY",
+                        job_ids=(),
+                        body_hash=body_hash,
+                        detail={"body_class": "suspicious_empty"},
+                    )
                     context.search_status = "PARTIAL_SUSPICIOUS_EMPTY"
                     suspicious_empty_streak += 1
                     if suspicious_empty_streak >= 2:
@@ -3433,7 +3738,15 @@ class CatalogRunner:
                     continue
                 if response.status_code == 400 and page_start >= evidence.max_start:
                     context.search_status = "COMPLETE"
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="COMPLETE", job_ids=(), detail={"terminal": "http_400"})
+                    self.store.record_search_page(
+                        run_id,
+                        scan_id,
+                        group.linkedin_company_id,
+                        page_start,
+                        status="COMPLETE",
+                        job_ids=(),
+                        detail={"terminal": "http_400"},
+                    )
                     break
                 if classification != "SUCCESS":
                     retry_status = "PARTIAL_TRANSPORT_FAILURE" if candidate_cards else "FAILED"
@@ -3444,20 +3757,46 @@ class CatalogRunner:
                         "PERMANENT_FAILURE": "FAILED",
                         "BUDGET_EXHAUSTED": "BUDGET_EXHAUSTED",
                     }.get(classification, "PARTIAL_PAGE_ANOMALY")
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=(), detail={"classification": classification})
+                    self.store.record_search_page(
+                        run_id,
+                        scan_id,
+                        group.linkedin_company_id,
+                        page_start,
+                        status=context.search_status,
+                        job_ids=(),
+                        detail={"classification": classification},
+                    )
                     break
                 parsed = parse_search_page(response.text)
                 body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
                 if not parsed.is_usable:
                     if is_suspicious_empty_body(response.text):
-                        self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), body_hash=body_hash, detail={"body_class": parsed.body_class})
+                        self.store.record_search_page(
+                            run_id,
+                            scan_id,
+                            group.linkedin_company_id,
+                            page_start,
+                            status="SUSPICIOUS_EMPTY",
+                            job_ids=(),
+                            body_hash=body_hash,
+                            detail={"body_class": parsed.body_class},
+                        )
                         context.search_status = "PARTIAL_SUSPICIOUS_EMPTY"
                         suspicious_empty_streak += 1
                         if suspicious_empty_streak >= 2:
                             break
                         continue
                     context.search_status = "PARTIAL_PAGE_ANOMALY"
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=(), body_hash=body_hash, detail={"body_class": parsed.body_class})
+                    self.store.record_search_page(
+                        run_id,
+                        scan_id,
+                        group.linkedin_company_id,
+                        page_start,
+                        status=context.search_status,
+                        job_ids=(),
+                        body_hash=body_hash,
+                        detail={"body_class": parsed.body_class},
+                    )
                     break
                 suspicious_empty_streak = 0
                 self._increment("valid_cards", len(parsed.cards))
@@ -3478,7 +3817,11 @@ class CatalogRunner:
                     cards=parsed.cards,
                 )
                 page_job_ids = tuple(sorted(card.linkedin_job_id for card in parsed.cards))
-                if not parsed.is_no_results and not parsed.is_partial and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)):
+                if (
+                    not parsed.is_no_results
+                    and not parsed.is_partial
+                    and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets))
+                ):
                     context.search_status = "SATURATED_UNRESOLVED"
                     break
                 seen_body_hashes.add(body_hash)
@@ -3510,7 +3853,9 @@ class CatalogRunner:
             base_was_saturated = context.search_status == "SATURATED_UNRESOLVED"
             if context.search_status in {"SATURATED_UNRESOLVED", "PARTIAL_PAGE_ANOMALY"} and self.recovery_partitions:
                 context.recovery_required = True
-                recovery_complete = all(self._scan_recovery_partition(context, partition) for partition in self.recovery_partitions)
+                recovery_complete = all(
+                    self._scan_recovery_partition(context, partition) for partition in self.recovery_partitions
+                )
                 if recovery_complete and base_was_saturated:
                     context.search_status = "SATURATED_RECOVERED"
         except Exception as exc:  # the scan remains resumable and is never treated as empty
@@ -3555,7 +3900,12 @@ class CatalogRunner:
             return
         response = self._get(f"{DETAIL_ENDPOINT}/{job_id}", kind="detail")
         if response.error == "request_budget_exhausted" or response.status_code != 200 or _blocked_body(response.text):
-            self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class=classify_http_response(response.status_code, response.text, response.error))
+            self.store.record_detail_attempt(
+                run_id,
+                job_id,
+                status="FAILED",
+                error_class=classify_http_response(response.status_code, response.text, response.error),
+            )
             with context._lock:
                 context.detail_failures += 1
             self._increment("detail_failures")
@@ -3568,19 +3918,45 @@ class CatalogRunner:
             with self._alias_lock:
                 aliases = self.store.verified_aliases(company_id)
                 decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, aliases)
-                if decision.status == COMPANY_MATCH_ALIAS_PENDING and slug and self.store.alias_verification_due(company_id, slug, self.now()) and self.store.begin_alias_verification(company_id, slug, seen_at=self.now()):
+                if (
+                    decision.status == COMPANY_MATCH_ALIAS_PENDING
+                    and slug
+                    and self.store.alias_verification_due(company_id, slug, self.now())
+                    and self.store.begin_alias_verification(company_id, slug, seen_at=self.now())
+                ):
                     alias_response = self._get(f"{COMPANY_ENDPOINT}/{slug}", kind="company")
                     if alias_response.status_code == 200 and alias_evidence_matches(alias_response.text, company_id):
-                        self.store.record_alias(company_id, slug, status=COMPANY_MATCH_VERIFIED_ALIAS, verification_method="company_page_numeric_id", seen_at=self.now())
-                        decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, (slug,))
+                        self.store.record_alias(
+                            company_id,
+                            slug,
+                            status=COMPANY_MATCH_VERIFIED_ALIAS,
+                            verification_method="company_page_numeric_id",
+                            seen_at=self.now(),
+                        )
+                        decision = evaluate_card_detail_ownership(
+                            card.company_url, detail.company_url, context.group, (slug,)
+                        )
                     else:
-                        self.store.record_alias(company_id, slug, status=COMPANY_MATCH_ALIAS_PENDING, verification_method="company_page_unverified", seen_at=self.now())
-                        self._increment("alias_quarantines", 1 if not self.store.alias_verification_due(company_id, slug, self.now()) else 0)
+                        self.store.record_alias(
+                            company_id,
+                            slug,
+                            status=COMPANY_MATCH_ALIAS_PENDING,
+                            verification_method="company_page_unverified",
+                            seen_at=self.now(),
+                        )
+                        self._increment(
+                            "alias_quarantines",
+                            1 if not self.store.alias_verification_due(company_id, slug, self.now()) else 0,
+                        )
                 elif decision.status == COMPANY_MATCH_ALIAS_PENDING:
                     self._increment("alias_quarantines")
         if decision.status not in {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}:
-            self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class=decision.reason, detail=detail.__dict__)
-            self._persist_exclusion(company_id, job_id, decision.reason, {"card": card.__dict__, "detail": detail.__dict__})
+            self.store.record_detail_attempt(
+                run_id, job_id, status="EXCLUDED", error_class=decision.reason, detail=detail.__dict__
+            )
+            self._persist_exclusion(
+                company_id, job_id, decision.reason, {"card": card.__dict__, "detail": detail.__dict__}
+            )
             return
         location_classification, location_reason = classify_germany_location(detail.location or card.location)
         if location_classification not in {
@@ -3588,7 +3964,9 @@ class CatalogRunner:
             LOCATION_REMOTE_GERMANY_ELIGIBLE,
             LOCATION_MULTI_LOCATION_INCLUDES_GERMANY,
         }:
-            self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class=location_classification, detail=detail.__dict__)
+            self.store.record_detail_attempt(
+                run_id, job_id, status="EXCLUDED", error_class=location_classification, detail=detail.__dict__
+            )
             self._persist_exclusion(company_id, job_id, location_classification, detail.__dict__)
             return
         observed_at = self.now()
@@ -3686,14 +4064,38 @@ class CatalogRunner:
         if not input_path.exists():
             raise FileNotFoundError(input_path)
         self.groups, source_stats = load_source_company_groups(input_path, self.config.company_id)
-        self.metrics.update({"companies_input": source_stats["groups"], "rows_read": source_stats["rows_read"], "rows_accepted": source_stats["rows_accepted"], "rows_rejected": source_stats["rows_rejected"]})
+        self.metrics.update(
+            {
+                "companies_input": source_stats["groups"],
+                "rows_read": source_stats["rows_read"],
+                "rows_accepted": source_stats["rows_accepted"],
+                "rows_rejected": source_stats["rows_rejected"],
+            }
+        )
         self.metrics["input_loader_reconciliation"] = build_input_loader_reconciliation_report(
             source_stats["unique_numeric_organizations"],
             source_stats,
         )
-        self.pagination = load_pagination_evidence(self.config.pagination_report)
-        if self.config.filters_report and Path(self.config.filters_report).exists():
-            self.recovery_partitions = build_recovery_partitions(self.config.filters_report)
+        if self.config.pagination_report is None:
+            raise ValueError(
+                "LinkedIn pagination evidence is required. "
+                "Pass --pagination-report or set RUNR_LINKEDIN_PAGINATION_REPORT."
+            )
+        pagination_path = Path(self.config.pagination_report)
+        if not pagination_path.is_file():
+            raise FileNotFoundError(
+                f"LinkedIn pagination evidence not found: {pagination_path}. "
+                "Pass --pagination-report or set RUNR_LINKEDIN_PAGINATION_REPORT."
+            )
+        self.pagination = load_pagination_evidence(pagination_path)
+        if self.config.filters_report is not None:
+            filters_path = Path(self.config.filters_report)
+            if not filters_path.is_file():
+                raise FileNotFoundError(
+                    f"LinkedIn filter evidence not found: {filters_path}. "
+                    "Pass --filters-report or set RUNR_LINKEDIN_FILTERS_REPORT."
+                )
+            self.recovery_partitions = build_recovery_partitions(filters_path)
         else:
             self.recovery_partitions = ()
         if self.transport is None:
@@ -3709,7 +4111,9 @@ class CatalogRunner:
             )
         else:
             self.metrics["proxy_count"] = len(getattr(self.transport, "proxies", ())) or 1
-        ordered = sorted(self.groups.values(), key=lambda group: (int(group.linkedin_company_id), group.linkedin_company_id))
+        ordered = sorted(
+            self.groups.values(), key=lambda group: (int(group.linkedin_company_id), group.linkedin_company_id)
+        )
         total = len(ordered)
         limit = self._selection_limit(total)
         selected = ordered[:limit]
@@ -3827,7 +4231,11 @@ class CatalogRunner:
             if not statuses:
                 run_status = "FINISHED"
                 run_outcome = "COMPLETE"
-            elif all(status == "COMPLETE_ZERO_CONFIRMED" for status in statuses) and not pending_details and not quarantined_details:
+            elif (
+                all(status == "COMPLETE_ZERO_CONFIRMED" for status in statuses)
+                and not pending_details
+                and not quarantined_details
+            ):
                 run_status = "FINISHED_ZERO"
                 run_outcome = "ZERO"
             elif all(status in failure_statuses for status in statuses):
@@ -3850,7 +4258,11 @@ class CatalogRunner:
             self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
             self._capture_detail_provider_usage()
             self.store.finish_run(run_id, run_status, self.now())
-            if limit < total:
+            # Advance the bounded cycle only when work for this window was
+            # durably completed.  Budget exhaustion or any partial/failed
+            # outcome leaves the cursor where it is so the same companies are
+            # retried on the next cycle rather than being silently skipped.
+            if limit < total and run_outcome in {"COMPLETE", "ZERO"}:
                 self.store.set_cursor((selection_cursor + limit) % total)
             if self._event_journal is not None:
                 self._event_journal.close()
@@ -3866,7 +4278,18 @@ class CatalogRunner:
             )
             self.metrics["generation_manifest_sha256"] = published_generation["manifest_sha256"]
             log_path = generation_dir / f"master_linkedin_jobs_{run_id}.log"
-            log_path.write_text(json.dumps({key: value for key, value in self.metrics.items() if "password" not in key.lower() and "secret" not in key.lower()}, sort_keys=True) + "\n", encoding="utf-8")
+            log_path.write_text(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in self.metrics.items()
+                        if "password" not in key.lower() and "secret" not in key.lower()
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             return dict(self.metrics)
         except BaseException as exc:
             run_status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
@@ -3901,7 +4324,9 @@ class CatalogRunner:
             self._close_transport()
 
     def _write_metrics(self, output_dir: Path) -> None:
-        (output_dir / "master_linkedin_jobs_metrics.json").write_text(json.dumps(self.metrics, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (output_dir / "master_linkedin_jobs_metrics.json").write_text(
+            json.dumps(self.metrics, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -3913,8 +4338,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="directory containing the durable SQLite state; defaults to --output-dir",
     )
-    parser.add_argument("--pagination-report", type=Path, default=RunnerConfig.pagination_report)
-    parser.add_argument("--filters-report", type=Path, default=RunnerConfig.filters_report)
+    parser.add_argument("--pagination-report", type=Path, default=None)
+    parser.add_argument("--filters-report", type=Path, default=None)
     parser.add_argument("--mode", choices=("validate", "smoke", "pilot", "full", "daily", "reconcile"), default="full")
     parser.add_argument("--workers", type=int, default=10)
     parser.add_argument("--detail-workers", type=int, default=5)
@@ -3924,8 +4349,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--retry-limit", type=int, default=2)
     parser.add_argument("--max-requests", type=int, default=0)
-    parser.add_argument("--detail-refresh-hours", type=float, default=DEFAULT_DURABLE_DETAIL_REFRESH_HOURS, help="Durable detail refresh window; default is 168 hours")
-    parser.add_argument("--volatile-refresh-hours", type=float, default=DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS, help="Window after which applicant/freshness fields are marked stale")
+    parser.add_argument(
+        "--detail-refresh-hours",
+        type=float,
+        default=DEFAULT_DURABLE_DETAIL_REFRESH_HOURS,
+        help="Durable detail refresh window; default is 168 hours",
+    )
+    parser.add_argument(
+        "--volatile-refresh-hours",
+        type=float,
+        default=DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS,
+        help="Window after which applicant/freshness fields are marked stale",
+    )
     parser.add_argument("--company-id")
     parser.add_argument("--resume-run-id")
     parser.add_argument("--max-companies", type=int)
@@ -3965,14 +4400,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _env_path(name: str) -> Path | None:
+    value = os.environ.get(name, "").strip()
+    return Path(value) if value else None
+
+
 def config_from_args(args: argparse.Namespace) -> RunnerConfig:
     env_disable_pipeline = os.environ.get("RUNR_LINKEDIN_PIPELINE", "1") == "0"
+    pagination_report = args.pagination_report or _env_path("RUNR_LINKEDIN_PAGINATION_REPORT")
+    filters_report = args.filters_report or _env_path("RUNR_LINKEDIN_FILTERS_REPORT")
     return RunnerConfig(
         input_csv=args.input_csv,
         output_dir=args.output_dir,
         state_dir=args.state_dir,
-        pagination_report=args.pagination_report,
-        filters_report=args.filters_report,
+        pagination_report=pagination_report,
+        filters_report=filters_report,
         mode=args.mode,
         workers=args.workers,
         detail_workers=args.detail_workers,

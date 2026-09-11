@@ -63,13 +63,15 @@ def write_pagination_report(path: Path, max_start: int = 10) -> None:
 
 
 def single_company_rows() -> list[dict[str, str]]:
-    return [{
-        "canonical_CompanyID": "C-001",
-        "company_name": "Acme",
-        "linkedin_company_url": "https://www.linkedin.com/company/acme",
-        "linkedin_slug": "acme",
-        "linkedin_company_id": "22",
-    }]
+    return [
+        {
+            "canonical_CompanyID": "C-001",
+            "company_name": "Acme",
+            "linkedin_company_url": "https://www.linkedin.com/company/acme",
+            "linkedin_slug": "acme",
+            "linkedin_company_id": "22",
+        }
+    ]
 
 
 def _job_card(job_id: str) -> str:
@@ -277,7 +279,9 @@ def test_pipeline_resume_reprocesses_unfinished_details(tmp_path: Path) -> None:
     assert second_metrics["jobs_written"] == 2
 
 
-def test_pipeline_shared_limiter_caps_search_and_detail_in_flight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_shared_limiter_caps_search_and_detail_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The single account limiter bounds combined search+detail in-flight work."""
 
     import scripts.master_linkedin_jobs_catalog as catalog_module
@@ -338,3 +342,48 @@ def test_pipeline_shared_limiter_caps_search_and_detail_in_flight(tmp_path: Path
     # The combined in-flight work never exceeded the account cap.
     assert runner.adaptive.peak_in_flight <= 2
     assert runner.adaptive.peak_in_flight == 2
+
+
+def test_budget_exhaustion_does_not_advance_bounded_cycle_cursor(tmp_path: Path) -> None:
+    source = tmp_path / "companies.csv"
+    write_source_csv(
+        source,
+        [
+            {
+                "canonical_CompanyID": "C-001",
+                "company_name": "Acme",
+                "linkedin_company_url": "https://www.linkedin.com/company/acme",
+                "linkedin_slug": "acme",
+                "linkedin_company_id": "22",
+            },
+            {
+                "canonical_CompanyID": "C-002",
+                "company_name": "Beta",
+                "linkedin_company_url": "https://www.linkedin.com/company/beta",
+                "linkedin_slug": "beta",
+                "linkedin_company_id": "23",
+            },
+        ],
+    )
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+
+    config = RunnerConfig(
+        input_csv=source,
+        output_dir=tmp_path / "output",
+        pagination_report=pagination,
+        mode="full",
+        max_companies=1,
+        pipeline_enabled=False,
+    )
+    first = CatalogRunner(
+        config,
+        transport=BudgetExhaustingTransport(["1234567890"]),
+        now=lambda: "2026-08-31T08:00:00Z",
+    ).run()
+
+    assert first["run_outcome"] == "PARTIAL"
+    state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
+    # Cursor must stay at the beginning so the same company is retried.
+    assert state.get_cursor() == 0
+    state.close()

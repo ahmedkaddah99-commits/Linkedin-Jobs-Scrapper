@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from backend.application.source_eligibility_manifest import (
     require_eligibility_manifest,
 )
 from scripts.master_linkedin_jobs_catalog import CatalogRunner, RunnerConfig
+
+
+def _env_path(name: str) -> Path | None:
+    value = os.environ.get(name, "").strip()
+    return Path(value) if value else None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,8 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="opt into website-only/LinkedIn-only expansion tasks; default is the dual-source pilot",
     )
-    parser.add_argument("--pagination-report", type=Path, default=Path("Jobs-Urls/linkedin_endpoint_pagination_validation.json"))
-    parser.add_argument("--filters-report", type=Path, default=Path("Jobs-Urls/linkedin_guest_endpoint_filter_validation.json"))
+    parser.add_argument(
+        "--pagination-report",
+        type=Path,
+        default=None,
+        help="validated pagination report path; falls back to RUNR_LINKEDIN_PAGINATION_REPORT",
+    )
+    parser.add_argument(
+        "--filters-report",
+        type=Path,
+        default=None,
+        help="validated filter report path; falls back to RUNR_LINKEDIN_FILTERS_REPORT",
+    )
     parser.add_argument("--mode", choices=("validate", "smoke", "pilot", "full", "daily", "reconcile"), default="full")
     parser.add_argument("--workers", type=int, default=10)
     parser.add_argument("--detail-workers", type=int, default=5)
@@ -78,12 +94,14 @@ def main(argv: list[str] | None = None) -> int:
     staged = materialize_source_input(
         manifest, SOURCE_LINKEDIN, staged_input, pilot_only=pilot_only, company_ids=cohort
     )
+    pagination_report = args.pagination_report or _env_path("RUNR_LINKEDIN_PAGINATION_REPORT")
+    filters_report = args.filters_report or _env_path("RUNR_LINKEDIN_FILTERS_REPORT")
     config = RunnerConfig(
         input_csv=staged_input,
         output_dir=output_dir,
         state_dir=state_dir,
-        pagination_report=args.pagination_report,
-        filters_report=args.filters_report,
+        pagination_report=pagination_report,
+        filters_report=filters_report,
         mode=args.mode,
         workers=args.workers,
         detail_workers=args.detail_workers,
