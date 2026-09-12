@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--created-by", default="catalog_recovery")
     parser.add_argument("--origin", default="system")
-    parser.add_argument("--policy-version", default="publication_policy_v2")
+    parser.add_argument("--policy-version", default="publication_policy_v1")
     return parser
 
 

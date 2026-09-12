@@ -3,8 +3,8 @@ set -eu
 
 project_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$project_dir"
-total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-30}"
-linkedin_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-20}"
+total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-110}"
+linkedin_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-100}"
 employer_cap="${RUNR_EMPLOYER_MAX_REQUESTS:-10}"
 export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 

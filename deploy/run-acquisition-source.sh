@@ -17,13 +17,13 @@ export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 receipt_root="${RUNR_ACQUISITION_RECEIPT_ROOT:-$export_root/receipts}"
 lock_root="${RUNR_ACQUISITION_LOCK_ROOT:-$state_root/locks}"
 include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
-total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-30}"
+total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-110}"
 
 if [ "$source_name" = "linkedin" ]; then
   state_dir="${RUNR_LINKEDIN_STATE_DIR:-$state_root/linkedin}"
   output_dir="$export_root/linkedin"
   state_role="linkedin"
-  source_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-20}"
+  source_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-100}"
   pagination_report="${RUNR_LINKEDIN_PAGINATION_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_endpoint_pagination_validation.json}"
   filters_report="${RUNR_LINKEDIN_FILTERS_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_guest_endpoint_filter_validation.json}"
 else
@@ -45,7 +45,7 @@ if ! is_positive_integer "$total_cap" || ! is_positive_integer "$source_cap"; th
   exit 64
 fi
 other_cap="${RUNR_EMPLOYER_MAX_REQUESTS:-10}"
-if [ "$source_name" = "employer" ]; then other_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-20}"; fi
+if [ "$source_name" = "employer" ]; then other_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-100}"; fi
 if ! is_positive_integer "$other_cap" || [ "$((source_cap + other_cap))" -gt "$total_cap" ]; then
   echo "Per-source acquisition request caps exceed the positive total cap." >&2
   exit 64

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from backend.bootstrap import create_backend
+from scripts.publish_existing_catalog import build_parser
 
 
 def _target() -> dict[str, object]:
@@ -18,6 +19,12 @@ def _target() -> dict[str, object]:
         "publication_enabled": True,
         "config": {"absence_grace_attempts": 1},
     }
+
+
+def test_publish_existing_catalog_defaults_to_display_first_policy() -> None:
+    args = build_parser().parse_args([])
+
+    assert args.policy_version == "publication_policy_v1"
 
 
 def test_publish_existing_catalog_rechecks_blocking_completeness(tmp_path: Path) -> None:
