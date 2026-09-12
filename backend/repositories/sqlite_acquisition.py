@@ -65,7 +65,7 @@ def _insert_publication_jobs_batched(
     *,
     publication_id: str,
     canonical_job_ids: Iterable[str],
-    batch_size: int = 200,
+    batch_size: int = 500,
 ) -> None:
     """Insert publication membership with bounded remote SQL round trips."""
 
@@ -2645,7 +2645,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             snapshot: list[dict[str, Any]] = []
             candidate_count = 0
             rejected_count = 0
-            page_size = 200
+            page_size = 1000
             offset = 0
             while True:
                 candidate_rows = connection.execute(
