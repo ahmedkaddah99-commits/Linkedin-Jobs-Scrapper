@@ -284,7 +284,7 @@
       "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar", "linkedin_pagination_report", "linkedin_filters_report"],
       "required_state_databases": ["linkedin_authoritative_state", "employer_state"],
       "required_output_directories": ["/srv/runr/exports/linkedin", "/srv/runr/exports/employer", "/srv/runr/exports/receipts"],
-      "environment_variables": ["RUNR_ACQUISITION_MAX_REQUESTS", "RUNR_LINKEDIN_MAX_REQUESTS", "RUNR_EMPLOYER_MAX_REQUESTS", "RUNR_LINKEDIN_PAGINATION_REPORT", "RUNR_LINKEDIN_FILTERS_REPORT"],
+      "environment_variables": ["RUNR_ACQUISITION_MAX_REQUESTS", "RUNR_SOURCE_RUN_TIMEOUT_SECONDS", "RUNR_LINKEDIN_MAX_REQUESTS", "RUNR_EMPLOYER_MAX_REQUESTS", "RUNR_LINKEDIN_PAGINATION_REPORT", "RUNR_LINKEDIN_FILTERS_REPORT"],
       "committed_in_git": true,
       "restore_separately": false,
       "schema_checks": ["positive total/per-source cap contract", "source lock and receipt", "state drift-tolerant schema validation before provider requests"],

@@ -18,6 +18,7 @@ receipt_root="${RUNR_ACQUISITION_RECEIPT_ROOT:-$export_root/receipts}"
 lock_root="${RUNR_ACQUISITION_LOCK_ROOT:-$state_root/locks}"
 include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
 total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-110}"
+run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"
 
 if [ "$source_name" = "linkedin" ]; then
   state_dir="${RUNR_LINKEDIN_STATE_DIR:-$state_root/linkedin}"
@@ -42,8 +43,8 @@ is_positive_integer() {
   esac
 }
 
-if ! is_positive_integer "$total_cap" || ! is_positive_integer "$source_cap" || ! is_positive_integer "$company_cap"; then
-  echo "Acquisition caps must be positive: total=$total_cap source=$source_cap companies=$company_cap" >&2
+if ! is_positive_integer "$total_cap" || ! is_positive_integer "$source_cap" || ! is_positive_integer "$company_cap" || ! is_positive_integer "$run_timeout"; then
+  echo "Acquisition caps and run timeout must be positive: total=$total_cap source=$source_cap companies=$company_cap timeout=$run_timeout" >&2
   exit 64
 fi
 other_cap="${RUNR_EMPLOYER_MAX_REQUESTS:-10}"
@@ -78,7 +79,7 @@ if [ "$validation_code" -eq 0 ]; then
   if [ "$source_name" = "linkedin" ]; then
     args=""
     if [ "$include_single_source" = "1" ] || [ "$include_single_source" = "true" ]; then args="--include-single-source"; fi
-    "$python_bin" scripts/run_manifested_linkedin.py \
+    timeout --foreground "$run_timeout" "$python_bin" scripts/run_manifested_linkedin.py \
       --manifest "$manifest" \
       --output-dir "$output_dir" \
       --state-dir "$state_dir" \
@@ -95,7 +96,7 @@ if [ "$validation_code" -eq 0 ]; then
   else
     args=""
     if [ "$include_single_source" = "1" ] || [ "$include_single_source" = "true" ]; then args="--include-single-source"; fi
-    "$python_bin" scripts/run_manifested_employer.py \
+    timeout --foreground "$run_timeout" "$python_bin" scripts/run_manifested_employer.py \
       --manifest "$manifest" \
       --output-dir "$output_dir" \
       --state-dir "$state_dir" \

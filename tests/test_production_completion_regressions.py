@@ -11,6 +11,12 @@ def test_render_images_create_the_interpreter_used_by_the_launcher():
         assert "/app/.venv/bin/python -m pip install" in text
 
 
+def test_source_wrapper_has_a_finite_process_watchdog():
+    text = (SOURCE_ROOT / "deploy/run-acquisition-source.sh").read_text(encoding="utf-8")
+    assert 'run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"' in text
+    assert 'timeout --foreground "$run_timeout" "$python_bin"' in text
+
+
 def test_linkedin_selection_is_a_due_bounded_window():
     from scripts.master_linkedin_jobs_catalog import select_due_company_window
 
