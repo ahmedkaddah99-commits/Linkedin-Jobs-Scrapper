@@ -11,7 +11,7 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
@@ -515,9 +515,9 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         except (TypeError, ValueError):
             profile = {}
         if not isinstance(profile, Mapping):
-            return []
+            profile = {}
         extra = profile.get("additional_fields") if isinstance(profile.get("additional_fields"), Mapping) else {}
-        candidates: list[Any] = []
+        candidates: list[Any] = [company.get("provenance_url")]
         linkedin_field = extra.get("linkedin_company_url")
         candidates.append(linkedin_field.get("value") if isinstance(linkedin_field, Mapping) else linkedin_field)
         social = extra.get("social_profiles")
@@ -546,7 +546,8 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         """
 
         safe_url = validate_official_url(url)
-        approved_host = urlparse(safe_url).hostname or ""
+        source_host = urlparse(safe_url).hostname or ""
+        approved_host = "linkedin.com" if source_host == "linkedin.com" or source_host.endswith(".linkedin.com") else source_host
         max_bytes = 2 * 1024 * 1024 if raw else self.max_html_bytes
         current_url = safe_url
         response = None
@@ -556,6 +557,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "*/*" if raw else "text/html,application/xhtml+xml"},
                 timeout=max(2, int(timeout_seconds or self.timeout_seconds)),
                 allow_redirects=False,
+                proxies=self._direct_proxy_config(),
             )
             if int(response.status_code or 0) not in {301, 302, 303, 307, 308}:
                 break
@@ -827,6 +829,47 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             "cost_units": cost_units,
         }
 
+    @staticmethod
+    def _direct_proxy_config() -> Mapping[str, str] | None:
+        """Return an optional direct-fetch proxy configuration."""
+
+        return None
+
+
+class WebshareLinkedInCompanyProvider(ScrapeOpsLinkedInCompanyProvider):
+    """Fetch public LinkedIn company pages through the configured Webshare proxy.
+
+    This provider deliberately does not call ScrapeOps or any paid enrichment
+    endpoint.  It reuses the existing identity checks and LinkedIn HTML parser,
+    while using the already-approved Webshare transport used by the job
+    collector for both page and CDN logo reads.
+    """
+
+    def __init__(self, *, timeout_seconds: int = 20, max_html_bytes: int = 1_000_000):
+        super().__init__(
+            api_key="",
+            mode="basic",
+            timeout_seconds=timeout_seconds,
+            max_html_bytes=max_html_bytes,
+            max_retries=0,
+            prefer_direct=True,
+        )
+        explicit = os.getenv("WEBSHARE_PROXY_URL") or os.getenv("WEBSHARE_PROXY") or ""
+        username = os.getenv("WEBSHARE_PROXY_USERNAME", "").strip()
+        password = os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip()
+        host = os.getenv("WEBSHARE_PROXY_HOST", "p.webshare.io").strip() or "p.webshare.io"
+        port = os.getenv("WEBSHARE_PROXY_PORT", "80").strip() or "80"
+        self.webshare_proxy_url = explicit.strip() or (
+            f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+            if username and password
+            else ""
+        )
+
+    def _direct_proxy_config(self) -> Mapping[str, str] | None:
+        if not self.webshare_proxy_url:
+            return None
+        return {"http": self.webshare_proxy_url, "https": self.webshare_proxy_url}
+
 
 def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
     """Build the explicitly configured provider without starting enrichment."""
@@ -834,6 +877,8 @@ def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
     provider = str(os.getenv("RUNR_COMPANY_ENRICHMENT_PROVIDER") or "official_website").strip().casefold()
     if provider in {"scrapeops_linkedin", "linkedin_scrapeops", "scrapeops_linkedin_company"}:
         return ScrapeOpsLinkedInCompanyProvider()
+    if provider in {"webshare_linkedin", "linkedin_webshare", "public_linkedin"}:
+        return WebshareLinkedInCompanyProvider()
     if provider in {"scrapeops", "scrapeops_company", "scrapeops_company_website"}:
         return ScrapeOpsCompanyProvider()
     if provider in {"official_website", "company_website"}:
@@ -1058,4 +1103,4 @@ class CompanyEnrichmentService:
         return asyncio.run(self.run(**kwargs))
 
 
-__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "ScrapeOpsCompanyProvider", "ScrapeOpsLinkedInCompanyProvider", "configured_company_enrichment_provider"]
+__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "ScrapeOpsCompanyProvider", "ScrapeOpsLinkedInCompanyProvider", "WebshareLinkedInCompanyProvider", "configured_company_enrichment_provider"]

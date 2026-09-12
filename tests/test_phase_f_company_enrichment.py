@@ -20,6 +20,7 @@ from backend.application.company_logo import (
     validate_official_url,
 )
 from backend.application.company_enrichment import (
+    WebshareLinkedInCompanyProvider,
     ScrapeOpsCompanyProvider,
     ScrapeOpsLinkedInCompanyProvider,
     configured_company_enrichment_provider,
@@ -129,6 +130,63 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         app._company_enrichment_service.object_storage = storage
         app._personalized_jobs_service.object_storage = storage
         return app, storage
+
+    def test_webshare_linkedin_provider_accepts_existing_linkedin_provenance(self):
+        provider = WebshareLinkedInCompanyProvider()
+        self.assertEqual(
+            provider._existing_linkedin_urls(
+                {
+                    "canonical_name": "Acme GmbH",
+                    "provenance_url": "https://www.linkedin.com/company/acme",
+                }
+            ),
+            ["https://www.linkedin.com/company/acme"],
+        )
+
+    def test_webshare_linkedin_provider_is_selected_without_scrapeops(self):
+        original = os.environ.get("RUNR_COMPANY_ENRICHMENT_PROVIDER")
+        os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = "webshare_linkedin"
+        try:
+            provider = configured_company_enrichment_provider()
+        finally:
+            if original is None:
+                os.environ.pop("RUNR_COMPANY_ENRICHMENT_PROVIDER", None)
+            else:
+                os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = original
+        self.assertIsInstance(provider, WebshareLinkedInCompanyProvider)
+
+    def test_webshare_linkedin_provider_fetches_and_validates_linkedin_logo(self):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Acme GmbH | LinkedIn">
+          <meta property="og:image" content="https://media.licdn.com/logo.svg">
+        </head></html>
+        """
+        page = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "text/html"},
+            content=html.encode(),
+            url="https://www.linkedin.com/company/acme",
+        )
+        logo = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "image/svg+xml"},
+            content=VALID_SVG,
+            url="https://media.licdn.com/logo.svg",
+        )
+        provider = WebshareLinkedInCompanyProvider()
+        with patch("backend.application.company_enrichment.requests.get", side_effect=[page, logo]), patch(
+            "backend.application.company_enrichment.assert_public_official_host", return_value=None
+        ):
+            result = asyncio.run(
+                provider.enrich(
+                    {"canonical_name": "Acme GmbH", "provenance_url": "https://www.linkedin.com/company/acme"},
+                    conditional={},
+                )
+            )
+        self.assertEqual(result["logo_bytes"], VALID_SVG)
+        self.assertEqual(result["logo_content_type"], "image/svg+xml")
+        self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
 
     def test_company_enrichment_is_worker_only_and_customer_reads_do_not_fetch(self):
         app, storage = self.backend()
