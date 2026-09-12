@@ -152,6 +152,56 @@ def _snapshot_comparison_key(item: Mapping[str, Any]) -> str:
     return _json(dict(item))
 
 
+_PUBLICATION_PAYLOAD_FIELDS = (
+    "application_destination",
+    "easy_apply_status",
+    "easyApply",
+    "easy_apply",
+    "workplace_arrangement",
+    "workplace_type",
+    "workplaceType",
+    "remote_type",
+    "ownership_status",
+    "company_match_status",
+    "dedupe_state",
+    "duplicate_state",
+    "dedupe_status",
+    "source_timestamps",
+    "normalized_source_metadata",
+    "source_posted_at",
+    "posted_at",
+    "posted_at_estimated",
+    "date_posted",
+    "published_at",
+    "source_closed_at",
+    "closed_at",
+    "closedAt",
+)
+_PUBLICATION_PAYLOAD_MAPPINGS = frozenset(
+    {"application_destination", "source_timestamps", "normalized_source_metadata"}
+)
+
+
+def _compact_publication_candidate_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only validator inputs; raw producer payloads can be very large."""
+
+    compacted: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = {str(key): raw_row[key] for key in raw_row.keys()}
+        payload: dict[str, Any] = {}
+        for field in _PUBLICATION_PAYLOAD_FIELDS:
+            key = f"payload_{field}"
+            value = row.pop(key, None)
+            if value in (None, ""):
+                continue
+            if field in _PUBLICATION_PAYLOAD_MAPPINGS:
+                value = _decode(value, {})
+            payload[field] = value
+        row["version_payload_json"] = _json(payload)
+        compacted.append(row)
+    return compacted
+
+
 def _posting_anchor(job: Mapping[str, Any], observed_at: str) -> tuple[str, str, str]:
     """Return the immutable first-observation posting-age anchor."""
 
@@ -2547,7 +2597,29 @@ class SqliteAcquisitionStore(_SqliteStore):
                                 j.last_verified_at, j.current_version_id,
                                 COALESCE(v.description, '') AS version_description,
                                 COALESCE(v.location, '') AS version_location,
-                                COALESCE(v.payload_json, '{}') AS version_payload_json,
+                                json_extract(v.payload_json, '$.application_destination') AS payload_application_destination,
+                                json_extract(v.payload_json, '$.easy_apply_status') AS payload_easy_apply_status,
+                                json_extract(v.payload_json, '$.easyApply') AS payload_easyApply,
+                                json_extract(v.payload_json, '$.easy_apply') AS payload_easy_apply,
+                                json_extract(v.payload_json, '$.workplace_arrangement') AS payload_workplace_arrangement,
+                                json_extract(v.payload_json, '$.workplace_type') AS payload_workplace_type,
+                                json_extract(v.payload_json, '$.workplaceType') AS payload_workplaceType,
+                                json_extract(v.payload_json, '$.remote_type') AS payload_remote_type,
+                                json_extract(v.payload_json, '$.ownership_status') AS payload_ownership_status,
+                                json_extract(v.payload_json, '$.company_match_status') AS payload_company_match_status,
+                                json_extract(v.payload_json, '$.dedupe_state') AS payload_dedupe_state,
+                                json_extract(v.payload_json, '$.duplicate_state') AS payload_duplicate_state,
+                                json_extract(v.payload_json, '$.dedupe_status') AS payload_dedupe_status,
+                                json_extract(v.payload_json, '$.source_timestamps') AS payload_source_timestamps,
+                                json_extract(v.payload_json, '$.normalized_source_metadata') AS payload_normalized_source_metadata,
+                                json_extract(v.payload_json, '$.source_posted_at') AS payload_source_posted_at,
+                                json_extract(v.payload_json, '$.posted_at') AS payload_posted_at,
+                                json_extract(v.payload_json, '$.posted_at_estimated') AS payload_posted_at_estimated,
+                                json_extract(v.payload_json, '$.date_posted') AS payload_date_posted,
+                                json_extract(v.payload_json, '$.published_at') AS payload_published_at,
+                                json_extract(v.payload_json, '$.source_closed_at') AS payload_source_closed_at,
+                                json_extract(v.payload_json, '$.closed_at') AS payload_closed_at,
+                                json_extract(v.payload_json, '$.closedAt') AS payload_closedAt,
                                 o.external_job_id AS source_job_id,
                                 o.source_ats,
                                 o.observed_at AS observation_observed_at,
@@ -2575,6 +2647,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ).fetchall()
                 if not candidate_rows:
                     break
+                candidate_rows = _compact_publication_candidate_rows(candidate_rows)
                 page_snapshot, rejected_rows = self._publication_rows_with_completeness(
                     candidate_rows,
                     policy=policy,
