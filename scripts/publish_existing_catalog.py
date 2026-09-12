@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.database import connect_database
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
@@ -30,7 +31,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    store = SqliteAcquisitionStore(args.data_dir / "backend.sqlite3")
+    database_path = args.data_dir / "backend.sqlite3"
+    connection = connect_database(database_path)
+    try:
+        required_tables = {
+            "acquisition_publication_head",
+            "acquisition_publications",
+            "acquisition_publication_jobs",
+            "canonical_jobs",
+            "canonical_companies",
+            "job_posting_versions",
+            "job_source_observations",
+        }
+        present_tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+    missing_tables = sorted(required_tables - present_tables)
+    if missing_tables:
+        raise RuntimeError(
+            "catalog recovery schema preflight failed; missing tables: "
+            + ", ".join(missing_tables)
+        )
+    # The production schema is preflighted above. Avoid replaying every
+    # migration over Turso for this one-shot recovery command.
+    store = SqliteAcquisitionStore(database_path, initialize=False)
     publication_id = store.publish_existing_catalog_snapshot(
         created_by=args.created_by,
         origin=args.origin,

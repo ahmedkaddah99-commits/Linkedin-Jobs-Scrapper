@@ -12,10 +12,11 @@ TransactionResultT = TypeVar("TransactionResultT")
 
 
 class _SqliteStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, initialize: bool = True):
         self.db_path = Path(db_path)
         self._active_transaction_connection: DatabaseConnection | None = None
-        initialize_database(self.db_path)
+        if initialize:
+            initialize_database(self.db_path)
 
     @contextmanager
     def _connect(self) -> Iterator[DatabaseConnection]:
