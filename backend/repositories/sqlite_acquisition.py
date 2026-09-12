@@ -2313,6 +2313,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         cycle_id: str,
         rejected_rows: Iterable[Mapping[str, Any]],
     ) -> None:
+        parameters: list[tuple[Any, ...]] = []
         for item in rejected_rows:
             reasons = item.get("reasons") if isinstance(item.get("reasons"), list) else []
             for reason in reasons:
@@ -2322,13 +2323,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 request_id = f"publication:{cycle_id}"
                 rejection_key = f"{request_id}:{external_job_id}:{title}:{reason_code}"
                 rejection_id = f"acq_rejection_{hashlib.sha256(rejection_key.encode('utf-8')).hexdigest()[:32]}"
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO acquisition_job_rejections (
-                        rejection_id, request_id, cycle_id, task_id, target_id,
-                        external_job_id, title, reason_code, observed_at, detail_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                parameters.append(
                     (
                         rejection_id,
                         request_id,
@@ -2345,8 +2340,20 @@ class SqliteAcquisitionStore(_SqliteStore):
                             "reason": dict(reason) if isinstance(reason, Mapping) else {},
                             "source": "publication_completeness_gate",
                         }),
-                    ),
+                    )
                 )
+        for offset in range(0, len(parameters), 100):
+            batch = parameters[offset : offset + 100]
+            values = ",".join("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" for _ in batch)
+            connection.execute(
+                f"""
+                INSERT OR IGNORE INTO acquisition_job_rejections (
+                    rejection_id, request_id, cycle_id, task_id, target_id,
+                    external_job_id, title, reason_code, observed_at, detail_json
+                ) VALUES {values}
+                """,
+                tuple(value for row in batch for value in row),
+            )
 
     def publish_valid_snapshot(
         self,
