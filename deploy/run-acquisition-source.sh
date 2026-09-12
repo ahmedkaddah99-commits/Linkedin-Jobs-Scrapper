@@ -99,11 +99,6 @@ if [ "$validation_code" -eq 0 ]; then
       --require-existing-state \
       --full \
       --max-requests "$source_cap" \
-      --company-concurrency "${RUNR_EMPLOYER_COMPANY_CONCURRENCY:-1}" \
-      --http-concurrency "${RUNR_EMPLOYER_HTTP_CONCURRENCY:-4}" \
-      --browser-concurrency "${RUNR_EMPLOYER_BROWSER_CONCURRENCY:-1}" \
-      --account-concurrency "${RUNR_EMPLOYER_ACCOUNT_CONCURRENCY:-1}" \
-      --per-origin-concurrency "${RUNR_EMPLOYER_PER_ORIGIN_CONCURRENCY:-1}" \
       $args > "$metrics_path" 2>&1
   fi
   exit_code=$?
