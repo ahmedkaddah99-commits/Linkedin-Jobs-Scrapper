@@ -2530,8 +2530,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         policy = get_publication_policy(policy_version)
 
         def publish(connection):
-            candidate_rows = connection.execute(
-                """
+            candidate_query = """
                 SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                 j.title, j.location, j.canonical_url,
                                 COALESCE(v.apply_url, '') AS apply_url,
@@ -2560,17 +2559,35 @@ class SqliteAcquisitionStore(_SqliteStore):
                 LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
                 WHERE j.lifecycle_state != 'closed'
                 ORDER BY j.title, j.canonical_job_id
-                """
-            ).fetchall()
-            snapshot, rejected_rows = self._publication_rows_with_completeness(
-                candidate_rows,
-                policy=policy,
-            )
-            self._persist_publication_rejections(
-                connection,
-                cycle_id=cycle_id,
-                rejected_rows=rejected_rows,
-            )
+                LIMIT ? OFFSET ?
+            """
+            snapshot: list[dict[str, Any]] = []
+            candidate_count = 0
+            rejected_count = 0
+            page_size = 200
+            offset = 0
+            while True:
+                candidate_rows = connection.execute(
+                    candidate_query,
+                    (page_size, offset),
+                ).fetchall()
+                if not candidate_rows:
+                    break
+                page_snapshot, rejected_rows = self._publication_rows_with_completeness(
+                    candidate_rows,
+                    policy=policy,
+                )
+                snapshot.extend(page_snapshot)
+                self._persist_publication_rejections(
+                    connection,
+                    cycle_id=cycle_id,
+                    rejected_rows=rejected_rows,
+                )
+                candidate_count += len(candidate_rows)
+                rejected_count += len(rejected_rows)
+                offset += len(candidate_rows)
+                if len(candidate_rows) < page_size:
+                    break
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
@@ -2641,8 +2658,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "origin": normalized_origin,
                     "policy_version": policy.version,
                     "mode": "existing_catalog_republish",
-                    "candidate_count": len(candidate_rows),
-                    "rejected_count": len(rejected_rows),
+                    "candidate_count": candidate_count,
+                    "rejected_count": rejected_count,
                 },
                 created_at=now,
             )
