@@ -12,7 +12,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
 import requests
@@ -92,9 +92,19 @@ class OfficialWebsiteProvider:
     same bounded/idempotent worker contract.
     """
 
-    def __init__(self, *, timeout_seconds: int = 10, max_html_bytes: int = 512_000):
+    def __init__(self, *, timeout_seconds: int = 10, max_html_bytes: int = 512_000, proxy_url: str = ""):
         self.timeout_seconds = max(2, int(timeout_seconds))
         self.max_html_bytes = max(32_000, int(max_html_bytes))
+        explicit = proxy_url or os.getenv("WEBSHARE_PROXY_URL") or os.getenv("WEBSHARE_PROXY") or ""
+        username = os.getenv("WEBSHARE_PROXY_USERNAME", "").strip()
+        password = os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip()
+        host = os.getenv("WEBSHARE_PROXY_HOST", "p.webshare.io").strip() or "p.webshare.io"
+        port = os.getenv("WEBSHARE_PROXY_PORT", "80").strip() or "80"
+        self.proxy_url = str(explicit).strip() or (
+            f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+            if username and password
+            else ""
+        )
 
     @staticmethod
     def _fetch(
@@ -103,11 +113,16 @@ class OfficialWebsiteProvider:
         timeout_seconds: int,
         max_bytes: int,
         approved_host: str = "",
+        proxy_url: str = "",
     ) -> tuple[bytes, str, str, Mapping[str, str]]:
         safe_url = validate_official_url(url, approved_host=approved_host)
         assert_public_official_host(urlparse(safe_url).hostname or "")
         request = Request(safe_url, headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "text/html,application/xhtml+xml"})
-        opener = build_opener(_SafeOfficialRedirectHandler(approved_host=approved_host))
+        handlers: list[Any] = []
+        if proxy_url:
+            handlers.append(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+        handlers.append(_SafeOfficialRedirectHandler(approved_host=approved_host))
+        opener = build_opener(*handlers)
         with opener.open(request, timeout=timeout_seconds) as response:  # noqa: S310 - worker-only, bounded official URL fetch
             final_url = validate_official_url(str(response.url or safe_url), approved_host=approved_host)
             assert_public_official_host(urlparse(final_url).hostname or "")
@@ -183,6 +198,45 @@ class OfficialWebsiteProvider:
             result["founding_year"] = int(match.group(1)) if match else None
         return {key: value for key, value in result.items() if value not in (None, "", [])}
 
+    def _fetch_free_logo(self, domain: str) -> tuple[bytes, str, str] | None:
+        """Fetch one public domain logo without a paid/API-key request."""
+
+        normalized = str(domain or "").strip().casefold().rstrip(".")
+        if not normalized:
+            return None
+        try:
+            response = requests.get(
+                f"https://api.companyenrich.com/logo/{quote(normalized, safe='.-')}",
+                headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "image/*"},
+                timeout=self.timeout_seconds,
+                allow_redirects=True,
+                proxies={"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else None,
+            )
+            if int(response.status_code or 0) != 200:
+                return None
+            content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip()
+            body = bytes(response.content or b"")
+            validated = validate_logo(body, content_type)
+            if validated.width == 128 and validated.height == 128:
+                return None
+            return body, validated.content_type, str(response.url or "")
+        except (LogoValidationError, requests.RequestException, OSError, ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _logo_reference(data: Mapping[str, Any], html_text: str, final_url: str) -> str:
+        value = data.get("logo")
+        if isinstance(value, Mapping):
+            value = value.get("url") or value.get("contentUrl")
+        if not isinstance(value, str) or not value.strip():
+            soup = BeautifulSoup(html_text, "html.parser")
+            meta = soup.find("meta", attrs={"property": "og:image"}) or soup.find(
+                "meta", attrs={"name": "twitter:image"}
+            )
+            value = meta.get("content") if meta is not None else ""
+        candidate = str(value or "").strip()
+        return urljoin(final_url, candidate) if candidate else ""
+
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
         del conditional
         source_url = str(company.get("provenance_url") or "").strip()
@@ -192,13 +246,37 @@ class OfficialWebsiteProvider:
             return {"fields": {}, "source": "official_company_website", "provenance_url": source_url, "request_count": 0}
         parsed = urlparse(source_url)
         source_host = parsed.hostname or ""
-        body, content_type, final_url, headers = await asyncio.to_thread(
-            self._fetch,
-            source_url,
-            timeout_seconds=self.timeout_seconds,
-            max_bytes=self.max_html_bytes,
-            approved_host=source_host,
-        )
+        try:
+            body, content_type, final_url, headers = await asyncio.to_thread(
+                self._fetch,
+                source_url,
+                timeout_seconds=self.timeout_seconds,
+                max_bytes=self.max_html_bytes,
+                approved_host=source_host,
+                proxy_url=self.proxy_url,
+            )
+        except Exception:
+            free_logo = await asyncio.to_thread(self._fetch_free_logo, source_host)
+            result: dict[str, Any] = {
+                "fields": {},
+                "source": "official_company_website",
+                "provenance_url": source_url,
+                "observed_at": utc_now_iso(),
+                "verified_at": "",
+                "request_count": 1,
+                "cost_units": 0.0,
+            }
+            if free_logo is not None:
+                logo_body, logo_type, logo_url = free_logo
+                result.update(
+                    {
+                        "logo_bytes": logo_body,
+                        "logo_content_type": logo_type,
+                        "logo_source_url": logo_url,
+                        "request_count": 2,
+                    }
+                )
+            return result
         if len(body) > self.max_html_bytes or "html" not in content_type.casefold():
             return {"fields": {}, "source": "official_company_website", "provenance_url": final_url, "request_count": 1}
         html_text = body.decode("utf-8", errors="replace")
@@ -235,20 +313,30 @@ class OfficialWebsiteProvider:
             "request_count": 1,
             "cost_units": 0.0,
         }
-        logo_url = data.get("logo") if isinstance(data.get("logo"), str) else ""
+        logo_url = self._logo_reference(data, html_text, final_url)
         try:
             safe_logo_url = validate_official_url(logo_url, approved_host=source_host) if logo_url else ""
         except LogoValidationError:
             safe_logo_url = ""
         if safe_logo_url:
-            logo_body, logo_type, logo_final_url, _ = await asyncio.to_thread(
-                self._fetch,
-                safe_logo_url,
-                timeout_seconds=self.timeout_seconds,
-                max_bytes=2 * 1024 * 1024,
-                approved_host=source_host,
-            )
-            result.update({"logo_bytes": logo_body, "logo_content_type": logo_type, "logo_source_url": logo_final_url, "request_count": 2})
+            try:
+                logo_body, logo_type, logo_final_url, _ = await asyncio.to_thread(
+                    self._fetch,
+                    safe_logo_url,
+                    timeout_seconds=self.timeout_seconds,
+                    max_bytes=2 * 1024 * 1024,
+                    approved_host=source_host,
+                    proxy_url=self.proxy_url,
+                )
+                validate_logo(logo_body, logo_type)
+                result.update({"logo_bytes": logo_body, "logo_content_type": logo_type, "logo_source_url": logo_final_url, "request_count": 2})
+            except Exception:
+                pass
+        if "logo_bytes" not in result:
+            free_logo = await asyncio.to_thread(self._fetch_free_logo, source_host)
+            if free_logo is not None:
+                logo_body, logo_type, logo_final_url = free_logo
+                result.update({"logo_bytes": logo_body, "logo_content_type": logo_type, "logo_source_url": logo_final_url, "request_count": int(result.get("request_count") or 1) + 1})
         del headers
         return result
 
@@ -864,11 +952,22 @@ class WebshareLinkedInCompanyProvider(ScrapeOpsLinkedInCompanyProvider):
             if username and password
             else ""
         )
+        self.official_provider = OfficialWebsiteProvider(
+            timeout_seconds=timeout_seconds,
+            max_html_bytes=max_html_bytes,
+            proxy_url=self.webshare_proxy_url,
+        )
 
     def _direct_proxy_config(self) -> Mapping[str, str] | None:
         if not self.webshare_proxy_url:
             return None
         return {"http": self.webshare_proxy_url, "https": self.webshare_proxy_url}
+
+    async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
+        provenance = str(company.get("provenance_url") or "").strip().casefold()
+        if "linkedin.com/company/" not in provenance:
+            return await self.official_provider.enrich(company, conditional=conditional)
+        return await super().enrich(company, conditional=conditional)
 
 
 def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:

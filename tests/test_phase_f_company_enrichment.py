@@ -188,6 +188,22 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["logo_content_type"], "image/svg+xml")
         self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
 
+    def test_webshare_provider_delegates_official_company_urls(self):
+        provider = WebshareLinkedInCompanyProvider()
+
+        async def fake_official(company, *, conditional):
+            return {"source": "official_company_website", "provenance_url": company["provenance_url"]}
+
+        with patch.object(provider.official_provider, "enrich", side_effect=fake_official) as enrich:
+            result = asyncio.run(
+                provider.enrich(
+                    {"canonical_name": "Acme GmbH", "provenance_url": "https://acme.example"},
+                    conditional={},
+                )
+            )
+        enrich.assert_called_once()
+        self.assertEqual(result["source"], "official_company_website")
+
     def test_company_enrichment_is_worker_only_and_customer_reads_do_not_fetch(self):
         app, storage = self.backend()
         provider = FixtureProvider()
