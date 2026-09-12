@@ -122,6 +122,7 @@ def test_online_backup_accepts_the_current_15_table_linkedin_schema(tmp_path: Pa
     checkpoint_dir = tmp_path / "backups" / "linkedin" / str(manifest["checkpoint_id"])
     assert validate_checkpoint(checkpoint_dir, expected_role="linkedin")["backup"]["schema"]["tables"] == [
         "collection_cursor",
+        "company_scan_schedule",
         "company_scans",
         "company_slug_aliases",
         "detail_attempts",
@@ -166,7 +167,7 @@ def test_backup_validation_accepts_legacy_employer_schema(tmp_path: Path) -> Non
         connection.commit()
     manifest = create_checkpoint(**_checkpoint_kwargs(source, tmp_path / "backups"))
     checkpoint_dir = tmp_path / "backups" / "employer" / str(manifest["checkpoint_id"])
-    assert validate_checkpoint(checkpoint_dir, expected_role="employer")["backup"]["schema"]["tables"] == ["companies", "jobs"]
+    assert validate_checkpoint(checkpoint_dir, expected_role="employer")["backup"]["schema"]["tables"] == ["companies", "company_scan_schedule", "jobs"]
 
 
 def test_online_backup_preserves_wal_consistency_schema_and_source(tmp_path: Path) -> None:
@@ -196,7 +197,7 @@ def test_online_backup_preserves_wal_consistency_schema_and_source(tmp_path: Pat
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_digest
     assert not list(checkpoint_dir.glob("*.db-wal"))
     assert not list(checkpoint_dir.glob("*.db-shm"))
-    assert manifest["state"]["schema"]["tables"] == ["collection_cursor", "companies", "coverage_receipts", "jobs"]
+    assert manifest["state"]["schema"]["tables"] == ["collection_cursor", "companies", "company_scan_schedule", "coverage_receipts", "jobs"]
 
 
 def test_off_host_upload_commits_manifest_last_and_remote_restore_is_isolated(tmp_path: Path) -> None:

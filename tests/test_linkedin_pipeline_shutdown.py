@@ -384,6 +384,7 @@ def test_budget_exhaustion_does_not_advance_bounded_cycle_cursor(tmp_path: Path)
 
     assert first["run_outcome"] == "PARTIAL"
     state = StateStore(tmp_path / "output" / "master_linkedin_jobs_state.db")
-    # Cursor must stay at the beginning so the same company is retried.
-    assert state.get_cursor() == 0
+    # The cursor advances while the failed company remains due in its
+    # per-company retry schedule; one failed cohort must not starve the rest.
+    assert state.get_cursor() == 1
     state.close()

@@ -22,7 +22,7 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -198,6 +198,27 @@ REMOTE_GERMANY_RE = re.compile(
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def select_due_company_window(
+    ordered_ids: Iterable[str], *, cursor: int, limit: int, due_ids: set[str]
+) -> tuple[list[str], int, int]:
+    """Select a bounded rotating employer cohort from durable due IDs."""
+
+    ordered = [str(value) for value in ordered_ids]
+    if not ordered or limit <= 0:
+        return [], 0, 0
+    start = max(0, int(cursor)) % len(ordered)
+    selected: list[str] = []
+    examined = 0
+    for offset in range(len(ordered)):
+        candidate = ordered[(start + offset) % len(ordered)]
+        examined += 1
+        if candidate in due_ids:
+            selected.append(candidate)
+            if len(selected) >= int(limit):
+                break
+    return selected, (start + examined) % len(ordered), examined
 
 
 def _text(value: Any) -> str:
@@ -1269,6 +1290,16 @@ class EmployerState:
                     cursor_index INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS company_scan_schedule (
+                    company_key TEXT PRIMARY KEY,
+                    last_run_id TEXT NOT NULL DEFAULT '',
+                    last_status TEXT NOT NULL DEFAULT '',
+                    next_scan_at TEXT NOT NULL DEFAULT '',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self.connection.commit()
@@ -1289,6 +1320,20 @@ class EmployerState:
                 CREATE TABLE IF NOT EXISTS collection_cursor (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     cursor_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS company_scan_schedule (
+                    company_key TEXT PRIMARY KEY,
+                    last_run_id TEXT NOT NULL DEFAULT '',
+                    last_status TEXT NOT NULL DEFAULT '',
+                    next_scan_at TEXT NOT NULL DEFAULT '',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -1336,6 +1381,7 @@ class EmployerState:
             self.connection.execute("DELETE FROM companies")
             self.connection.execute("DELETE FROM coverage_receipts")
             self.connection.execute("DELETE FROM collection_cursor")
+            self.connection.execute("DELETE FROM company_scan_schedule")
 
     def get_cursor(self) -> int:
         """Return the durable bounded-cycle cursor (index into the input order)."""
@@ -1357,6 +1403,62 @@ class EmployerState:
                 "INSERT INTO collection_cursor(id,cursor_index,updated_at) VALUES(1,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET cursor_index=excluded.cursor_index,updated_at=excluded.updated_at",
                 (value, utc_now()),
+            )
+
+    def due_company_keys(self, company_keys: Iterable[str], now: str | None = None) -> set[str]:
+        keys = [str(value) for value in company_keys if str(value).strip()]
+        if not keys:
+            return set()
+        timestamp = now or utc_now()
+        placeholders = ",".join("?" for _ in keys)
+        rows = self.connection.execute(
+            f"SELECT company_key,next_scan_at FROM company_scan_schedule WHERE company_key IN ({placeholders})",
+            tuple(keys),
+        ).fetchall()
+        checkpoints = {str(row["company_key"]): str(row["next_scan_at"] or "") for row in rows}
+        return {key for key in keys if not checkpoints.get(key) or checkpoints[key] <= timestamp}
+
+    def record_company_checkpoint(
+        self,
+        company: EmployerCompany,
+        *,
+        run_id: str,
+        status: str,
+        error: str = "",
+        now: str | None = None,
+    ) -> None:
+        key = company.canonical_company_id or company.website_url
+        timestamp = now or utc_now()
+        normalized = str(status or "").casefold()
+        if normalized in {"completed", "no_jobs"}:
+            delay = timedelta(hours=168 if normalized == "completed" else 24)
+            failure_increment = 0
+        else:
+            delay = timedelta(hours=1)
+            failure_increment = 1
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        next_scan = (parsed + delay).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with self.connection:
+            previous = self.connection.execute(
+                "SELECT attempt_count,consecutive_failures FROM company_scan_schedule WHERE company_key=?",
+                (key,),
+            ).fetchone()
+            attempts = int(previous["attempt_count"] if previous else 0) + 1
+            prior_failures = int(previous["consecutive_failures"] if previous else 0)
+            self.connection.execute(
+                """INSERT INTO company_scan_schedule(
+                    company_key,last_run_id,last_status,next_scan_at,attempt_count,
+                    consecutive_failures,last_error,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(company_key) DO UPDATE SET
+                    last_run_id=excluded.last_run_id,last_status=excluded.last_status,
+                    next_scan_at=excluded.next_scan_at,attempt_count=excluded.attempt_count,
+                    consecutive_failures=excluded.consecutive_failures,last_error=excluded.last_error,
+                    updated_at=excluded.updated_at""",
+                (
+                    key, str(run_id), normalized, next_scan, attempts,
+                    prior_failures + failure_increment, str(error or "")[:500], timestamp,
+                ),
             )
 
     def company_status(self, company: EmployerCompany) -> str:
@@ -1564,6 +1666,13 @@ class EmployerState:
                     (key, json.dumps(job, ensure_ascii=False), utc_now()),
                 )
         self.save_coverage_receipt(result, generation_id=generation_id, source_version=source_version)
+        failure = result.failures[-1] if result.failures else {}
+        self.record_company_checkpoint(
+            result.company,
+            run_id=generation_id,
+            status=result.status,
+            error=failure.get("error", "") if isinstance(failure, Mapping) else "",
+        )
 
     def jobs(self) -> list[dict[str, Any]]:
         return list(self.iter_jobs())
@@ -1936,31 +2045,33 @@ def run_collection(
         use_cursor = resume and limit > 0 and not company_id
         cursor = 0
         ordered = companies
+        selection_next_cursor = 0
+        selection_examined = 0
         if use_cursor and companies:
             cursor = state.get_cursor() % len(companies)
-            ordered = companies[cursor:] + companies[:cursor]
-        examined = 0
+            company_keys = [company.canonical_company_id or company.website_url for company in companies]
+            by_key = {company.canonical_company_id or company.website_url: company for company in companies}
+            due_ids = state.due_company_keys(company_keys, utc_now())
+            existing_keys = {
+                key for key, company in zip(company_keys, companies)
+                if resume and state.company_status(company)
+            }
+            completed_checkpoint_keys = {
+                key for key in existing_keys if key not in due_ids and state.company_status(by_key[key]) == "completed"
+            }
+            metrics["companies_skipped_resume"] += len(completed_checkpoint_keys)
+            if int(recheck_budget) <= 0:
+                metrics["rechecks_skipped_budget"] += len(existing_keys - completed_checkpoint_keys)
+                due_ids -= existing_keys
+            selected_ids, selection_next_cursor, selection_examined = select_due_company_window(
+                company_keys,
+                cursor=cursor,
+                limit=limit,
+                due_ids=due_ids,
+            )
+            ordered = [by_key[key] for key in selected_ids]
         for company in ordered:
-            examined += 1
             prior_status = state.company_status(company)
-            if resume and state.should_skip_resume(company):
-                metrics["companies_skipped_resume"] += 1
-                print(
-                    json.dumps(
-                        {
-                            "company": company.company_name,
-                            "status": "skipped_resume",
-                            "companies_processed": metrics["companies_processed"],
-                            "companies_skipped_resume": metrics["companies_skipped_resume"],
-                            "persisted_jobs": state.job_count(),
-                            "exported_jobs": metrics["exported_jobs"],
-                            "final_export_completed": metrics["final_export_completed"],
-                        },
-                        ensure_ascii=False,
-                    ),
-                    flush=True,
-                )
-                continue
             if resume and prior_status:
                 if metrics["rechecks_attempted"] >= metrics["recheck_budget"]:
                     metrics["rechecks_skipped_budget"] += 1
@@ -1986,8 +2097,11 @@ def run_collection(
             if limit > 0 and len(work) >= limit:
                 break
         if use_cursor and companies:
-            state.set_cursor((cursor + examined) % len(companies))
+            state.set_cursor(selection_next_cursor)
         metrics["selected_companies"] = len(work) if use_cursor else len(selected)
+        metrics["selection_examined"] = selection_examined
+        metrics["selection_next_cursor"] = selection_next_cursor
+        metrics["companies_deferred"] = max(0, len(companies) - len(work)) if use_cursor else 0
 
         def record_checkpoint(result: EmployerCollectionResult) -> None:
             state.save(result, generation_id=run_generation_id, source_version=source_version)

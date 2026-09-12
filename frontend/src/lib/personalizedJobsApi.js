@@ -31,6 +31,8 @@ export const INITIAL_PERSONALIZED_JOB_FILTERS = {
 };
 
 const DATE_POSTED_DAYS = { "24h": "1", "7d": "7", "30d": "30" };
+const MORE_DATE_POSTED_DAYS = { past_24_hours: "1", past_7_days: "7", past_30_days: "30" };
+const MORE_SORT_MODES = { most_recent: "newest", most_suitable: "priority", least_competitive: "least_competitive", salary_high_to_low: "newest", salary_low_to_high: "newest", company_name: "newest" };
 
 function text(value) {
   return String(value ?? "").trim();
@@ -93,7 +95,6 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     language: filters.language,
     work_authorization: filters.workAuthorization,
     sponsorship: filters.sponsorship,
-    posted_within_days: DATE_POSTED_DAYS[filters.datePosted] || "",
     company: filters.company,
     industry: filters.industry,
     company_size: filters.companySize,
@@ -110,11 +111,8 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     preferred_major: filters.preferredMajor,
     security_clearance: filters.securityClearance,
     lifting_requirement: filters.liftingRequirement,
-    sort: filters.sort === "best" ? "priority" : (filters.sort || filters.sort_by),
-    posting_age: filters.posting_age,
-    posted_at: filters.posted_at,
-    application_deadline: filters.application_deadline,
-    exclude_expired: filters.exclude_expired,
+    sort: filters.sort === "best" ? "priority" : (filters.sort || MORE_SORT_MODES[filters.sort_by] || filters.sort_by),
+    posted_within_days: DATE_POSTED_DAYS[filters.datePosted] || MORE_DATE_POSTED_DAYS[filters.posting_age] || "",
     simple_application: filters.simple_application,
     exclude_applied: filters.exclude_applied,
     exclude_saved: filters.exclude_saved,

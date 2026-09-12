@@ -39,8 +39,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-linux.txt ./
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements-linux.txt
+RUN python -m venv /app/.venv \
+    && /app/.venv/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /app/.venv/bin/python -m pip install --no-cache-dir -r requirements-linux.txt
 
 # Runtime PDF rendering imports Playwright and the CV studio source, but does
 # not need the static frontend build output.

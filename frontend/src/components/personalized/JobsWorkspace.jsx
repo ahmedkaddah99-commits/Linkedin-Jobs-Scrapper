@@ -285,20 +285,41 @@ function DrawerFilterControl({ filter, value, onChange }) {
   return <input aria-label={filter.label} onChange={(event) => onChange(event.target.value)} placeholder={inputType === "text" ? `Add ${filter.label.toLowerCase()}` : "Any"} type={inputType} value={value ?? ""} />;
 }
 
-function FilterDrawer({ filters, onChange, onClear, onClose, onApply }) {
+const FILTER_CAPABILITY_BY_KEY = {
+  posting_age: "posting_recency", posted_at: false, application_deadline: false, sort_by: true, exclude_expired: false,
+  simple_application: false, exclude_applied: false, exclude_saved: false, cover_letter_required: false, referral_available: false, recruiter_contact_available: false, applicant_count_max: false, apply_method: false,
+  salary_min: "salary", salary_max: "salary", salary_currency: false, salary_period: false, salary_disclosed: false, compensation_types: false,
+  language: "language", languages: false,
+  work_authorization: "work_authorization", work_authorization_required: false, citizenship_required: false,
+  sponsorship: "sponsorship", visa_sponsorship: false, h1b_sponsorship: false,
+  industry: "industry", company_size: "company_size", company_stage: "company_stage", funding_stage: "funding_stage",
+  company_include: false, company_exclude: "hidden_companies", company_type: false, founded_year_min: "founded_year", headquarters_location: false,
+  funding_min: "funding_range", funding_max: "funding_range", funding_year_min: "funding_year", funding_year_max: "funding_year", education: "education", preferred_major: "preferred_major", degree_requirement: false, fields_of_study: false, certifications: false, professional_license: false,
+  security_clearance: "security_clearance", lifting_requirement: "lifting_requirement",
+  remote_scope: false, travel_percent_max: false, relocation_assistance: false, workplace_type: false,
+  keywords_include: false, keywords_exclude: false, skills_include: false, skills_exclude: false, years_experience_min: false, years_experience_max: false, management_role: false,
+  benefits: false, verified_posting: false, has_company_profile: false, has_closing_date: false, source_type: false,
+};
+
+function FilterDrawer({ capabilities = {}, filters, onChange, onClear, onClose, onApply }) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
+  const supports = (filter) => {
+    const capability = FILTER_CAPABILITY_BY_KEY[filter.key];
+    if (capability === false) return false;
+    return !capability || !Object.keys(capabilities).length || capabilities[capability] !== false;
+  };
   return <div className="jobs-filter-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside aria-label="More filters" aria-modal="true" className="jobs-filter-drawer" role="dialog">
       <header className="jobs-filter-drawer__header"><div><p className="jobs-eyebrow">Job search</p><h2>More filters</h2><p>Every control maps to a stable backend key.</p></div><button aria-label="Close filters" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
       <div className="jobs-filter-drawer__body">
         <label className="jobs-drawer-search"><Icon>search</Icon><input aria-label="Search filter keys" onChange={(event) => setQuery(event.target.value)} placeholder="Find a filter or backend key" value={query} /></label>
         <div className="jobs-filter-groups">{JOB_MORE_FILTER_GROUPS.map((group) => {
-          const visibleFilters = group.filters.filter((filter) => !normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized));
+          const visibleFilters = group.filters.filter((filter) => supports(filter) && (!normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized)));
           if (!visibleFilters.length) return null;
           return <section className="jobs-filter-group" key={group.group}><header><span className="jobs-filter-group__icon"><Icon>{FILTER_GROUP_ICONS[group.group] || "tune"}</Icon></span><div><h3>{group.label}</h3><small>{group.filters.length} backend key{group.filters.length === 1 ? "" : "s"}</small></div></header><div className="jobs-filter-list">{visibleFilters.map((filter) => <div className="jobs-drawer-filter" key={filter.key}><div><strong>{filter.label}</strong><code>{filter.key}</code></div><DrawerFilterControl filter={filter} onChange={(value) => onChange(filter.key, value)} value={filters[filter.key]} /></div>)}</div></section>;
         })}</div>
-        {!JOB_MORE_FILTER_GROUPS.some((group) => group.filters.some((filter) => !normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized))) ? <div className="jobs-filter-empty"><Icon>search_off</Icon><strong>No filter keys found</strong><span>Try salary, visa, company, education, or keyword.</span></div> : null}
+        {!JOB_MORE_FILTER_GROUPS.some((group) => group.filters.some((filter) => supports(filter) && (!normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized)))) ? <div className="jobs-filter-empty"><Icon>search_off</Icon><strong>No supported filter keys found</strong><span>This catalog has no verified data for that filter yet.</span></div> : null}
       </div>
       <footer className="jobs-filter-drawer__footer"><button className="jobs-outline-button" onClick={onClear} type="button">Clear all</button><button className="jobs-primary-button" onClick={onApply} type="button">Show results</button></footer>
     </aside>
@@ -350,7 +371,6 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [busyAction, setBusyAction] = useState("");
   const [feedAttempt, setFeedAttempt] = useState(0);
   const listBodyRef = useRef(null);
-  const loadMoreSentinelRef = useRef(null);
   const relevantJobEventRef = useRef("");
   const initialFeedRef = useRef(true);
   const skipNextFeedRef = useRef(false);
@@ -578,17 +598,6 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }
   }
 
-  useEffect(() => {
-    const root = listBodyRef.current;
-    const sentinel = loadMoreSentinelRef.current;
-    if (!root || !sentinel || !feed?.next_cursor || loading || loadingMore || typeof IntersectionObserver === "undefined") return undefined;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadMore();
-    }, { root, rootMargin: "0px 0px 720px 0px" });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [feed?.next_cursor, jobs.length, loading, loadingMore]);
-
   function selectJob(job) {
     setSelectedJobId(job.id);
     setDetailJob(null);
@@ -631,7 +640,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     {feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="Loading more jobs" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
       {!isMobile || !showMobileList ? <section className="jobs-detail-panel">{detailContent}</section> : null}
     </div>
     {filtersOpen ? <FilterDrawer capabilities={feed?.filter_capabilities || {}} filters={filters} onApply={() => setFiltersOpen(false)} onChange={updateFilter} onClear={clearFilters} onClose={() => setFiltersOpen(false)} /> : null}

@@ -126,9 +126,9 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
             ).fetchone()[0]
         assert "master-alpha" in companies
         assert {"linkedin", "greenhouse"}.issubset(sources)
-        assert rejection_count == 1
+        assert rejection_count == 0
         first_publication = store.get_public_catalog(limit=20, offset=0)
-        assert first_publication["total"] == 2
+        assert first_publication["total"] == 3
     finally:
         store.close() if hasattr(store, "close") else None
 

@@ -599,6 +599,7 @@ def validate_job_for_publication(
     source_records: Sequence[Mapping[str, Any]] | None = None,
     min_description_chars: int = 80,
     stale_after_days: int = 90,
+    require_application_destination: bool = True,
 ) -> CompletenessResult:
     """Classify one canonical job record for publication.
 
@@ -685,35 +686,36 @@ def validate_job_for_publication(
     # --- application URL ---
     application_url, application_kind = _application_url_and_kind(record)
     destination_class = _APPLICATION_DESTINATION_CLASSIFICATIONS.get(_norm(application_kind), application_kind)
-    if not application_url:
-        mark(REASON_MISSING_APPLICATION_URL, "apply_url", "application_url", "job_detail_url")
-        field_states["application_url"] = "missing"
-    elif not is_valid_url(application_url):
-        mark(REASON_INVALID_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
-        field_states["application_url"] = "invalid"
-    elif is_linkedin_job_detail_url(application_url):
-        mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
-        field_states["application_url"] = "invalid"
-    elif is_tracking_only_url(application_url):
-        mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
-        field_states["application_url"] = "invalid"
-    elif destination_class in _REJECTED_APPLICATION_DESTINATIONS:
-        mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", detail=application_kind)
-        field_states["application_url"] = "invalid"
-    else:
-        field_states["application_url"] = "present"
+    if require_application_destination:
+        if not application_url:
+            mark(REASON_MISSING_APPLICATION_URL, "apply_url", "application_url", "job_detail_url")
+            field_states["application_url"] = "missing"
+        elif not is_valid_url(application_url):
+            mark(REASON_INVALID_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
+            field_states["application_url"] = "invalid"
+        elif is_linkedin_job_detail_url(application_url):
+            mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
+            field_states["application_url"] = "invalid"
+        elif is_tracking_only_url(application_url):
+            mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
+            field_states["application_url"] = "invalid"
+        elif destination_class in _REJECTED_APPLICATION_DESTINATIONS:
+            mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", detail=application_kind)
+            field_states["application_url"] = "invalid"
+        else:
+            field_states["application_url"] = "present"
 
-    # LinkedIn's embedded Easy Apply flow is intentionally not a supported
-    # Runr destination.  An unknown method is equally unsafe: a producer row
-    # must establish that it has an employer/ATS destination before it can be
-    # shown to a customer.  Keep this check independent from the URL check so
-    # rejected source evidence retains both facts.
-    if _is_linkedin_source(record):
-        easy_apply_status = _easy_apply_status(record)
-        if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
-            mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
-        elif easy_apply_status != "false":
-            mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
+        # Strict audit mode rejects embedded Easy Apply and unknown methods.
+        # Display-first publication records those fields without using them to
+        # hide an otherwise complete job.
+        if _is_linkedin_source(record):
+            easy_apply_status = _easy_apply_status(record)
+            if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
+                mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
+            elif easy_apply_status != "false":
+                mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
+    else:
+        field_states["application_url"] = "optional_missing" if not application_url else "present_unverified"
 
     # --- description ---
     description = _description(record)

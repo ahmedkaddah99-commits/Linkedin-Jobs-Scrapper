@@ -429,6 +429,27 @@ def _clean(value: object) -> str:
     return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
 
 
+def select_due_company_window(
+    ordered_ids: Iterable[str], *, cursor: int, limit: int, due_ids: set[str]
+) -> tuple[list[str], int, int]:
+    """Select a bounded rotating window without losing the cursor on a partial run."""
+
+    ordered = [str(value) for value in ordered_ids]
+    if not ordered or limit <= 0:
+        return [], 0, 0
+    start = max(0, int(cursor)) % len(ordered)
+    selected: list[str] = []
+    examined = 0
+    for offset in range(len(ordered)):
+        candidate = ordered[(start + offset) % len(ordered)]
+        examined += 1
+        if candidate in due_ids:
+            selected.append(candidate)
+            if len(selected) >= int(limit):
+                break
+    return selected, (start + examined) % len(ordered), examined
+
+
 def is_linkedin_host(raw_url: object) -> bool:
     """Return True when ``raw_url`` is hosted on linkedin.com or any subdomain.
 
@@ -2005,6 +2026,16 @@ class StateStore:
                     cursor_index INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS company_scan_schedule (
+                    linkedin_company_id TEXT PRIMARY KEY,
+                    last_run_id TEXT NOT NULL DEFAULT '',
+                    last_status TEXT NOT NULL DEFAULT '',
+                    next_scan_at TEXT NOT NULL DEFAULT '',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column("runs", "finished_at", "TEXT NOT NULL DEFAULT ''")
@@ -2175,6 +2206,70 @@ class StateStore:
                 "INSERT INTO collection_cursor(id, cursor_index, updated_at) VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET cursor_index=excluded.cursor_index, updated_at=excluded.updated_at",
                 (value, _utc_now()),
+            )
+
+    def due_company_ids(self, company_ids: Iterable[str], now: str | None = None) -> set[str]:
+        """Return companies whose durable checkpoint is due or missing."""
+
+        ids = [str(value) for value in company_ids if str(value).strip()]
+        if not ids:
+            return set()
+        placeholders = ",".join("?" for _ in ids)
+        timestamp = now or _utc_now()
+        rows = self.connection.execute(
+            f"SELECT linkedin_company_id, next_scan_at FROM company_scan_schedule WHERE linkedin_company_id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        checkpoints = {str(row[0]): str(row[1] or "") for row in rows}
+        return {
+            company_id
+            for company_id in ids
+            if not checkpoints.get(company_id) or checkpoints[company_id] <= timestamp
+        }
+
+    def record_company_checkpoint(
+        self,
+        linkedin_company_id: str,
+        *,
+        run_id: str,
+        status: str,
+        error: str = "",
+        now: str | None = None,
+    ) -> None:
+        timestamp = now or _utc_now()
+        normalized = str(status or "").upper()
+        if normalized in COMPLETE_SCAN_STATUSES:
+            delay = timedelta(hours=168)
+            failure_increment = 0
+        elif normalized == "BUDGET_EXHAUSTED":
+            delay = timedelta(minutes=15)
+            failure_increment = 1
+        else:
+            delay = timedelta(hours=1)
+            failure_increment = 1
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        next_scan = (parsed + delay).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with self._lock, self.connection:
+            previous = self.connection.execute(
+                "SELECT attempt_count, consecutive_failures FROM company_scan_schedule WHERE linkedin_company_id=?",
+                (str(linkedin_company_id),),
+            ).fetchone()
+            attempts = int(previous[0] if previous else 0) + 1
+            prior_failures = int(previous[1] if previous else 0)
+            self.connection.execute(
+                """INSERT INTO company_scan_schedule(
+                    linkedin_company_id,last_run_id,last_status,next_scan_at,
+                    attempt_count,consecutive_failures,last_error,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(linkedin_company_id) DO UPDATE SET
+                    last_run_id=excluded.last_run_id,last_status=excluded.last_status,
+                    next_scan_at=excluded.next_scan_at,attempt_count=excluded.attempt_count,
+                    consecutive_failures=excluded.consecutive_failures,last_error=excluded.last_error,
+                    updated_at=excluded.updated_at""",
+                (
+                    str(linkedin_company_id), str(run_id), normalized, next_scan,
+                    attempts, prior_failures + failure_increment, str(error or "")[:500], timestamp,
+                ),
             )
 
     def start_company_scan(
@@ -4157,12 +4252,25 @@ class CatalogRunner:
         self.store.start_run(run_id, mode=self.config.mode, input_sha256=input_hash)
         self._pipeline_stop_event.clear()
         selection_cursor = 0
+        selection_next_cursor = 0
+        selection_examined = 0
         if limit < total:
             selection_cursor = self.store.get_cursor() % total
-            if selection_cursor:
-                selected = ordered[selection_cursor:] + ordered[:selection_cursor]
-                selected = selected[:limit]
+            due_ids = self.store.due_company_ids(
+                (group.linkedin_company_id for group in ordered), self.now()
+            )
+            selected_ids, selection_next_cursor, selection_examined = select_due_company_window(
+                [group.linkedin_company_id for group in ordered],
+                cursor=selection_cursor,
+                limit=limit,
+                due_ids=due_ids,
+            )
+            selected_by_id = {group.linkedin_company_id: group for group in ordered}
+            selected = [selected_by_id[company_id] for company_id in selected_ids]
             self.metrics["selection_cursor"] = selection_cursor
+            self.metrics["selection_next_cursor"] = selection_next_cursor
+            self.metrics["selection_examined"] = selection_examined
+            self.metrics["companies_deferred"] = max(0, total - len(selected))
         try:
             if selected:
                 worker_count = min(max(1, self.config.workers), len(selected))
@@ -4216,6 +4324,13 @@ class CatalogRunner:
                     self._increment("companies_partial")
                 if status == "PARTIAL_SUSPICIOUS_EMPTY":
                     self._increment("suspicious_empty_companies")
+                self.store.record_company_checkpoint(
+                    context.group.linkedin_company_id,
+                    run_id=run_id,
+                    status=status,
+                    error="detail_failures" if context.detail_failures else "",
+                    now=self.now(),
+                )
                 status_counts = self.metrics.setdefault("scan_status_counts", {})
                 if isinstance(status_counts, dict):
                     status_counts[status] = int(status_counts.get(status, 0)) + 1
@@ -4258,12 +4373,11 @@ class CatalogRunner:
             self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
             self._capture_detail_provider_usage()
             self.store.finish_run(run_id, run_status, self.now())
-            # Advance the bounded cycle only when work for this window was
-            # durably completed.  Budget exhaustion or any partial/failed
-            # outcome leaves the cursor where it is so the same companies are
-            # retried on the next cycle rather than being silently skipped.
-            if limit < total and run_outcome in {"COMPLETE", "ZERO"}:
-                self.store.set_cursor((selection_cursor + limit) % total)
+            # Advance the rotating window after selected companies have durable
+            # checkpoints. Failed companies remain due through their retry
+            # schedule; one bad cohort cannot starve the rest of the manifest.
+            if limit < total and selected:
+                self.store.set_cursor(selection_next_cursor)
             if self._event_journal is not None:
                 self._event_journal.close()
                 self._event_journal = None

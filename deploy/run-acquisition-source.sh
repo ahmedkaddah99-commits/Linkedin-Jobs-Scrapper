@@ -24,6 +24,7 @@ if [ "$source_name" = "linkedin" ]; then
   output_dir="$export_root/linkedin"
   state_role="linkedin"
   source_cap="${RUNR_LINKEDIN_MAX_REQUESTS:-100}"
+  company_cap="${RUNR_LINKEDIN_MAX_COMPANIES:-25}"
   pagination_report="${RUNR_LINKEDIN_PAGINATION_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_endpoint_pagination_validation.json}"
   filters_report="${RUNR_LINKEDIN_FILTERS_REPORT:-/srv/runr/shared/inputs/linkedin/linkedin_guest_endpoint_filter_validation.json}"
 else
@@ -31,6 +32,7 @@ else
   output_dir="$export_root/employer"
   state_role="employer"
   source_cap="${RUNR_EMPLOYER_MAX_REQUESTS:-10}"
+  company_cap="${RUNR_EMPLOYER_MAX_COMPANIES:-10}"
 fi
 
 is_positive_integer() {
@@ -40,8 +42,8 @@ is_positive_integer() {
   esac
 }
 
-if ! is_positive_integer "$total_cap" || ! is_positive_integer "$source_cap"; then
-  echo "Acquisition caps must be positive: total=$total_cap source=$source_cap" >&2
+if ! is_positive_integer "$total_cap" || ! is_positive_integer "$source_cap" || ! is_positive_integer "$company_cap"; then
+  echo "Acquisition caps must be positive: total=$total_cap source=$source_cap companies=$company_cap" >&2
   exit 64
 fi
 other_cap="${RUNR_EMPLOYER_MAX_REQUESTS:-10}"
@@ -88,6 +90,7 @@ if [ "$validation_code" -eq 0 ]; then
       --detail-workers "${RUNR_LINKEDIN_DETAIL_WORKERS:-5}" \
       --per-proxy-concurrency "${RUNR_LINKEDIN_PER_PROXY_CONCURRENCY:-1}" \
       --max-requests "$source_cap" \
+      --max-companies "$company_cap" \
       $args > "$metrics_path" 2>&1
   else
     args=""
@@ -97,7 +100,7 @@ if [ "$validation_code" -eq 0 ]; then
       --output-dir "$output_dir" \
       --state-dir "$state_dir" \
       --require-existing-state \
-      --full \
+      --limit "$company_cap" \
       --max-requests "$source_cap" \
       $args > "$metrics_path" 2>&1
   fi

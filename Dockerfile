@@ -22,8 +22,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-linux.txt ./
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements-linux.txt
+RUN python -m venv /app/.venv \
+    && /app/.venv/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /app/.venv/bin/python -m pip install --no-cache-dir -r requirements-linux.txt
 
 COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN npm --prefix frontend ci \

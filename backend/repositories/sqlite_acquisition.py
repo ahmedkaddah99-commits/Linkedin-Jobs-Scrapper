@@ -2240,12 +2240,13 @@ class SqliteAcquisitionStore(_SqliteStore):
         candidate_rows: Iterable[Mapping[str, Any]],
         *,
         policy,
+        validate_completeness: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Return the thin snapshot and durable rejection details.
 
-        The blocking policy is the one explicit activation point for the
-        record-completeness contract. Report-only publications preserve the
-        historical snapshot shape and behavior.
+        Public snapshots always validate the record-completeness contract.
+        Staging snapshots may intentionally retain raw candidates for review;
+        they are not eligible to move the public head.
         """
         snapshot: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
@@ -2274,10 +2275,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "last_verified_at": str(row.get("last_verified_at") or ""),
                 "lifecycle_state": str(row.get("lifecycle_state") or ""),
             }
-            if policy.completeness_mode == "blocking":
+            if validate_completeness:
                 result = validate_job_for_publication(
                     record,
                     company_registry={str(row.get("company_id") or "")},
+                    require_application_destination=policy.missing_apply_is_blocker,
                 )
                 if not result.publishable:
                     rejected.append(
@@ -2476,7 +2478,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (*target_scope_params, cycle_id),
             ).fetchall()
-            snapshot, rejected_rows = self._publication_rows_with_completeness(candidate_rows, policy=policy)
+            snapshot, rejected_rows = self._publication_rows_with_completeness(
+                candidate_rows,
+                policy=policy,
+            )
             self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
@@ -2821,7 +2826,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (*target_scope_params, cycle_id),
             ).fetchall()
-            snapshot, rejected_rows = self._publication_rows_with_completeness(candidate_rows, policy=policy)
+            snapshot, rejected_rows = self._publication_rows_with_completeness(
+                candidate_rows,
+                policy=policy,
+                validate_completeness=False,
+            )
             self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"

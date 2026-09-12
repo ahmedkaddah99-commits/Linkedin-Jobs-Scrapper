@@ -19,6 +19,19 @@ if ! flock -n 9; then
   echo "producer-state publisher is already running" >&2
   exit 75
 fi
+# Read the two producer databases under the same locks used by their
+# collectors. This is the source barrier that makes an incremental snapshot
+# consistent without copying or replaying the full catalogs.
+exec 7>"$lock_root/linkedin.lock"
+if ! flock -n 7; then
+  echo "linkedin acquisition is running; publisher will retry" >&2
+  exit 75
+fi
+exec 8>"$lock_root/employer.lock"
+if ! flock -n 8; then
+  echo "employer acquisition is running; publisher will retry" >&2
+  exit 75
+fi
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 metrics_path="$receipt_root/publisher-latest-metrics.json"
