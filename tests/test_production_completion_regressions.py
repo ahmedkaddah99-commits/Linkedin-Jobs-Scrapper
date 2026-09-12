@@ -103,6 +103,62 @@ def test_publisher_resolves_linkedin_rows_through_identity_crosswalk():
     assert list(grouped) == ["canonical_company_resolved"]
 
 
+def test_publisher_bootstrap_keeps_latest_linkedin_run_live(tmp_path):
+    import json
+    import sqlite3
+
+    from scripts.publish_producer_states import _load_incremental_source
+
+    path = tmp_path / "linkedin.db"
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "CREATE TABLE company_scans (run_id TEXT, finished_at TEXT, status TEXT, linkedin_company_id TEXT)"
+    )
+    connection.execute(
+        "CREATE TABLE job_company_observations (linkedin_company_id TEXT, linkedin_job_id TEXT, run_id TEXT, company_scan_id TEXT, row_json TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO company_scans VALUES (?, ?, ?, ?)",
+        ("latest-run", "2026-09-12T20:00:00Z", "COMPLETE", "1262"),
+    )
+    connection.execute(
+        "INSERT INTO job_company_observations VALUES (?, ?, ?, ?, ?)",
+        (
+            "1262",
+            "job-1",
+            "latest-run",
+            "scan-1",
+            json.dumps(
+                {
+                    "canonical_company_id": "canonical_company_legacy",
+                    "linkedin_company_id": "1262",
+                    "source_company_url": "https://www.linkedin.com/company/deutsche-bank",
+                    "job_title": "Backend Engineer",
+                }
+            ),
+        ),
+    )
+    connection.commit()
+    grouped, changed, checkpoint, source_changed = _load_incremental_source(
+        connection,
+        source="linkedin",
+        checkpoint={"source_rowid": 0, "bootstrap_complete": False, "source_watermark": ""},
+        canonical_by_source_company={},
+        selected_ids={"canonical_company_resolved"},
+        crosswalk={
+            "linkedin-org-url:https://www.linkedin.com/company/deutsche-bank": "canonical_company_resolved"
+        },
+        batch_size=1,
+        now="2026-09-12T20:01:00Z",
+    )
+    connection.close()
+    assert list(grouped) == ["canonical_company_resolved"]
+    assert changed == {"canonical_company_resolved"}
+    assert checkpoint["bootstrap_complete"] is False
+    assert source_changed is True
+
+
 def test_display_first_policy_allows_missing_apply_destination():
     from backend.acquisition.job_publication_completeness import validate_job_for_publication
 

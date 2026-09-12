@@ -244,6 +244,26 @@ def _load_incremental_source(
             rowid=int(checkpoint.get("source_rowid") or 0),
             limit=batch_size,
         )
+        live_source_ids: set[str] = set()
+        if source == SOURCE_LINKEDIN:
+            latest_run = connection.execute(
+                "SELECT run_id FROM company_scans WHERE run_id <> '' ORDER BY finished_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            latest_run_id = _text(latest_run[0]) if latest_run is not None else ""
+            if latest_run_id:
+                live_source_ids = {
+                    _text(row[0])
+                    for row in connection.execute(
+                        "SELECT DISTINCT linkedin_company_id FROM company_scans WHERE run_id=?",
+                        (latest_run_id,),
+                    ).fetchall()
+                    if _text(row[0])
+                }
+                live_rows = connection.execute(
+                    "SELECT rowid,linkedin_company_id,linkedin_job_id,run_id,company_scan_id,row_json FROM job_company_observations WHERE run_id=? ORDER BY rowid DESC LIMIT ?",
+                    (latest_run_id, max(1, int(batch_size))),
+                ).fetchall()
+                rows = [*rows, *live_rows]
         grouped, _source_company_ids = _source_group_from_rows(
             rows,
             source=source,
@@ -259,7 +279,13 @@ def _load_incremental_source(
                 "source_watermark": now if complete else _text(checkpoint.get("source_watermark")),
             }
         )
-        return grouped, set(grouped), next_checkpoint, bool(rows)
+        live_changed_ids = {
+            _resolve_company_id(canonical_by_source_company.get(source_id), crosswalk)
+            for source_id in live_source_ids
+            if canonical_by_source_company.get(source_id)
+        }
+        changed_ids = {value for value in (*grouped.keys(), *live_changed_ids) if value in selected_ids}
+        return grouped, changed_ids, next_checkpoint, bool(rows)
 
     watermark = _text(checkpoint.get("source_watermark"))
     linkedin_source_ids: set[str] = set()
