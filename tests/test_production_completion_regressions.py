@@ -74,6 +74,35 @@ def test_publisher_target_uses_display_first_policy():
     assert target["policy_version"] == "publication_policy_v1"
 
 
+def test_publisher_resolves_linkedin_rows_through_identity_crosswalk():
+    import json
+
+    from scripts.publish_producer_states import _source_group_from_rows
+
+    grouped, _ = _source_group_from_rows(
+        [
+            {
+                "linkedin_company_id": "1262",
+                "linkedin_job_id": "job-1",
+                "row_json": json.dumps(
+                    {
+                        "canonical_company_id": "canonical_company_legacy",
+                        "linkedin_company_id": "1262",
+                        "source_company_url": "https://www.linkedin.com/company/deutsche-bank",
+                    }
+                ),
+            }
+        ],
+        source="linkedin",
+        canonical_by_source_company={},
+        selected_ids={"canonical_company_resolved"},
+        crosswalk={
+            "linkedin-org-url:https://www.linkedin.com/company/deutsche-bank": "canonical_company_resolved"
+        },
+    )
+    assert list(grouped) == ["canonical_company_resolved"]
+
+
 def test_display_first_policy_allows_missing_apply_destination():
     from backend.acquisition.job_publication_completeness import validate_job_for_publication
 

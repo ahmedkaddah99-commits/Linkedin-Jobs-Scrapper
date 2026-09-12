@@ -37,6 +37,9 @@ from backend.application.source_eligibility_manifest import (
     load_manifest,
     validate_manifest_for_source,
 )
+from backend.application.company_identity_canonicalization import (
+    resolve_company_id as resolve_company_identity,
+)
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
@@ -191,8 +194,17 @@ def _source_group_from_rows(
     for row in rows:
         payload = _row_payload(row)
         source_company_id = _text(_row_value(row, "linkedin_company_id")) if source == SOURCE_LINKEDIN else ""
+        identity_payload = dict(payload)
+        if source_company_id:
+            identity_payload.setdefault("linkedin_company_id", source_company_id)
+            identity_payload.setdefault(
+                "linkedin_company_url",
+                _text(payload.get("source_company_url") or payload.get("linkedin_company_url")),
+            )
+        resolved_identity = resolve_company_identity(identity_payload, crosswalk or {})
         canonical_id = _resolve_company_id(
-            payload.get("canonical_company_id")
+            resolved_identity
+            or payload.get("canonical_company_id")
             or canonical_by_source_company.get(source_company_id)
             or (_row_value(row, "company_key") if source == SOURCE_EMPLOYER else ""),
             crosswalk,
@@ -329,23 +341,38 @@ def _manifest_companies(
     rows = [item for item in (manifest.get("rows") or []) if isinstance(item, Mapping)]
     representatives: dict[str, Mapping[str, object]] = {}
     for item in rows:
-        company_id = _resolve_company_id(item.get("canonical_company_id"), crosswalk)
+        company_id = _text(item.get("canonical_company_id"))
         if company_id and company_id not in representatives:
             representatives[company_id] = item
     by_id: dict[str, dict[str, object]] = {}
     for task in tasks:
-        company_id = _resolve_company_id(task.get("canonical_company_id"), crosswalk)
-        if not company_id:
+        original_company_id = _text(task.get("canonical_company_id"))
+        if not original_company_id:
             continue
-        representative = representatives.get(company_id, {})
+        representative = representatives.get(original_company_id, {})
         website = ((representative.get("website") or {}).get("url") or {}).get("canonical", "") if isinstance(representative.get("website"), Mapping) else ""
         linkedin = ((representative.get("linkedin") or {}).get("url") or {}).get("canonical", "") if isinstance(representative.get("linkedin"), Mapping) else ""
+        identity_payload = {
+            **dict(representative),
+            "canonical_company_id": original_company_id,
+            "website_url": _text(website),
+            "linkedin_company_url": _text(linkedin),
+        }
+        linkedin_company_ids = tuple(
+            _text(association.get("linkedin_org_id"))
+            for association in (task.get("organization_associations") or [])
+            if isinstance(association, Mapping) and _text(association.get("linkedin_org_id"))
+        )
+        if source == SOURCE_LINKEDIN and linkedin_company_ids:
+            identity_payload["linkedin_company_id"] = linkedin_company_ids[0]
+        company_id = _text(resolve_company_identity(identity_payload, crosswalk or {})) or original_company_id
         by_id[company_id] = {
             "canonical_company_id": company_id,
             "canonical_company_name": _text(representative.get("company_name")) or company_id,
             "company_name": _text(representative.get("company_name")) or company_id,
             "website_url": _text(website),
             "linkedin_company_url": _text(linkedin),
+            "linkedin_company_ids": linkedin_company_ids,
             "official_employer_hosts": sorted({host for host in (_host(website),) if host}),
         }
     return by_id
@@ -830,10 +857,10 @@ def run_delivery(
         )
 
     linkedin_org_to_canonical = {
-        _text(association.get("linkedin_org_id")): _resolve_company_id(task.get("canonical_company_id"), crosswalk)
-        for task in validate_manifest_for_source(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only)
-        for association in (task.get("organization_associations") or [])
-        if isinstance(association, Mapping) and _text(association.get("linkedin_org_id"))
+        _text(source_company_id): company_id
+        for company_id, company in linkedin_companies.items()
+        for source_company_id in (company.get("linkedin_company_ids") or ())
+        if _text(source_company_id)
     }
     linkedin_checkpoint = _publisher_checkpoint(store, SOURCE_LINKEDIN)
     employer_checkpoint = _publisher_checkpoint(store, SOURCE_EMPLOYER)
