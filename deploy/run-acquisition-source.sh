@@ -11,6 +11,7 @@ project_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$project_dir"
 python_bin="${RUNR_PYTHON_BIN:-$project_dir/.venv/bin/python}"
 manifest="${RUNR_ACQUISITION_MANIFEST:-/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json}"
+runtime_manifest="${RUNR_ACQUISITION_DATA_MANIFEST:-$project_dir/deploy/acquisition-data-manifest.json}"
 state_root="${RUNR_ACQUISITION_STATE_ROOT:-/srv/runr/state}"
 export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 receipt_root="${RUNR_ACQUISITION_RECEIPT_ROOT:-$export_root/receipts}"
@@ -66,7 +67,7 @@ exit_code=1
 
 set +e
 "$python_bin" deploy/validate_acquisition_runtime.py \
-  --manifest "$manifest" \
+  --manifest "$runtime_manifest" \
   --role "$state_role" \
   --allow-state-drift \
   > "$receipt_root/${source_name}-validation.json"
