@@ -3169,6 +3169,17 @@ def _apply_phase_a_scheduler_fencing_migration(connection: DatabaseConnection) -
     )
 
 
+def _apply_publication_latest_observation_index_migration(connection: DatabaseConnection) -> None:
+    """Accelerate latest-source-observation joins used by publication gates."""
+
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_source_observations_canonical_latest
+            ON job_source_observations(canonical_job_id, observed_at DESC, observation_id DESC)
+        """
+    )
+
+
 def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
     """Persist source-identity resolution and transactional company merges."""
 
@@ -3527,5 +3538,10 @@ MIGRATIONS = (
         "059_company_identity_crosswalk",
         "Persist deterministic company identity crosswalks and merge receipts.",
         _apply_company_identity_crosswalk_migration,
+    ),
+    Migration.from_callable(
+        "060_publication_latest_observation_index",
+        "Accelerate latest-source-observation joins used by publication gates.",
+        _apply_publication_latest_observation_index_migration,
     ),
 )
