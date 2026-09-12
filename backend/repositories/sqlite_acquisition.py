@@ -60,6 +60,26 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _insert_publication_jobs_batched(
+    connection,
+    *,
+    publication_id: str,
+    canonical_job_ids: Iterable[str],
+    batch_size: int = 200,
+) -> None:
+    """Insert publication membership with bounded remote SQL round trips."""
+
+    ids = [str(value) for value in canonical_job_ids if str(value).strip()]
+    for offset in range(0, len(ids), max(1, int(batch_size))):
+        batch = ids[offset : offset + max(1, int(batch_size))]
+        values = ",".join("(?, ?)" for _ in batch)
+        parameters = tuple(item for canonical_id in batch for item in (publication_id, canonical_id))
+        connection.execute(
+            f"INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES {values}",
+            parameters,
+        )
+
+
 def _decode(value: str | bytes | None, default: Any) -> Any:
     if value in (None, ""):
         return default
@@ -2584,9 +2604,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                     policy.version,
                 ),
             )
-            connection.executemany(
-                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
-                [(publication_id, str(row["canonical_job_id"])) for row in snapshot],
+            _insert_publication_jobs_batched(
+                connection,
+                publication_id=publication_id,
+                canonical_job_ids=(str(row["canonical_job_id"]) for row in snapshot),
             )
             if previous_publication_id:
                 changed = connection.execute(
