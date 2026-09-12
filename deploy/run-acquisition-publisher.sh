@@ -29,6 +29,10 @@ crosswalk_arg=""
 if [ -n "${RUNR_COMPANY_IDENTITY_CROSSWALK:-}" ]; then
   crosswalk_arg="--identity-crosswalk $RUNR_COMPANY_IDENTITY_CROSSWALK"
 fi
+skip_status_only_arg=""
+if [ "${RUNR_PUBLISHER_SKIP_STATUS_ONLY:-0}" = "1" ]; then
+  skip_status_only_arg="--skip-status-only"
+fi
 
 set +e
 "$python_bin" scripts/publish_producer_states.py \
@@ -38,6 +42,7 @@ set +e
   --data-dir "$data_dir" \
   --source-version "${RUNR_SOURCE_VERSION:-unknown}" \
   $crosswalk_arg \
+  $skip_status_only_arg \
   > "$metrics_path" 2>&1
 exit_code=$?
 set -e

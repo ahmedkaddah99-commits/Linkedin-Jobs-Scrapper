@@ -288,6 +288,7 @@ def run_delivery(
     source_version: str,
     pilot_only: bool = False,
     company_ids: Iterable[str] | None = None,
+    skip_status_only: bool = False,
     identity_crosswalk: Mapping[str, str] | None = None,
     identity_crosswalk_document: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -472,12 +473,17 @@ def run_delivery(
                 if (
                     company_id in groups
                     or (
-                        source == SOURCE_LINKEDIN
-                        and company_id in linkedin_statuses_by_canonical
-                    )
-                    or (
-                        source == SOURCE_EMPLOYER
-                        and company_id in employer_statuses
+                        not skip_status_only
+                        and (
+                            (
+                                source == SOURCE_LINKEDIN
+                                and company_id in linkedin_statuses_by_canonical
+                            )
+                            or (
+                                source == SOURCE_EMPLOYER
+                                and company_id in employer_statuses
+                            )
+                        )
                     )
                 )
             ]
@@ -530,6 +536,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--source-version", default=os.getenv("RUNR_SOURCE_VERSION", ""))
     parser.add_argument("--company-ids", nargs="*")
+    parser.add_argument(
+        "--skip-status-only",
+        action="store_true",
+        help="Recovery mode: deliver only companies with producer job groups; preserve normal empty-snapshot closure by default.",
+    )
     parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--identity-crosswalk", type=Path, help="optional reviewed company_identity_crosswalk.json")
     return parser
@@ -557,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
         source_version=_text(args.source_version) or "unknown",
         pilot_only=bool(args.pilot_only),
         company_ids=args.company_ids,
+        skip_status_only=bool(args.skip_status_only),
         identity_crosswalk=identity_crosswalk,
         identity_crosswalk_document=identity_crosswalk_document,
     )
