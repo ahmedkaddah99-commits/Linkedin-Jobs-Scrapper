@@ -2483,6 +2483,152 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         return self._run_transaction(publish)
 
+    def publish_existing_catalog_snapshot(
+        self,
+        *,
+        valid_until: str = "",
+        origin: str = "system",
+        created_by: str = "system",
+        scheduled_run_id: str = "",
+        policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
+    ) -> str:
+        """Publish the currently stored active catalog after a fresh gate check.
+
+        This is an explicit recovery path for a catalog whose source delivery
+        cycle was interrupted after durable canonical rows were written. It
+        never imports or infers data: it only selects existing active jobs and
+        applies the same publication completeness policy used by scheduled
+        delivery before moving the public head.
+        """
+
+        now = utc_now_iso()
+        publication_id = f"acq_republish_{uuid4().hex}"
+        cycle_id = f"republish_{uuid4().hex}"
+        normalized_origin = _publication_origin(origin, default="system")
+        normalized_created_by = str(created_by or "system").strip()
+        normalized_scheduled_run_id = str(scheduled_run_id or "").strip()
+        policy = get_publication_policy(policy_version)
+
+        def publish(connection):
+            candidate_rows = connection.execute(
+                """
+                SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                                j.title, j.location, j.canonical_url,
+                                COALESCE(v.apply_url, '') AS apply_url,
+                                j.lifecycle_state, j.first_seen_at, j.last_seen_at,
+                                j.last_verified_at, j.current_version_id,
+                                COALESCE(v.description, '') AS version_description,
+                                COALESCE(v.location, '') AS version_location,
+                                COALESCE(v.payload_json, '{}') AS version_payload_json,
+                                (SELECT o.external_job_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
+                                (SELECT o.source_ats FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
+                                (SELECT o.observed_at FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
+                                (SELECT o.target_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
+                                (SELECT o.task_id FROM job_source_observations o
+                                 WHERE o.canonical_job_id = j.canonical_job_id
+                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
+                FROM canonical_jobs j
+                JOIN canonical_companies c ON c.company_id = j.company_id
+                LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+                WHERE j.lifecycle_state != 'closed'
+                ORDER BY j.title, j.canonical_job_id
+                """
+            ).fetchall()
+            snapshot, rejected_rows = self._publication_rows_with_completeness(
+                candidate_rows,
+                policy=policy,
+            )
+            self._persist_publication_rejections(
+                connection,
+                cycle_id=cycle_id,
+                rejected_rows=rejected_rows,
+            )
+            previous = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_snapshot=snapshot,
+                cycle_id=cycle_id,
+                policy_version=policy.version,
+            )
+            connection.execute(
+                """
+                INSERT INTO acquisition_publications (
+                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until,
+                    previous_publication_id, origin, created_by, scheduled_run_id,
+                    preflight_json, policy_version
+                ) VALUES (?, ?, 'valid', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    publication_id,
+                    cycle_id,
+                    _json(snapshot),
+                    now,
+                    str(valid_until or ""),
+                    previous_publication_id,
+                    normalized_origin,
+                    normalized_created_by,
+                    normalized_scheduled_run_id,
+                    _json(preflight),
+                    policy.version,
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
+                [(publication_id, str(row["canonical_job_id"])) for row in snapshot],
+            )
+            if previous_publication_id:
+                changed = connection.execute(
+                    """
+                    UPDATE acquisition_publication_head
+                    SET publication_id=?, updated_at=?
+                    WHERE head_id=1 AND publication_id=?
+                    """,
+                    (publication_id, now, previous_publication_id),
+                ).rowcount
+                if changed != 1:
+                    raise StalePublicationHeadError("Publication head changed during catalog republish.")
+            else:
+                inserted = connection.execute(
+                    """
+                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(head_id) DO NOTHING
+                    """,
+                    (publication_id, now),
+                ).rowcount
+                if inserted != 1:
+                    raise StalePublicationHeadError("Publication head changed during catalog republish.")
+            self._record_publication_audit(
+                connection,
+                publication_id=publication_id,
+                event_type="publication_created",
+                actor_user_id=normalized_created_by,
+                previous_publication_id=previous_publication_id,
+                payload={
+                    "origin": normalized_origin,
+                    "policy_version": policy.version,
+                    "mode": "existing_catalog_republish",
+                    "candidate_count": len(candidate_rows),
+                    "rejected_count": len(rejected_rows),
+                },
+                created_at=now,
+            )
+            return publication_id
+
+        return self._run_transaction(publish)
+
     def publish_staging_snapshot(
         self,
         *,
