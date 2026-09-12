@@ -2531,6 +2531,15 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         def publish(connection):
             candidate_query = """
+                WITH latest_observation AS (
+                    SELECT canonical_job_id, external_job_id, source_ats, observed_at,
+                           target_id, task_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY canonical_job_id
+                               ORDER BY observed_at DESC, observation_id DESC
+                           ) AS observation_rank
+                    FROM job_source_observations
+                )
                 SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                 j.title, j.location, j.canonical_url,
                                 COALESCE(v.apply_url, '') AS apply_url,
@@ -2539,24 +2548,17 @@ class SqliteAcquisitionStore(_SqliteStore):
                                 COALESCE(v.description, '') AS version_description,
                                 COALESCE(v.location, '') AS version_location,
                                 COALESCE(v.payload_json, '{}') AS version_payload_json,
-                                (SELECT o.external_job_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
-                                (SELECT o.source_ats FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
-                                (SELECT o.observed_at FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
-                                (SELECT o.target_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
-                                (SELECT o.task_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
+                                o.external_job_id AS source_job_id,
+                                o.source_ats,
+                                o.observed_at AS observation_observed_at,
+                                o.target_id AS source_target_id,
+                                o.task_id AS source_task_id
                 FROM canonical_jobs j
                 JOIN canonical_companies c ON c.company_id = j.company_id
                 LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+                LEFT JOIN latest_observation o
+                    ON o.canonical_job_id = j.canonical_job_id
+                   AND o.observation_rank = 1
                 WHERE j.lifecycle_state != 'closed'
                 ORDER BY j.title, j.canonical_job_id
                 LIMIT ? OFFSET ?
