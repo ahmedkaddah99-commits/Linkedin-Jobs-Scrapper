@@ -14,6 +14,7 @@ EnvironmentFile=/opt/runr/.env.acquisition
 EnvironmentFile=-/opt/runr/.env.acquisition.provider
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true
 Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ExecStart=/opt/runr/deploy/run-acquisition-source.sh employer
 ExecStartPost=/usr/bin/systemctl start --no-block runr-acquisition-publisher.service
@@ -23,7 +24,7 @@ MemoryAccounting=true
 MemoryHigh=6G
 MemoryMax=9G
 TasksMax=384
-TimeoutStartSec=infinity
+TimeoutStartSec=2h
 TimeoutStopSec=300
 NoNewPrivileges=true
 PrivateTmp=true
