@@ -17,7 +17,6 @@ Environment=RUNR_SKIP_PROJECT_DOTENV=1
 Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true
 Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ExecStart=/opt/runr/deploy/run-acquisition-source.sh employer
-ExecStartPost=/usr/bin/systemctl start --no-block runr-acquisition-publisher.service
 CPUAccounting=true
 CPUQuota=250%
 MemoryAccounting=true
