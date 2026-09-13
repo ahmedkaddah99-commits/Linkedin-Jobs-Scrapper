@@ -60,6 +60,15 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -164,14 +173,14 @@ def build_company_indexes(rows: Iterable[Mapping[str, Any]]) -> CompanyIndexes:
     slugs: dict[str, list[Mapping[str, Any]]] = {}
     names: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
-        company_id = _text(row.get("company_id"))
+        company_id = _text(_row_value(row, "company_id"))
         if not company_id:
             continue
         by_id[company_id] = row
-        slug = normalise_linkedin_slug(row.get("provenance_url"))
+        slug = normalise_linkedin_slug(_row_value(row, "provenance_url"))
         if slug:
             slugs.setdefault(slug, []).append(row)
-        name = _normalise_name(row.get("canonical_name"))
+        name = _normalise_name(_row_value(row, "canonical_name"))
         if name:
             names.setdefault(name, []).append(row)
     return CompanyIndexes(
