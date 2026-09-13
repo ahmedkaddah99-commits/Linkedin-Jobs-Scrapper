@@ -1,0 +1,1087 @@
+{
+  "output_dir": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\test CV",
+  "current_codebase_outputs": {
+    "role_file_count": 18,
+    "tailored_cv_file_count": 78,
+    "role_files": [
+      "01_current_codebase_outputs/role_based_reusable_cvs/cleaning_facility_support_Cleaning_Facility_Support.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/cleaning_facility_support_Cleaning_Facility_Support.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/cook_kitchen_staff_Cook_Kitchen_Staff.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/cook_kitchen_staff_Cook_Kitchen_Staff.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/delivery_driver_Delivery_Driver.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/delivery_driver_Delivery_Driver.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/moving_helper_loader_Moving_Helper_Loader.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/moving_helper_loader_Moving_Helper_Loader.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/other_operational_Other_Operational.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/other_operational_Other_Operational.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/production_packaging_Production_Packaging.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/production_packaging_Production_Packaging.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/retail_store_support_Retail_Store_Support.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/retail_store_support_Retail_Store_Support.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/waiter_service_staff_Waiter_Service_Staff.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/waiter_service_staff_Waiter_Service_Staff.txt",
+      "01_current_codebase_outputs/role_based_reusable_cvs/warehouse_logistics_Warehouse_Logistics.docx",
+      "01_current_codebase_outputs/role_based_reusable_cvs/warehouse_logistics_Warehouse_Logistics.txt"
+    ],
+    "tailored_cv_files": [
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4397603311_Siemens_Energy_Servicekraft_w_m_d/4397603311_Siemens_Energy_Servicekraft_w_m_d_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4397603311_Siemens_Energy_Servicekraft_w_m_d/4397603311_Siemens_Energy_Servicekraft_w_m_d_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4399013323_MERKUR_CASINO_GmbH_Servicemitarbe/4399013323_MERKUR_CASINO_GmbH_Servicemitarbe_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4399013323_MERKUR_CASINO_GmbH_Servicemitarbe/4399013323_MERKUR_CASINO_GmbH_Servicemitarbe_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4399322031_proadvise_GmbH_Teamassistenz_in_T/4399322031_proadvise_GmbH_Teamassistenz_in_T_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4399322031_proadvise_GmbH_Teamassistenz_in_T/4399322031_proadvise_GmbH_Teamassistenz_in_T_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4401452799_Siemens_Werkstudent_w_m_d_Schwerb/4401452799_Siemens_Werkstudent_w_m_d_Schwerb_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4401452799_Siemens_Werkstudent_w_m_d_Schwerb/4401452799_Siemens_Werkstudent_w_m_d_Schwerb_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4402701306_EDUVIA_Bildungsakademie_GmbH_Sich/4402701306_EDUVIA_Bildungsakademie_GmbH_Sich_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4402701306_EDUVIA_Bildungsakademie_GmbH_Sich/4402701306_EDUVIA_Bildungsakademie_GmbH_Sich_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4403861508_mamgo_Talente_Jobs_Technische_Ass/4403861508_mamgo_Talente_Jobs_Technische_Ass_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/4403861508_mamgo_Talente_Jobs_Technische_Ass/4403861508_mamgo_Talente_Jobs_Technische_Ass_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_07a5d158ff0c7a82_Hotel_Tennen/arbeitsagentur_07a5d158ff0c7a82_Hotel_Tennen_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_07a5d158ff0c7a82_Hotel_Tennen/arbeitsagentur_07a5d158ff0c7a82_Hotel_Tennen_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0b1913bbd84ac417_AlphaConsult/arbeitsagentur_0b1913bbd84ac417_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0b1913bbd84ac417_AlphaConsult/arbeitsagentur_0b1913bbd84ac417_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0d8970162c4c6878_adesta_GmbH_/arbeitsagentur_0d8970162c4c6878_adesta_GmbH__CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0d8970162c4c6878_adesta_GmbH_/arbeitsagentur_0d8970162c4c6878_adesta_GmbH__CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0e15e6fc36570bf9_AlphaConsult/arbeitsagentur_0e15e6fc36570bf9_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0e15e6fc36570bf9_AlphaConsult/arbeitsagentur_0e15e6fc36570bf9_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0fd77786c2feb161_Scheidt_Serv/arbeitsagentur_0fd77786c2feb161_Scheidt_Serv_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_0fd77786c2feb161_Scheidt_Serv/arbeitsagentur_0fd77786c2feb161_Scheidt_Serv_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_109ca85f4bd0bcf0_GOLDMANN_Per/arbeitsagentur_109ca85f4bd0bcf0_GOLDMANN_Per_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_109ca85f4bd0bcf0_GOLDMANN_Per/arbeitsagentur_109ca85f4bd0bcf0_GOLDMANN_Per_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_280d9f17034565f9_Die_Sauberma/arbeitsagentur_280d9f17034565f9_Die_Sauberma_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_280d9f17034565f9_Die_Sauberma/arbeitsagentur_280d9f17034565f9_Die_Sauberma_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_333d196944a45313_redworkgroup/arbeitsagentur_333d196944a45313_redworkgroup_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_333d196944a45313_redworkgroup/arbeitsagentur_333d196944a45313_redworkgroup_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_3b41a4181c931771_AlphaConsult/arbeitsagentur_3b41a4181c931771_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_3b41a4181c931771_AlphaConsult/arbeitsagentur_3b41a4181c931771_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_4fe38f004860925e_FERCHAU_GmbH/arbeitsagentur_4fe38f004860925e_FERCHAU_GmbH_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_4fe38f004860925e_FERCHAU_GmbH/arbeitsagentur_4fe38f004860925e_FERCHAU_GmbH_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_503c6fa7589bc807_Aide_GmbH_Re/arbeitsagentur_503c6fa7589bc807_Aide_GmbH_Re_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_503c6fa7589bc807_Aide_GmbH_Re/arbeitsagentur_503c6fa7589bc807_Aide_GmbH_Re_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_65c16afd7c91cb71_AlphaConsult/arbeitsagentur_65c16afd7c91cb71_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_65c16afd7c91cb71_AlphaConsult/arbeitsagentur_65c16afd7c91cb71_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_65fb4eb1f258af96_I.K._Hofmann/arbeitsagentur_65fb4eb1f258af96_I.K._Hofmann_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_65fb4eb1f258af96_I.K._Hofmann/arbeitsagentur_65fb4eb1f258af96_I.K._Hofmann_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_8be2933296548536_BUHL_Persona/arbeitsagentur_8be2933296548536_BUHL_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_8be2933296548536_BUHL_Persona/arbeitsagentur_8be2933296548536_BUHL_Persona_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_8cc33d4f6c5a5660_Siemens_Ener/arbeitsagentur_8cc33d4f6c5a5660_Siemens_Ener_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_8cc33d4f6c5a5660_Siemens_Ener/arbeitsagentur_8cc33d4f6c5a5660_Siemens_Ener_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_978366298f4c3ddb_Siemens_Ener/arbeitsagentur_978366298f4c3ddb_Siemens_Ener_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_978366298f4c3ddb_Siemens_Ener/arbeitsagentur_978366298f4c3ddb_Siemens_Ener_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_9c63a994690b89ca_AlphaConsult/arbeitsagentur_9c63a994690b89ca_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_9c63a994690b89ca_AlphaConsult/arbeitsagentur_9c63a994690b89ca_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_9cf0189713ee8b77_Papp_Persona/arbeitsagentur_9cf0189713ee8b77_Papp_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_9cf0189713ee8b77_Papp_Persona/arbeitsagentur_9cf0189713ee8b77_Papp_Persona_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a2abc41b70061132_BUHL_Persona/arbeitsagentur_a2abc41b70061132_BUHL_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a2abc41b70061132_BUHL_Persona/arbeitsagentur_a2abc41b70061132_BUHL_Persona_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a34ec0da5d01e510_Siemens_Ener/arbeitsagentur_a34ec0da5d01e510_Siemens_Ener_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a34ec0da5d01e510_Siemens_Ener/arbeitsagentur_a34ec0da5d01e510_Siemens_Ener_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a5edde45d3ba2030_Papp_Persona/arbeitsagentur_a5edde45d3ba2030_Papp_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_a5edde45d3ba2030_Papp_Persona/arbeitsagentur_a5edde45d3ba2030_Papp_Persona_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_ae169fff201473a6_AlphaConsult/arbeitsagentur_ae169fff201473a6_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_ae169fff201473a6_AlphaConsult/arbeitsagentur_ae169fff201473a6_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_b4893d93ce66dcc7_Cs2_ITEC_Gmb/arbeitsagentur_b4893d93ce66dcc7_Cs2_ITEC_Gmb_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_b4893d93ce66dcc7_Cs2_ITEC_Gmb/arbeitsagentur_b4893d93ce66dcc7_Cs2_ITEC_Gmb_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bae874acfd471f02_AlphaConsult/arbeitsagentur_bae874acfd471f02_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bae874acfd471f02_AlphaConsult/arbeitsagentur_bae874acfd471f02_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bba3470ea60cf2c5_AlphaConsult/arbeitsagentur_bba3470ea60cf2c5_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bba3470ea60cf2c5_AlphaConsult/arbeitsagentur_bba3470ea60cf2c5_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bc162dcbb945346e_Papp_Persona/arbeitsagentur_bc162dcbb945346e_Papp_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_bc162dcbb945346e_Papp_Persona/arbeitsagentur_bc162dcbb945346e_Papp_Persona_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_be5e330fb586a281_Winner_Spedi/arbeitsagentur_be5e330fb586a281_Winner_Spedi_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_be5e330fb586a281_Winner_Spedi/arbeitsagentur_be5e330fb586a281_Winner_Spedi_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_c73c0bf07f3d5ab4_ANG_GmbH_Dat/arbeitsagentur_c73c0bf07f3d5ab4_ANG_GmbH_Dat_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_c73c0bf07f3d5ab4_ANG_GmbH_Dat/arbeitsagentur_c73c0bf07f3d5ab4_ANG_GmbH_Dat_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_c8fb575aeeac28cc_redworkgroup/arbeitsagentur_c8fb575aeeac28cc_redworkgroup_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_c8fb575aeeac28cc_redworkgroup/arbeitsagentur_c8fb575aeeac28cc_redworkgroup_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_d675d38547c66d75_redworkgroup/arbeitsagentur_d675d38547c66d75_redworkgroup_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_d675d38547c66d75_redworkgroup/arbeitsagentur_d675d38547c66d75_redworkgroup_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_dd8dbab2253bb7e2_AlphaConsult/arbeitsagentur_dd8dbab2253bb7e2_AlphaConsult_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_dd8dbab2253bb7e2_AlphaConsult/arbeitsagentur_dd8dbab2253bb7e2_AlphaConsult_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_eded773f1e41a315_MERKUR_Casin/arbeitsagentur_eded773f1e41a315_MERKUR_Casin_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_eded773f1e41a315_MERKUR_Casin/arbeitsagentur_eded773f1e41a315_MERKUR_Casin_CV.txt",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_f80a164788cc317a_BUHL_Persona/arbeitsagentur_f80a164788cc317a_BUHL_Persona_CV.docx",
+      "01_current_codebase_outputs/job_specific_tailored_cvs/2026-04-19/arbeitsagentur_f80a164788cc317a_BUHL_Persona/arbeitsagentur_f80a164788cc317a_BUHL_Persona_CV.txt"
+    ]
+  },
+  "builtin_style_matrix": {
+    "representative_category": {
+      "id": "warehouse_logistics",
+      "name": "Warehouse / Logistics"
+    },
+    "style_combination_count": 120,
+    "template_count": 4,
+    "color_scheme_count": 6,
+    "font_count": 5,
+    "styles": [
+      {
+        "path": "02_builtin_style_matrix/docx/classic__classic_navy__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "classic_navy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__classic_navy__Arial.docx",
+        "template": "classic",
+        "color_scheme": "classic_navy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__classic_navy__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "classic_navy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__classic_navy__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "classic_navy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__classic_navy__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "classic_navy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__ocean_teal__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "ocean_teal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__ocean_teal__Arial.docx",
+        "template": "classic",
+        "color_scheme": "ocean_teal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__ocean_teal__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "ocean_teal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__ocean_teal__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "ocean_teal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__ocean_teal__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "ocean_teal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__forest__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "forest",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__forest__Arial.docx",
+        "template": "classic",
+        "color_scheme": "forest",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__forest__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "forest",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__forest__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "forest",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__forest__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "forest",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__slate__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "slate",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__slate__Arial.docx",
+        "template": "classic",
+        "color_scheme": "slate",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__slate__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "slate",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__slate__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "slate",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__slate__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "slate",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__burgundy__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "burgundy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__burgundy__Arial.docx",
+        "template": "classic",
+        "color_scheme": "burgundy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__burgundy__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "burgundy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__burgundy__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "burgundy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__burgundy__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "burgundy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__charcoal__Calibri.docx",
+        "template": "classic",
+        "color_scheme": "charcoal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__charcoal__Arial.docx",
+        "template": "classic",
+        "color_scheme": "charcoal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__charcoal__Georgia.docx",
+        "template": "classic",
+        "color_scheme": "charcoal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__charcoal__Cambria.docx",
+        "template": "classic",
+        "color_scheme": "charcoal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/classic__charcoal__Aptos.docx",
+        "template": "classic",
+        "color_scheme": "charcoal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__classic_navy__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "classic_navy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__classic_navy__Arial.docx",
+        "template": "modern",
+        "color_scheme": "classic_navy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__classic_navy__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "classic_navy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__classic_navy__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "classic_navy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__classic_navy__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "classic_navy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__ocean_teal__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "ocean_teal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__ocean_teal__Arial.docx",
+        "template": "modern",
+        "color_scheme": "ocean_teal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__ocean_teal__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "ocean_teal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__ocean_teal__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "ocean_teal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__ocean_teal__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "ocean_teal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__forest__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "forest",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__forest__Arial.docx",
+        "template": "modern",
+        "color_scheme": "forest",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__forest__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "forest",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__forest__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "forest",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__forest__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "forest",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__slate__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "slate",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__slate__Arial.docx",
+        "template": "modern",
+        "color_scheme": "slate",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__slate__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "slate",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__slate__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "slate",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__slate__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "slate",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__burgundy__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "burgundy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__burgundy__Arial.docx",
+        "template": "modern",
+        "color_scheme": "burgundy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__burgundy__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "burgundy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__burgundy__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "burgundy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__burgundy__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "burgundy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__charcoal__Calibri.docx",
+        "template": "modern",
+        "color_scheme": "charcoal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__charcoal__Arial.docx",
+        "template": "modern",
+        "color_scheme": "charcoal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__charcoal__Georgia.docx",
+        "template": "modern",
+        "color_scheme": "charcoal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__charcoal__Cambria.docx",
+        "template": "modern",
+        "color_scheme": "charcoal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/modern__charcoal__Aptos.docx",
+        "template": "modern",
+        "color_scheme": "charcoal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__classic_navy__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "classic_navy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__classic_navy__Arial.docx",
+        "template": "compact",
+        "color_scheme": "classic_navy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__classic_navy__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "classic_navy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__classic_navy__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "classic_navy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__classic_navy__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "classic_navy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__ocean_teal__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "ocean_teal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__ocean_teal__Arial.docx",
+        "template": "compact",
+        "color_scheme": "ocean_teal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__ocean_teal__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "ocean_teal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__ocean_teal__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "ocean_teal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__ocean_teal__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "ocean_teal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__forest__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "forest",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__forest__Arial.docx",
+        "template": "compact",
+        "color_scheme": "forest",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__forest__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "forest",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__forest__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "forest",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__forest__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "forest",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__slate__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "slate",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__slate__Arial.docx",
+        "template": "compact",
+        "color_scheme": "slate",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__slate__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "slate",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__slate__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "slate",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__slate__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "slate",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__burgundy__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "burgundy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__burgundy__Arial.docx",
+        "template": "compact",
+        "color_scheme": "burgundy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__burgundy__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "burgundy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__burgundy__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "burgundy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__burgundy__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "burgundy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__charcoal__Calibri.docx",
+        "template": "compact",
+        "color_scheme": "charcoal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__charcoal__Arial.docx",
+        "template": "compact",
+        "color_scheme": "charcoal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__charcoal__Georgia.docx",
+        "template": "compact",
+        "color_scheme": "charcoal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__charcoal__Cambria.docx",
+        "template": "compact",
+        "color_scheme": "charcoal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/compact__charcoal__Aptos.docx",
+        "template": "compact",
+        "color_scheme": "charcoal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__classic_navy__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "classic_navy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__classic_navy__Arial.docx",
+        "template": "europass",
+        "color_scheme": "classic_navy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__classic_navy__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "classic_navy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__classic_navy__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "classic_navy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__classic_navy__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "classic_navy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__ocean_teal__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "ocean_teal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__ocean_teal__Arial.docx",
+        "template": "europass",
+        "color_scheme": "ocean_teal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__ocean_teal__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "ocean_teal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__ocean_teal__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "ocean_teal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__ocean_teal__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "ocean_teal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__forest__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "forest",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__forest__Arial.docx",
+        "template": "europass",
+        "color_scheme": "forest",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__forest__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "forest",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__forest__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "forest",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__forest__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "forest",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__slate__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "slate",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__slate__Arial.docx",
+        "template": "europass",
+        "color_scheme": "slate",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__slate__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "slate",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__slate__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "slate",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__slate__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "slate",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__burgundy__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "burgundy",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__burgundy__Arial.docx",
+        "template": "europass",
+        "color_scheme": "burgundy",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__burgundy__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "burgundy",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__burgundy__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "burgundy",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__burgundy__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "burgundy",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__charcoal__Calibri.docx",
+        "template": "europass",
+        "color_scheme": "charcoal",
+        "font": "Calibri",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__charcoal__Arial.docx",
+        "template": "europass",
+        "color_scheme": "charcoal",
+        "font": "Arial",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__charcoal__Georgia.docx",
+        "template": "europass",
+        "color_scheme": "charcoal",
+        "font": "Georgia",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__charcoal__Cambria.docx",
+        "template": "europass",
+        "color_scheme": "charcoal",
+        "font": "Cambria",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      },
+      {
+        "path": "02_builtin_style_matrix/docx/europass__charcoal__Aptos.docx",
+        "template": "europass",
+        "color_scheme": "charcoal",
+        "font": "Aptos",
+        "include_photo": true,
+        "representative_category": "warehouse_logistics"
+      }
+    ]
+  },
+  "external_better_alternative": {
+    "files": [
+      "03_external_better_alternative/operations_logistics_hybrid_resume.txt",
+      "03_external_better_alternative/operations_logistics_hybrid_resume.md",
+      "03_external_better_alternative/operations_logistics_hybrid_resume.docx",
+      "03_external_better_alternative/why_this_is_better.md"
+    ]
+  }
+}

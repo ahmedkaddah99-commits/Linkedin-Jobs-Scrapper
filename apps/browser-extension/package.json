@@ -1,0 +1,54 @@
+{
+  "name": "@runr/browser-extension",
+  "version": "0.2.2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "postinstall": "wxt prepare",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "test:unit": "vitest run",
+    "build": "wxt build",
+    "build:edge": "wxt build --browser edge",
+    "build:test": "wxt build --mode testing",
+    "build:test:edge": "wxt build --browser edge --mode testing",
+    "verify:manifest": "node scripts/verify-manifest.mjs",
+    "verify:assisted-apply-boundary": "node scripts/verify-assisted-apply-boundary.mjs",
+    "verify:manifest:edge": "node scripts/verify-manifest.mjs edge",
+    "package": "wxt build && node scripts/verify-manifest.mjs",
+    "test:e2e": "npm run build:test && playwright test",
+    "test:e2e:edge": "npm run build:test:edge && playwright test --config playwright.edge.config.ts",
+    "check": "npm run typecheck && npm run test:unit && npm run build && npm run verify:manifest",
+    "check:edge": "npm run typecheck && npm run build:edge && npm run verify:manifest:edge",
+    "check:all": "npm run check && npm run test:e2e",
+    "check:all:edge": "npm run check:edge && npm run test:e2e:edge"
+  },
+  "dependencies": {
+    "@runr/ats-core": "file:../../packages/ats-core",
+    "@runr/extension-messages": "file:../../packages/extension-messages",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@emnapi/runtime": "^1.11.3",
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@wxt-dev/module-react": "^1.2.2",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wxt": "^0.20.27"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "shell-quote": "1.10.0",
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
+  }
+}

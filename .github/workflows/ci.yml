@@ -1,0 +1,219 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - deployment/render-turso-r2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-linux.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements-linux.txt "pytest>=9,<10" "ruff>=0.8,<1.0"
+
+      - name: Lint backend
+        run: python -m ruff check backend tests workspace_runner.py
+
+      - name: Run backend checks
+        run: >-
+          python -m pytest -q
+          tests/test_backend_application.py
+          tests/test_sqlite_repositories.py
+          tests/test_worker_service.py
+          tests/test_phase0_contracts.py
+          tests/test_job_dedupe.py
+          tests/test_assisted_apply_connection_service.py
+          tests/test_env_config.py
+
+      - name: Run Assisted Apply API boundary checks
+        run: >-
+          python -m pytest -q tests/test_backend_api.py
+          -k "assisted_apply or extension_cors or extension_origin or clerk_only_identity"
+
+  backend-full:
+    name: Backend full suite (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            tests: tests/test_backend_api.py
+          - shard: non-api
+            tests: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-linux.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements-linux.txt "pytest>=9,<10" "ruff>=0.8,<1.0"
+
+      - name: Run complete backend shard
+        shell: bash
+        run: |
+          if [[ "${{ matrix.shard }}" == "non-api" ]]; then
+            mapfile -t tests < <(find tests -maxdepth 1 -name 'test_*.py' ! -name 'test_backend_api.py' -print | sort)
+            python -m pytest -q "${tests[@]}"
+          else
+            python -m pytest -q "${{ matrix.tests }}"
+          fi
+
+      - name: Lint backend shard
+        run: python -m ruff check backend tests
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Run frontend unit tests
+        run: npm --prefix frontend run test
+
+      - name: Lint and build frontend
+        run: npm --prefix frontend run check
+
+  assisted-apply-extension:
+    name: Assisted Apply extension checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/browser-extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci --prefix apps/browser-extension
+
+      - name: Install Playwright Chromium
+        working-directory: apps/browser-extension
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Assisted Apply extension gate
+        run: npm --prefix apps/browser-extension run check:all
+
+      - name: Upload extension browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assisted-apply-playwright-diagnostics
+          path: |
+            apps/browser-extension/playwright-report
+            apps/browser-extension/test-results
+          if-no-files-found: ignore
+
+  assisted-apply-extension-edge:
+    name: Assisted Apply extension checks (Edge)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/browser-extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci --prefix apps/browser-extension
+
+      - name: Install Playwright Edge (msedge)
+        working-directory: apps/browser-extension
+        run: npx playwright install --with-deps msedge
+
+      - name: Build and verify Edge package
+        run: npm --prefix apps/browser-extension run check:edge
+
+      - name: Run Edge E2E tests
+        run: npm --prefix apps/browser-extension run test:e2e:edge
+
+      - name: Upload Edge browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assisted-apply-edge-playwright-diagnostics
+          path: |
+            apps/browser-extension/playwright-report
+            apps/browser-extension/test-results
+          if-no-files-found: ignore
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-24.04
+    needs:
+      - backend
+      - frontend
+      - assisted-apply-extension
+      - assisted-apply-extension-edge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          push: false
+          load: false
+          build-args: |
+            RUNR_RELEASE_COMMIT=${{ github.sha }}
+            RUNR_RELEASE_BRANCH=${{ github.ref_name }}
+            RUNR_RELEASE_SERVICE=api
+          tags: runr-api:ci-${{ github.sha }}
+          cache-from: type=gha,scope=runr-api
+          cache-to: type=gha,mode=max,scope=runr-api
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: false
+          load: false
+          build-args: |
+            RUNR_RELEASE_COMMIT=${{ github.sha }}
+            RUNR_RELEASE_BRANCH=${{ github.ref_name }}
+            RUNR_RELEASE_SERVICE=worker
+          tags: runr-worker:ci-${{ github.sha }}
+          cache-from: type=gha,scope=runr-worker
+          cache-to: type=gha,mode=max,scope=runr-worker

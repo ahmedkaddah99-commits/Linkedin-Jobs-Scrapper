@@ -1,0 +1,66 @@
+{
+  "ticket": "RC-008",
+  "status": "completed_offline",
+  "target_worktree": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview",
+  "target_branch": "deployment/render-turso-r2",
+  "head_at_validation": "e7662c63082d605d8ae6de090d3a04a55bba6556",
+  "python": {
+    "executable": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe",
+    "version": "Python 3.12.7"
+  },
+  "implementation_files": ["backend/acquisition/producer_adapters.py"],
+  "test_files": ["tests/test_producer_adapters.py", "tests/test_observation_store_integration.py"],
+  "evidence_files": ["RC008_PRODUCER_ADAPTERS.md", "RC008_PRODUCER_ADAPTERS.json"],
+  "ownership_note": "The adapter implementation was already present in preserved dirty worktree changes. Neither employer nor LinkedIn producer implementation was edited in this turn.",
+  "implemented": [
+    "Narrow adapters read durable employer state and LinkedIn state/parser output without reading either producer CSV export.",
+    "Every observation carries canonical employer mapping, source, source job ID, source URL, apply URL/type, scope, cycle/scan IDs, observed timestamp, content hash, and schema version.",
+    "LinkedIn ownership, Easy Apply, applicant, source-company, run, scan, and transport evidence are retained; employer ATS/discovery/extraction evidence is retained; absent fields are explicit unknown values.",
+    "Source observations remain distinct and raw producer records are retained at the adapter boundary.",
+    "Stable idempotency keys and deterministic batch/receipt IDs support bounded delivery and replay without duplicate logical observations.",
+    "SQLite acquisition delivery distinguishes intermediate batches from explicit final complete snapshots and rejects unsafe closure inputs.",
+    "The public adapter export surface names the actual SOURCE_EMPLOYER and SOURCE_LINKEDIN constants."
+  ],
+  "verification": [
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' --version",
+      "result": "Python 3.12.7"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m pytest tests/test_producer_adapters.py tests/test_observation_store_integration.py -q",
+      "result": "7 passed in 5.83s"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m ruff check backend/acquisition/producer_adapters.py tests/test_producer_adapters.py tests/test_observation_store_integration.py",
+      "result": "All checks passed"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m py_compile backend/acquisition/producer_adapters.py tests/test_producer_adapters.py tests/test_observation_store_integration.py",
+      "result": "exit code 0"
+    }
+  ],
+  "offline_proof": {
+    "network_calls": 0,
+    "employer_path": "Mocked ATS response reaches real collect_company result, EmployerState, and employer adapter without CSV input.",
+    "linkedin_path": "Real search/detail parser output reaches durable LinkedIn StateStore and the LinkedIn adapter.",
+    "unknown_fields": "Missing apply URL, source URL, and Easy Apply values remain unknown.",
+    "batch_bound": "max_batch_size=1 produces one observation per batch in the fixture.",
+    "replay": "Same batch produces same receipt and duplicate count without a second logical observation.",
+    "source_separation": "Same source job identity adapted from employer and LinkedIn remains two source observations.",
+    "final_snapshot_safety": "Partial/invalid/final-zero delivery behavior is covered by SQLite transport integration tests."
+  },
+  "limitations": [
+    "No live HTTP, proxy, browser, provider, credential, deployment, or production-state check was performed.",
+    "No producer implementation was changed; adapters consume existing producer state APIs/SQLite layouts.",
+    "End-to-end publication and user-facing Jobs integration belong to RC-009 and were not claimed here.",
+    "The target worktree has no commit isolating RC-008 from other user-owned dirty changes."
+  ],
+  "rollback": [
+    "Stop adapter delivery and acquisition workers.",
+    "Back up the acquisition database and source-specific state databases before rollback.",
+    "Reverse only the adapter changes in backend/acquisition/producer_adapters.py; do not reset or restore the employer/LinkedIn producer files.",
+    "Preserve source observations and raw payloads; if necessary, disable delivery by removing the adapter call site while retaining durable producer state.",
+    "Restore the backed-up acquisition/source state only for an explicit state rollback."
+  ],
+  "next_gate": "Stop after RC-008. RC-009 covers connecting adapters to normalization/publication and requires a separate ticket boundary."
+}

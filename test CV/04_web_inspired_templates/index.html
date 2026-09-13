@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web-Inspired CV Template Gallery</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(circle at top left, rgba(194, 214, 255, 0.25), transparent 32%),
+        linear-gradient(180deg, #f6f4ef 0%, #ece9e2 100%);
+      color: #111827;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    a {
+      color: inherit;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.15em;
+    }
+    .screen-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1.2rem;
+      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.82);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+    }
+    .screen-toolbar .meta {
+      font-size: 0.92rem;
+      color: #475569;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .toolbar-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.72rem 1rem;
+      background: #111827;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar-link {
+      font-size: 0.92rem;
+      color: #334155;
+    }
+    .page-wrap {
+      padding: 1.5rem;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      background: white;
+      box-shadow: 0 28px 70px rgba(15, 23, 42, 0.15);
+      overflow: hidden;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .caps {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+    .tag {
+      display: inline-block;
+      padding: 0.22rem 0.58rem;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .photo-shell {
+      width: 34mm;
+      height: 44mm;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      background: linear-gradient(180deg, #eef2f7 0%, #dfe8f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-photo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-shell-placeholder {
+      border-style: dashed;
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(148, 163, 184, 0.12),
+          rgba(148, 163, 184, 0.12) 8px,
+          rgba(255, 255, 255, 0.8) 8px,
+          rgba(255, 255, 255, 0.8) 16px
+        );
+    }
+    .photo-placeholder-copy {
+      padding: 0.6rem;
+      text-align: center;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    @media print {
+      html, body {
+        background: white;
+      }
+      .screen-toolbar {
+        display: none;
+      }
+      .page-wrap {
+        padding: 0;
+      }
+      .sheet {
+        width: auto;
+        min-height: auto;
+        margin: 0;
+        box-shadow: none;
+      }
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+    }
+    
+      body {
+        background:
+          radial-gradient(circle at top left, rgba(168, 208, 255, 0.35), transparent 24%),
+          radial-gradient(circle at 85% 10%, rgba(247, 196, 145, 0.3), transparent 22%),
+          linear-gradient(180deg, #f7f3eb 0%, #f5f7fb 100%);
+      }
+      .gallery-shell {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 40px 24px 60px;
+      }
+      .hero {
+        max-width: 760px;
+      }
+      .hero-kicker {
+        margin: 0 0 14px;
+        font-size: 0.76rem;
+        letter-spacing: 0.18em;
+        color: #475569;
+        font-weight: 700;
+      }
+      .hero h1 {
+        margin: 0;
+        font: 700 clamp(2.4rem, 5vw, 4rem)/0.95 Georgia, "Times New Roman", serif;
+        color: #0f172a;
+      }
+      .hero-copy {
+        margin: 18px 0 0;
+        font-size: 1.05rem;
+        line-height: 1.7;
+        color: #334155;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 30px;
+      }
+      .card {
+        min-height: 250px;
+        border-radius: 24px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9)),
+          linear-gradient(135deg, rgba(198, 216, 255, 0.2), rgba(255, 241, 225, 0.24));
+        box-shadow: 0 20px 44px rgba(15, 23, 42, 0.08);
+      }
+      .card-copy {
+        padding: 24px;
+      }
+      .card h2 {
+        margin: 16px 0 0;
+        font: 700 1.7rem/1.05 Georgia, serif;
+      }
+      .subtitle {
+        margin: 10px 0 0;
+        font-weight: 700;
+        color: #4f6275;
+      }
+      .card p:last-of-type {
+        line-height: 1.6;
+        color: #334155;
+      }
+      .photo-note {
+        margin-top: 10px;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #1d4ed8;
+      }
+      .actions {
+        margin-top: 18px;
+      }
+      .primary {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.78rem 1rem;
+        border-radius: 999px;
+        background: #0f172a;
+        color: white;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .secondary {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.78rem 1rem;
+        border-radius: 999px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        background: white;
+        color: #0f172a;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .research {
+        margin-top: 30px;
+        padding: 22px 24px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(15, 23, 42, 0.06);
+      }
+      .research h2 {
+        margin: 0 0 12px;
+        font: 700 1.25rem/1 Georgia, serif;
+      }
+      .research ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+      .research li + li {
+        margin-top: 8px;
+      }
+      @media (max-width: 800px) {
+        .cards {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media print {
+        .gallery-shell {
+          max-width: none;
+          padding: 0;
+        }
+        .cards {
+          grid-template-columns: 1fr;
+        }
+        .card,
+        .research {
+          box-shadow: none;
+        }
+      }
+    
+  </style>
+</head>
+<body>
+  <div class="screen-toolbar">
+    <div class="meta">Web-Inspired CV Template Gallery · print-ready HTML prototype</div>
+    <div class="toolbar-actions">
+      <a class="toolbar-link" href="index.html">Back to gallery</a>
+      <button class="toolbar-button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="page-wrap">
+    
+    <main class="gallery-shell">
+      <section class="hero">
+        <p class="caps hero-kicker">Web-inspired CV gallery</p>
+        <h1>Lightweight templates worth implementing in code</h1>
+        <p class="hero-copy">
+          These are not copies of the source templates. They are code-light adaptations built from the
+          design patterns that kept showing up in the research: simple structure, strong hierarchy,
+          restrained decoration, reverse chronology, and ATS-safe content flow.
+        </p>
+      </section>
+      <section class="cards">
+        
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">ATS Single Column</span>
+                <h2>ATS Single Column</h2>
+                <p class="subtitle">Most robust and easiest to generate</p>
+                <p>Inspired by UPenn guidance and Overleaf MTeck&#x27;s Resume.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="01_ats_single_column.html">With photo</a>
+                  <a class="secondary" href="01_ats_single_column_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">Editorial Sidebar</span>
+                <h2>Editorial Sidebar</h2>
+                <p class="subtitle">Soft visual hierarchy with minimal code</p>
+                <p>Inspired by Overleaf CV Sidebar Template.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="02_editorial_sidebar.html">With photo</a>
+                  <a class="secondary" href="02_editorial_sidebar_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">Mono Nav</span>
+                <h2>Mono Nav</h2>
+                <p class="subtitle">Modern left rail, simple body flow</p>
+                <p>Inspired by Overleaf Monocol Navbar CV.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="03_mono_nav.html">With photo</a>
+                  <a class="secondary" href="03_mono_nav_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">Europass Lite</span>
+                <h2>Europass Lite</h2>
+                <p class="subtitle">European familiar structure, lighter visual weight</p>
+                <p>Inspired by Europass structure but simplified for code generation.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="04_europass_lite.html">With photo</a>
+                  <a class="secondary" href="04_europass_lite_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">Signal Header</span>
+                <h2>Signal Header</h2>
+                <p class="subtitle">Bold header band with grouped content blocks</p>
+                <p>Inspired by editorial banner layouts and resume landing-page hierarchy.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="05_signal_header.html">With photo</a>
+                  <a class="secondary" href="05_signal_header_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+            <article class="card">
+              <div class="card-copy">
+                <span class="tag">Ledger Split</span>
+                <h2>Ledger Split</h2>
+                <p class="subtitle">Asymmetric grid with dense role detail</p>
+                <p>Inspired by compact consulting-style CV layouts that still stay generator-friendly.</p>
+                <p class="photo-note">Optional photo slot included.</p>
+                <div class="actions">
+                  <a class="primary" href="06_ledger_split.html">With photo</a>
+                  <a class="secondary" href="06_ledger_split_no_photo.html">No photo</a>
+                </div>
+              </div>
+            </article>
+            
+      </section>
+      <section class="research">
+        <h2>Research links</h2>
+        <ul><li><a href="https://careerservices.upenn.edu/channels/resume/">University of Pennsylvania resume guidance</a> — Clear ATS guidance: simple, consistent design; use white space; avoid graphics and text boxes.</li><li><a href="https://ocs.yale.edu/resources/resume-action-verbs/">Yale resume action verbs</a> — Useful for stronger bullets focused on accomplishment rather than duty language.</li><li><a href="https://europass.europa.eu/en/create-europass-cv">Europass CV guidance</a> — Supports a Europe-familiar structure, reverse chronological order, and tailored About Me framing.</li><li><a href="https://www.overleaf.com/latex/templates/mtecks-resume/fzgztpkgngjc">Overleaf MTeck&#x27;s Resume</a> — Strong single-column ATS-oriented pattern with simple, maintainable styling.</li><li><a href="https://www.overleaf.com/latex/templates/cv-sidebar-template/mnwdwhxbxgdg">Overleaf CV Sidebar Template</a> — Shows a lightweight sidebar pattern that still stays visually clean.</li><li><a href="https://www.overleaf.com/latex/templates/monocol-navbar-cv/xdhwjpkpmxyv">Overleaf Monocol Navbar CV</a> — Shows a compact left-rail contact pattern that feels modern without heavy layout logic.</li></ul>
+      </section>
+    </main>
+    
+  </div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+  "page_step": 10,
+  "max_start": 0,
+  "full_card_count": 0
+}

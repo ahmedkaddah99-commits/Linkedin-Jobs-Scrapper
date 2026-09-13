@@ -1,0 +1,10 @@
+{
+  "search": [
+    {"status_code": 503, "body": "temporary upstream failure"},
+    {"status_code": 200, "fixture": "linkedin_job_search_valid.html"}
+  ],
+  "detail": [
+    {"status_code": 429, "body": "rate limited"},
+    {"status_code": 200, "fixture": "linkedin_job_detail.html"}
+  ]
+}

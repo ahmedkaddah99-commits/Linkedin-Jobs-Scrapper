@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" data-runr-assisted-apply-fixture="greenhouse">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runr Greenhouse fixture</title>
+    <style>
+      body { max-width: 640px; margin: 32px auto; font-family: sans-serif; }
+      form { display: grid; gap: 16px; }
+      label { display: grid; gap: 5px; }
+      input, textarea, button { padding: 8px; }
+    </style>
+  </head>
+  <body data-submit-clicks="0" data-email-events="" data-aa201-submit-events="0" data-aa201-request-submit-calls="0" data-aa201-form-submit-calls="0" data-aa201-enter-submissions="0" data-aa201-terminal-clicks="0" data-aa201-terminal-requests="0" data-aa201-success-transitions="0" data-aa201-final-navigation="0">
+    <h1>Example Greenhouse application</h1>
+    <section aria-label="AA-13 accessibility matrix">
+      <iframe id="same-origin-frame" title="Same-origin application section" src="/same-origin-frame.html"></iframe>
+      <iframe id="cross-origin-frame" title="Third-party application section" src="http://localhost:4174/cross-origin-frame.html"></iframe>
+      <div id="open-shadow-host"></div>
+      <runr-closed-field data-runr-shadow-root="closed" aria-label="Closed-root screening question"></runr-closed-field>
+      <div id="custom-salary-widget" role="textbox" aria-label="Custom salary widget"></div>
+    </section>
+    <form id="application-form">
+      <label for="first-name">First name</label>
+      <input id="first-name" name="first_name" type="text" value="Existing Candidate" required />
+
+      <label for="last-name">Legal last name</label>
+      <input id="last-name" name="last_name" type="text" autocomplete="family-name" required />
+
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" autocomplete="email" required />
+
+      <label for="phone">Phone number</label>
+      <input id="phone" name="phone" type="tel" autocomplete="tel" required />
+
+      <label for="summary">Professional summary</label>
+      <textarea id="summary" name="summary" required></textarea>
+
+      <label for="country">Country</label>
+      <select id="country" name="country" required>
+        <option value="">Choose</option>
+        <option value="DE">Germany</option>
+        <option value="GB">United Kingdom</option>
+      </select>
+
+      <fieldset>
+        <legend>Work authorization</legend>
+        <label for="work-yes">Yes</label><input id="work-yes" name="work_authorization" type="radio" value="yes" required />
+        <label for="work-no">No</label><input id="work-no" name="work_authorization" type="radio" value="no" />
+      </fieldset>
+
+      <label for="remote">Open to remote work</label>
+      <input id="remote" name="remote" type="checkbox" value="yes" />
+
+      <label for="start-date">Start date</label>
+      <input id="start-date" name="start_date" type="date" required />
+
+      <label for="employee-code">Employee code</label>
+      <input id="employee-code" name="employee_code" type="text" pattern="[A-Z]{3}" required />
+
+      <label for="disabled-field">Disabled field</label>
+      <input id="disabled-field" name="disabled_field" type="text" disabled />
+
+      <input id="hidden-field" name="hidden_field" type="hidden" value="portal-state" />
+
+      <label for="resume">CV / Resume</label>
+      <input id="resume" name="resume" type="file" accept="application/pdf,.pdf" required />
+      <p id="resume-status" data-runr-upload-status>Waiting for CV</p>
+
+      <label for="cover-letter">Cover letter</label>
+      <input id="cover-letter" name="cover_letter" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" />
+
+      <label for="supporting-document">Supporting document</label>
+      <input id="supporting-document" name="supporting_document" type="file" accept="application/pdf,.pdf" />
+
+      <label for="captcha-response">CAPTCHA response</label>
+      <input id="captcha-response" name="g-recaptcha-response" type="text" />
+
+      <label for="signature">Signature</label>
+      <input id="signature" name="signature" type="text" />
+
+      <label for="declaration">I certify this declaration is accurate</label>
+      <input id="declaration" name="declaration" type="checkbox" />
+
+      <label for="terms">Accept terms and conditions</label>
+      <input id="terms" name="terms" type="checkbox" />
+
+      <label for="assessment">Coding assessment</label>
+      <textarea id="assessment" name="assessment"></textarea>
+
+      <button id="final-submit" type="submit">Submit application</button>
+    </form>
+
+    <script>
+      const openRoot = document.getElementById("open-shadow-host").attachShadow({ mode: "open" });
+      openRoot.innerHTML = '<label for="open-shadow-editor">Open shadow favorite editor</label><input id="open-shadow-editor" name="favorite_editor">';
+      const closedRoot = document.querySelector("runr-closed-field").attachShadow({ mode: "closed" });
+      closedRoot.innerHTML = '<label>Closed-root answer <input name="closed_answer"></label>';
+      const body = document.body;
+      for (const controlId of ["email", "summary", "country", "work-yes", "remote", "start-date"]) {
+        const control = document.getElementById(controlId);
+        for (const eventName of ["focus", "input", "change", "blur"]) {
+          control.addEventListener(eventName, () => {
+            if (controlId === "email") {
+              body.dataset.emailEvents = [body.dataset.emailEvents, eventName].filter(Boolean).join(",");
+            }
+            body.dataset.nativeEvents = [body.dataset.nativeEvents, `${controlId}:${eventName}`].filter(Boolean).join(",");
+          });
+        }
+      }
+      document.getElementById("application-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        body.dataset.submitClicks = String(Number(body.dataset.submitClicks || "0") + 1);
+        body.dataset.aa201SubmitEvents = String(Number(body.dataset.aa201SubmitEvents || "0") + 1);
+        body.dataset.runrApplicationSuccess = "true";
+      });
+      document.getElementById("resume").addEventListener("change", (event) => {
+        document.getElementById("resume-status").textContent = event.currentTarget.files[0]?.name || "Rejected";
+        body.dataset.uploadedCv = event.currentTarget.files[0]?.name || "";
+      });
+      for (const controlId of ["cover-letter", "supporting-document"]) {
+        document.getElementById(controlId).addEventListener("change", (event) => {
+          body.dataset[`uploaded${controlId === "cover-letter" ? "CoverLetter" : "SupportingDocument"}`] =
+            event.currentTarget.files[0]?.name || "";
+        });
+      }
+      // AA-201 disposable fixture instrumentation for final-submit paths.
+      const increment = (key) => { body.dataset[key] = String(Number(body.dataset[key] || "0") + 1); };
+      const originalSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = function (...args) { increment("aa201FormSubmitCalls"); return originalSubmit.apply(this, args); };
+      const originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+      HTMLFormElement.prototype.requestSubmit = function (...args) { increment("aa201RequestSubmitCalls"); return originalRequestSubmit.apply(this, args); };
+      document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("button[type=submit], input[type=submit]")) increment("aa201TerminalClicks");
+      }, true);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target instanceof Element && event.target.closest("form")) increment("aa201EnterSubmissions");
+      }, true);
+      const originalFetch = window.fetch;
+      window.fetch = (...args) => { if (/submit|application/iu.test(String(args[0]))) increment("aa201TerminalRequests"); return originalFetch(...args); };
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (...args) {
+        this.__aa201TerminalRequest = /submit|application/iu.test(String(args[1]));
+        return originalXhrOpen.apply(this, args);
+      };
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (...args) {
+        if (this.__aa201TerminalRequest) increment("aa201TerminalRequests");
+        return originalXhrSend.apply(this, args);
+      };
+      const successObserver = new MutationObserver(() => {
+        if (body.dataset.runrApplicationSuccess === "true") increment("aa201SuccessTransitions");
+      });
+      successObserver.observe(body, { attributes: true, attributeFilter: ["data-runr-application-success"] });
+      for (const method of ["pushState", "replaceState"]) {
+        const originalHistoryMethod = history[method];
+        history[method] = function (...args) {
+          const before = window.location.href;
+          const result = originalHistoryMethod.apply(this, args);
+          if (window.location.href !== before) increment("aa201FinalNavigation");
+          return result;
+        };
+      }
+      window.addEventListener("beforeunload", () => increment("aa201FinalNavigation"));
+    </script>
+  </body>
+</html>

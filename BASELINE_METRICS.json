@@ -1,0 +1,193 @@
+{
+  "benchmark_version": "rc002-offline-v1",
+  "execution": {
+    "country_scope": "Germany",
+    "fixture_directory_sha256": "cf85434bc5632276c4477c1c19d6e159b084567389deccee6e0a5187af0ab2c9",
+    "mode": "offline_fixture_only",
+    "network_requests_allowed": false,
+    "platform": "win32",
+    "python": "3.12.7"
+  },
+  "external_cost": {
+    "currency": "EUR",
+    "estimated_provider_cost": null,
+    "measured_provider_cost": 0.0,
+    "monthly_budget": null,
+    "offline_fixture_cost": 0.0,
+    "status": "provider_pricing_and_account_limits_unknown"
+  },
+  "historical_aggregates": {
+    "employer_jobs": 2612,
+    "employer_state_records": 428,
+    "linkedin_detail_retry_rows": 576,
+    "linkedin_scans": 11921,
+    "linkedin_source_groups": 11896,
+    "linkedin_stored_jobs": 188206,
+    "resolver_request_logs": 1475495,
+    "resolver_status_429": 328493,
+    "resolver_status_999": 987057,
+    "source": "RC-001 plan and evidence artifacts; not a runtime measurement"
+  },
+  "measured_runtime": {
+    "accepted_jobs": 36,
+    "browser_requests": 0,
+    "companies": 5,
+    "cpu_time_seconds": 1.84375,
+    "database_bytes": 7892992,
+    "db_operations": {
+      "total": 2553,
+      "write": 1930
+    },
+    "detail_requests": 2,
+    "http_requests": 7,
+    "peak_rss_bytes": 66428928,
+    "rate_limited_responses": 1,
+    "raw_jobs": 38,
+    "rejected_jobs": 1,
+    "retries": 1,
+    "source_tasks": 5,
+    "temporary_storage_bytes": 7893358,
+    "unique_jobs": 37,
+    "wall_time_seconds": 2.535561
+  },
+  "parser_fixtures": {
+    "challenge_pages": 1,
+    "detail_records": 1,
+    "malformed_cards": 1,
+    "note": "Parser fixtures are local HTML and do not represent HTTP request throughput.",
+    "requests_measured": 0,
+    "search_cards": 2
+  },
+  "publication": {
+    "database_counts": {
+      "canonical_jobs": 36,
+      "observations": 36,
+      "publications": 1,
+      "published_jobs": 35
+    },
+    "duplicate_logical_jobs": 0,
+    "duplicate_publications": 0,
+    "published_jobs": 35,
+    "replay_same_publication": true
+  },
+  "recovery": {
+    "checkpoint_bytes": 366,
+    "checkpoint_sha256": "a99226a28b2e7a02e02f343e2cbf6b2c98397a1ee970a2841498edb2d1a2948f",
+    "completed_before_interrupt": 2,
+    "interrupted": true,
+    "note": "Local checkpoint read/resume drill; not a replacement-host recovery measurement.",
+    "recovery_point": "after source task 2",
+    "recovery_time_seconds": 0.0,
+    "remaining_after_resume": 3,
+    "replayed_completed_sources": 0,
+    "resumed": true
+  },
+  "source_results": {
+    "generic_large": {
+      "accepted_jobs": 1,
+      "complete_snapshot": false,
+      "credible_evidence": true,
+      "detail_requests": 2,
+      "employer_size": "large",
+      "raw_jobs": 2,
+      "requests": 3,
+      "retries": 0,
+      "status": "incomplete",
+      "warnings": [
+        "bounded_detail_limit_reached"
+      ]
+    },
+    "greenhouse_small": {
+      "accepted_jobs": 1,
+      "complete_snapshot": true,
+      "credible_evidence": true,
+      "detail_requests": 0,
+      "employer_size": "small",
+      "raw_jobs": 1,
+      "requests": 1,
+      "retries": 0,
+      "status": "completed",
+      "warnings": []
+    },
+    "lever_large": {
+      "accepted_jobs": 32,
+      "complete_snapshot": true,
+      "credible_evidence": true,
+      "detail_requests": 0,
+      "employer_size": "large",
+      "raw_jobs": 32,
+      "requests": 1,
+      "retries": 0,
+      "status": "completed",
+      "warnings": []
+    },
+    "recruitee_fixture": {
+      "accepted_jobs": 1,
+      "complete_snapshot": true,
+      "credible_evidence": true,
+      "detail_requests": 0,
+      "employer_size": "small",
+      "raw_jobs": 1,
+      "requests": 0,
+      "retries": 0,
+      "status": "completed",
+      "warnings": []
+    },
+    "workday_rate_limited": {
+      "accepted_jobs": 2,
+      "complete_snapshot": true,
+      "credible_evidence": true,
+      "detail_requests": 0,
+      "employer_size": "large",
+      "raw_jobs": 2,
+      "requests": 2,
+      "retries": 1,
+      "status": "completed",
+      "warnings": []
+    }
+  },
+  "status": "completed",
+  "workload_profiles": {
+    "country_scope": "Germany",
+    "dual_field_ready": {
+      "candidate_companies": 1666,
+      "description": "RC-001 field-presence cohort; eligibility is not verified.",
+      "execution_mode": "shape_only_not_executed",
+      "input_rows": 1666,
+      "source_tasks_if_reviewed": 3332
+    },
+    "existing_linkedin_state": {
+      "description": "Historical state shape, not a single-run workload.",
+      "execution_mode": "historical_aggregate_not_executed",
+      "scans": 11921,
+      "source_groups": 11896,
+      "stored_jobs": 188206
+    },
+    "fixture_representative": {
+      "companies": 5,
+      "description": "Deterministic adapter/publication fixture; not a production capacity claim.",
+      "execution_mode": "measured_offline_fixture",
+      "input_rows": 5,
+      "size_mix": {
+        "large_employer_fixture_jobs": 32,
+        "large_employers": 3,
+        "small_employers": 2
+      },
+      "source_tasks": 5
+    },
+    "identity_first_expansion": {
+      "candidate_companies": 4371,
+      "description": "RC-001 W/L/I cohort without a canonical Runr ID; identity work precedes eligibility.",
+      "execution_mode": "shape_only_not_executed",
+      "input_rows": 4371,
+      "source_tasks_if_reviewed": 8742
+    },
+    "reviewed_eligible": {
+      "candidate_companies": null,
+      "description": "Reviewed, verified population after RC-003 through RC-005; not known yet.",
+      "execution_mode": "deferred_until_identity_review",
+      "input_rows": null,
+      "source_tasks": null
+    }
+  }
+}

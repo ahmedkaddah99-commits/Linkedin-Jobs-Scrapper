@@ -1,0 +1,84 @@
+{
+  "ticket": "RC-009",
+  "status": "complete",
+  "evidence_mode": "offline_synthetic_only",
+  "validated_at": "2026-09-07",
+  "target_branch": "deployment/render-turso-r2",
+  "validation_head": "e7662c63082d605d8ae6de090d3a04a55bba6556",
+  "python": {
+    "executable": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe",
+    "version": "Python 3.12.7"
+  },
+  "session_delta_files": [
+    "backend/repositories/sqlite_acquisition.py",
+    "tests/test_phase_b_catalog.py",
+    "tests/fixtures/rc009_cross_source_identity.json",
+    "tests/test_rc009_normalization_publication.py",
+    "docs/RC009_NORMALIZATION_PUBLICATION.md",
+    "docs/RC009_NORMALIZATION_PUBLICATION.json"
+  ],
+  "audited_preserved_integration_files": [
+    "backend/acquisition/producer_adapters.py",
+    "backend/acquisition/quality.py",
+    "backend/acquisition/phase_b.py",
+    "backend/repositories/sqlite_acquisition.py",
+    "backend/repositories/sqlite_personalized_jobs.py",
+    "backend/application/services.py",
+    "tests/test_observation_store_integration.py",
+    "tests/test_rc010_first_acquisition_slice.py",
+    "tests/test_publication_policy_rollback.py",
+    "tests/test_acquisition_mapping_contract.py",
+    "tests/test_acquisition_quality.py",
+    "tests/test_producer_adapters.py"
+  ],
+  "implementation": [
+    "Connected producer adapters to the existing SqliteAcquisitionStore.ingest_snapshot contract.",
+    "Preserved bounded intermediate/final batch and complete source inventory controls.",
+    "Required shared canonical application URL or requisition ID for signature-based cross-source canonical reuse.",
+    "Kept source observations, raw producer records, scan IDs, source IDs, and field provenance available after canonical publication.",
+    "Preserved the existing report-only broken-apply staging policy and Easy/Quick Apply rejection policy.",
+    "Preserved partial-source safety so invalid source results cannot authorize false closure or replace a prior valid public head."
+  ],
+  "verification": [
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' --version",
+      "result": "Python 3.12.7"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m pytest tests/test_phase_b_catalog.py tests/test_rc009_normalization_publication.py tests/test_observation_store_integration.py tests/test_rc010_first_acquisition_slice.py tests/test_publication_policy_rollback.py tests/test_acquisition_mapping_contract.py tests/test_acquisition_quality.py tests/test_producer_adapters.py -q",
+      "result": "45 passed, 4 subtests passed in 27.77s"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m ruff check backend/repositories/sqlite_acquisition.py backend/acquisition/producer_adapters.py backend/acquisition/phase_b.py tests/test_phase_b_catalog.py tests/test_rc009_normalization_publication.py tests/test_observation_store_integration.py tests/test_rc010_first_acquisition_slice.py tests/test_publication_policy_rollback.py",
+      "result": "All checks passed!"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m py_compile backend/repositories/sqlite_acquisition.py backend/acquisition/producer_adapters.py backend/acquisition/phase_b.py tests/test_phase_b_catalog.py tests/test_rc009_normalization_publication.py tests/test_observation_store_integration.py tests/test_rc010_first_acquisition_slice.py tests/test_publication_policy_rollback.py",
+      "result": "exit code 0"
+    },
+    {
+      "command": "git diff --check",
+      "result": "no whitespace errors; existing LF/CRLF conversion warnings only"
+    }
+  ],
+  "offline_proof": {
+    "large_batch_boundary": "26 observations; intermediate delivery non-final and non-closure-safe; final complete inventory closes safely; replay is idempotent",
+    "identity": "same-source different openings remain separate; application URL and requisition ID each support a cross-source merge; ambiguous observation stays separate",
+    "traceability": "raw producer label and observation contract retained after normalization",
+    "publication": "staging read model and existing user Jobs route exercised with no acquisition request created by reads",
+    "failure": "invalid/partial source becomes unknown without false absence closure or replacement of prior valid public publication"
+  },
+  "limitations": [
+    "Synthetic temporary SQLite and in-process route tests only.",
+    "No live Render, Turso, R2, employer, LinkedIn, credential, deployment, or browser-visual test.",
+    "Broken/missing apply remains report-only in the default publication policy; Easy/Quick Apply-only input is rejected by Phase B.",
+    "RC-010 was not started."
+  ],
+  "rollback": [
+    "Do not reset or clean the worktree.",
+    "Reverse only the RC-009 matcher/test hunks with apply_patch, preserving the already-dirty SQLite repository file.",
+    "Remove only the RC-009 evidence/fixture/test files after absolute-path confirmation.",
+    "Re-run focused tests, Ruff, py_compile, and git diff --check."
+  ],
+  "next_gate": "stop_after_rc009"
+}

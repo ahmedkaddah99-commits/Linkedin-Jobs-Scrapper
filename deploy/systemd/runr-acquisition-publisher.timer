@@ -1,0 +1,11 @@
+[Unit]
+Description=Runr producer-state publisher timer
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=runr-acquisition-publisher.service
+
+[Install]
+WantedBy=timers.target
