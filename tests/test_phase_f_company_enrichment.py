@@ -20,6 +20,7 @@ from backend.application.company_logo import (
     validate_official_url,
 )
 from backend.application.company_enrichment import (
+    OfficialWebsiteProvider,
     WebshareLinkedInCompanyProvider,
     ScrapeOpsCompanyProvider,
     ScrapeOpsLinkedInCompanyProvider,
@@ -187,6 +188,20 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["logo_bytes"], VALID_SVG)
         self.assertEqual(result["logo_content_type"], "image/svg+xml")
         self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
+
+    def test_official_free_logo_lookup_strips_www_prefix(self):
+        provider = OfficialWebsiteProvider()
+        response = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "image/png"},
+            content=_png(),
+            url="https://api.companyenrich.com/logo/acme.example",
+        )
+        with patch("backend.application.company_enrichment.requests.get", return_value=response) as fetch:
+            result = provider._fetch_free_logo("www.acme.example")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(fetch.call_args.args[0], "https://api.companyenrich.com/logo/acme.example")
 
     def test_webshare_provider_delegates_official_company_urls(self):
         provider = WebshareLinkedInCompanyProvider()

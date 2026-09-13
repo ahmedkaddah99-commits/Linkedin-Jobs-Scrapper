@@ -202,6 +202,8 @@ class OfficialWebsiteProvider:
         """Fetch one public domain logo without a paid/API-key request."""
 
         normalized = str(domain or "").strip().casefold().rstrip(".")
+        if normalized.startswith("www."):
+            normalized = normalized[4:]
         if not normalized:
             return None
         try:
