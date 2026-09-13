@@ -705,17 +705,19 @@ def validate_job_for_publication(
         else:
             field_states["application_url"] = "present"
 
-        # Strict audit mode rejects embedded Easy Apply and unknown methods.
-        # Display-first publication records those fields without using them to
-        # hide an otherwise complete job.
-        if _is_linkedin_source(record):
-            easy_apply_status = _easy_apply_status(record)
-            if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
-                mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
-            elif easy_apply_status != "false":
-                mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
     else:
         field_states["application_url"] = "optional_missing" if not application_url else "present_unverified"
+
+    # Easy Apply is never a customer-facing application destination. Keep
+    # collecting its evidence at the producer boundary, but reject it from
+    # every publication mode, including display-first mode where a missing
+    # external application URL is otherwise allowed.
+    if _is_linkedin_source(record):
+        easy_apply_status = _easy_apply_status(record)
+        if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
+            mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
+        elif require_application_destination and easy_apply_status != "false":
+            mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
 
     # --- description ---
     description = _description(record)

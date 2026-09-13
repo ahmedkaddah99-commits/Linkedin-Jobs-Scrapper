@@ -187,6 +187,30 @@ def test_display_first_policy_allows_missing_apply_destination():
     assert result.publishable
 
 
+def test_display_first_policy_still_rejects_linkedin_easy_apply():
+    from backend.acquisition.job_publication_completeness import validate_job_for_publication
+
+    result = validate_job_for_publication(
+        {
+            "canonical_job_id": "job-1",
+            "canonical_company_id": "co-1",
+            "source_job_id": "source-1",
+            "company_name": "Example GmbH",
+            "title": "Backend Engineer",
+            "description": "Build resilient backend services with a collaborative engineering team and clear ownership across the product.",
+            "location": "Berlin, Germany",
+            "source": "linkedin",
+            "easy_apply_status": "true",
+            "observed_at": "2026-09-12T00:00:00Z",
+            "lifecycle_state": "active",
+        },
+        company_registry={"co-1"},
+        require_application_destination=False,
+    )
+    assert not result.publishable
+    assert "easy_apply_not_supported" in result.reason_codes
+
+
 def test_jobs_workspace_keeps_pagination_explicit_and_capability_aware():
     text = (SOURCE_ROOT / "frontend/src/components/personalized/JobsWorkspace.jsx").read_text(encoding="utf-8")
     assert "IntersectionObserver" not in text
