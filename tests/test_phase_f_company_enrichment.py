@@ -203,6 +203,24 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(fetch.call_args.args[0], "https://api.companyenrich.com/logo/acme.example")
 
+    def test_official_free_logo_fallback_runs_for_non_html_site_response(self):
+        provider = OfficialWebsiteProvider()
+        logo = (_png(), "image/png", "https://api.companyenrich.com/logo/acme.example")
+        with patch.object(
+            OfficialWebsiteProvider,
+            "_fetch",
+            return_value=(b"application response", "application/octet-stream", "https://acme.example", {}),
+        ), patch.object(provider, "_fetch_free_logo", return_value=logo) as free_logo:
+            result = asyncio.run(
+                provider.enrich(
+                    {"canonical_name": "Acme", "provenance_url": "https://www.acme.example"},
+                    conditional={},
+                )
+            )
+
+        self.assertEqual(result["logo_bytes"], logo[0])
+        free_logo.assert_called_once_with("www.acme.example")
+
     def test_webshare_provider_delegates_official_company_urls(self):
         provider = WebshareLinkedInCompanyProvider()
 

@@ -280,7 +280,27 @@ class OfficialWebsiteProvider:
                 )
             return result
         if len(body) > self.max_html_bytes or "html" not in content_type.casefold():
-            return {"fields": {}, "source": "official_company_website", "provenance_url": final_url, "request_count": 1}
+            result = {
+                "fields": {},
+                "source": "official_company_website",
+                "provenance_url": final_url,
+                "observed_at": utc_now_iso(),
+                "verified_at": "",
+                "request_count": 1,
+                "cost_units": 0.0,
+            }
+            free_logo = await asyncio.to_thread(self._fetch_free_logo, source_host)
+            if free_logo is not None:
+                logo_body, logo_type, logo_final_url = free_logo
+                result.update(
+                    {
+                        "logo_bytes": logo_body,
+                        "logo_content_type": logo_type,
+                        "logo_source_url": logo_final_url,
+                        "request_count": 2,
+                    }
+                )
+            return result
         html_text = body.decode("utf-8", errors="replace")
         data = self._json_ld(html_text)
         fields = self._explicit_fields(data)
