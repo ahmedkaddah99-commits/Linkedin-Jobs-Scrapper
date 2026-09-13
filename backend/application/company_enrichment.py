@@ -924,6 +924,19 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                     })
                 except Exception:
                     pass
+            if "logo_bytes" not in result:
+                website_url = str(fields.get("website") or extra.get("linkedin_website") or "").strip()
+                website_host = urlparse(website_url).hostname if website_url else ""
+                if website_host and "linkedin.com" not in website_host.casefold():
+                    free_logo = await asyncio.to_thread(self._free_logo_from_website, website_host)
+                    if free_logo is not None:
+                        logo_body, logo_type, logo_final_url = free_logo
+                        result.update({
+                            "logo_bytes": logo_body,
+                            "logo_content_type": logo_type,
+                            "logo_source_url": logo_final_url,
+                            "request_count": int(result.get("request_count") or 0) + 1,
+                        })
             return result
         return {
             "fields": {},
@@ -943,6 +956,12 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
     def _direct_proxy_config() -> Mapping[str, str] | None:
         """Return an optional direct-fetch proxy configuration."""
 
+        return None
+
+    def _free_logo_from_website(self, domain: str) -> tuple[bytes, str, str] | None:
+        """Leave website-logo fallback to providers with an approved transport."""
+
+        del domain
         return None
 
 
@@ -984,6 +1003,9 @@ class WebshareLinkedInCompanyProvider(ScrapeOpsLinkedInCompanyProvider):
         if not self.webshare_proxy_url:
             return None
         return {"http": self.webshare_proxy_url, "https": self.webshare_proxy_url}
+
+    def _free_logo_from_website(self, domain: str) -> tuple[bytes, str, str] | None:
+        return self.official_provider._fetch_free_logo(domain)
 
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
         provenance = str(company.get("provenance_url") or "").strip().casefold()

@@ -189,6 +189,39 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["logo_content_type"], "image/svg+xml")
         self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
 
+    def test_webshare_linkedin_provider_falls_back_to_free_logo_from_discovered_website(self):
+        html = """
+        <html><head>
+          <meta property="og:title" content="Acme GmbH | LinkedIn">
+          <script type="application/ld+json">
+            {"@type":"Organization","name":"Acme GmbH","url":"https://acme.example"}
+          </script>
+        </head></html>
+        """
+        page = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "text/html"},
+            content=html.encode(),
+            url="https://www.linkedin.com/company/acme",
+        )
+        logo = (_png(), "image/png", "https://api.companyenrich.com/logo/acme.example")
+        provider = WebshareLinkedInCompanyProvider()
+        with patch("backend.application.company_enrichment.requests.get", return_value=page), patch.object(
+            provider.official_provider, "_fetch_free_logo", return_value=logo
+        ) as free_logo, patch(
+            "backend.application.company_enrichment.assert_public_official_host", return_value=None
+        ):
+            result = asyncio.run(
+                provider.enrich(
+                    {"canonical_name": "Acme GmbH", "provenance_url": "https://www.linkedin.com/company/acme"},
+                    conditional={},
+                )
+            )
+
+        self.assertEqual(result["logo_bytes"], logo[0])
+        self.assertEqual(result["logo_source_url"], logo[2])
+        free_logo.assert_called_once_with("acme.example")
+
     def test_official_free_logo_lookup_strips_www_prefix(self):
         provider = OfficialWebsiteProvider()
         response = SimpleNamespace(
