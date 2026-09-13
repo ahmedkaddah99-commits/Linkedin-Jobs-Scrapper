@@ -160,11 +160,11 @@ class CompanyIndexes:
         slug = _text(candidate.get("linkedin_slug")) or normalise_linkedin_slug(candidate.get("linkedin_company_url"))
         slug_matches = self.by_slug.get(slug, ()) if slug else ()
         if len(slug_matches) == 1:
-            return _text(slug_matches[0].get("company_id")), "linkedin_url"
+            return _text(_row_value(slug_matches[0], "company_id")), "linkedin_url"
         name = _normalise_name(candidate.get("company_name"))
         name_matches = self.by_name.get(name, ()) if name else ()
         if len(name_matches) == 1:
-            return _text(name_matches[0].get("company_id")), "unique_name"
+            return _text(_row_value(name_matches[0], "company_id")), "unique_name"
         return "", "unresolved"
 
 
