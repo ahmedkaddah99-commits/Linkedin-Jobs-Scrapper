@@ -131,7 +131,7 @@ subsystems:
       - docs/reverse-engineering/05-subsystems/career-profiles-and-documents.md
     dependencies: [data-domain-model, integrations-security, acquisition]
     verification_commands:
-      - .venv\Scripts\python.exe -m pytest -q tests/test_backend_application.py tests/test_career_documents.py tests/test_master_cv.py
+      - .venv\Scripts\python.exe -m pytest -q tests/test_backend_application.py tests/test_career_profile_evidence.py tests/test_master_cv.py
     key_invariants:
       - No re-registration of /dashboard or analytics/events (retired).
       - No live Gemini/DeepSeek/ScrapeOps calls in tests.
