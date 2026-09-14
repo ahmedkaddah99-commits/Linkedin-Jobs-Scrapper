@@ -157,7 +157,7 @@ Validation rules in `get_environment_validation_errors` (`env_schema.py:375-435`
 
 Env names read at runtime but **not** in `ENV_SCHEMA` include:
 - `BACKEND_ALLOWED_ORIGINS` (validated only)
-- `S3_CONNECT_TIMEOUT_SECONDS`, `S3_READ_TIMEOUT_SECONDS`, `S3_MAX_ATTEMPTS` (`storage/s3.py:28-39`)
+- `S3_CONNECT_TIMEOUT_SECONDS`, `S3_READ_TIMEOUT_SECONDS`, `S3_MAX_ATTEMPTS` (`backend/storage/s3.py:28-39`)
 - `RUNR_MIGRATION_HEAD`, `RUNR_STORAGE_BACKEND`, `RUNR_DATA_DIR` (deploy/release)
 - `JOB_SEEKER_CONFIG_PATH`, `REUSABLE_PACKAGES_CONFIG_PATH`/`BLUE_COLLAR_CONFIG_PATH`, `RUNR_SKIP_PROJECT_DOTENV`
 - `RUNR_INTERNAL_OBJECT_STORAGE_LOCAL_ROOT` (`bootstrap.py:324`)
@@ -175,7 +175,7 @@ Other config modules:
 | `backend/config/reusable_packages.py` + `backend/config/reusable_packages.json` | Legacy "blue-collar" reusable-package config. The JSON holds a candidate block with personal contact fields (not reproduced here; privacy note WS5-G6). | `backend/capabilities/reusable_packages/support.py:6`, `backend/profiles/reusable_packages.py:3` |
 | `backend/config/plans.py` | `free`/`runr_pro` plan catalog, quotas/limits, Creem product-id mapping from env | `quota.py`, `services.py:28`, `clerk.py:21`, `server.py:87`, routes, `stage_adapters.py:45` |
 | `backend/config/scrapeops_admin_policy.py` | ScrapeOps policy defaults and normalizers; see section 6.4 | `backend/application/services.py:29-32` |
-| `backend/config/company_site_inventory/discovered_regular_company_career_sites.jsonl` (1,414 lines), `.../discovered_phd_university_career_sites.jsonl` (1,092 lines) | Checked-in employer career-site inventory | `backend/connectors/company_career_sites.py:105-111`; imported into the catalog by `sqlite_acquisition.py:4935` when `acquisition.phase_f.company_site_inventory_enabled` is set (`services.py:964-971`) (WS-3) |
+| `backend/config/company_site_inventory/discovered_regular_company_career_sites.jsonl` (1,414 lines), `backend/config/company_site_inventory/discovered_phd_university_career_sites.jsonl` (1,092 lines) | Checked-in employer career-site inventory | `backend/connectors/company_career_sites.py:105-111`; imported into the catalog by `backend/repositories/sqlite_acquisition.py:4935` when `acquisition.phase_f.company_site_inventory_enabled` is set (`backend/application/services.py:964-971`) (WS-3) |
 
 ### 4.4 Local runtime data locations (T08)
 
@@ -305,7 +305,7 @@ python -c "import ast;..."   # ENV_SCHEMA keys = 48
 | `bbb958b8` | 2026-04-18 | (initial large import) | first `sqlite_backed.py` |
 | `fa5f32cb` | 2026-05-03 | URL Crawler, Workspace modularization, E-Tracking | MySQL career discovery |
 | `ec49b716` | 2026-05-25 | ScrapeOps use AM control mechanisms and endpoint. | `scrapeops_admin_policy.py` introduced |
-| `c7bf7cbd` | 2026-06-18 | deoployment prep initial setup | `backend/database/connection.py`, `migrations.py`, `storage/s3.py` added (Turso/R2 foundation) |
+| `c7bf7cbd` | 2026-06-18 | deoployment prep initial setup | `backend/database/connection.py`, `migrations.py`, `backend/storage/s3.py` added (Turso/R2 foundation) |
 | `10e65b01`, `d6018c3e`, `386ea700` | 2026-06-21…07-02 | Production Tech Stack Correction / render turso r2 fixes / Turso fix | libSQL hardening |
 | `dcbd9765` | 2026-07-22 | feat(cp-025): version profiles… | `versioning_repository.py` |
 | `93419e48` | 2026-08-04 | fix: recover occupied Turso streams | stale-stream reconnect |
