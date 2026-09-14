@@ -1,5 +1,7 @@
 # Project instructions
 
+For subsystem architecture, ownership, and detailed per-area agent guidance, start at [docs/INDEX.md](docs/INDEX.md). This file stays short by design; do not add subsystem-specific instructions here — put them in the relevant doc under `docs/reverse-engineering/` instead.
+
 ## Python environment
 
 All Python commands in this repository must use the project virtual environment:

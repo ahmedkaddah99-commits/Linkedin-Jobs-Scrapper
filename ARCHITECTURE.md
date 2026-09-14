@@ -1,5 +1,7 @@
 # Unified Backend Architecture
 
+> **Status: historical.** This note describes an earlier increment of the backend (the generic workspace/stage/connector model below) and predates the acquisition, publication, Turso/libSQL and Render/VPS deployment system documented in `docs/reverse-engineering/`. For the current architecture, start at [docs/INDEX.md](docs/INDEX.md) and [docs/reverse-engineering/00-overview.md](docs/reverse-engineering/00-overview.md). This file is kept as history, not updated in step with the current system.
+
 ## Goal
 This repo now has a first-pass unified backend that treats job automation as a composition of:
 
