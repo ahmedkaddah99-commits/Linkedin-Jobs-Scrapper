@@ -34,7 +34,7 @@ WS-7 owns the path from a commit on `deployment/render-turso-r2` to running proc
 
 | Path | Files | Lines | Notes |
 |---|---|---|---|
-| `deploy/**` | 27 | — | 5 shell wrappers/scripts, 1 validator `.py`, 3 JSON/env data files, 17 files under `deploy/systemd/`, `deploy/start.sh` |
+| `deploy/**` | 27 | — | 7 shell scripts (`deploy.sh`, `setup.sh`, `start.sh`, `restore-acquisition-states.sh`, `run-acquisition-{cycle,publisher,source}.sh`), 1 Python validator, 3 JSON/env data files, 16 files under `deploy/systemd/` |
 | `Dockerfile` / `Dockerfile.api` / `Dockerfile.worker` | 3 | 47 / 71 / 69 | See [docker.md](docker.md) |
 | `.dockerignore` | 1 | 56 | |
 | `render.yaml` | 1 | 242 | |

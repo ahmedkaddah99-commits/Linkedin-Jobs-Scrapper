@@ -23,7 +23,7 @@ It can also host the API, the customer worker and the static frontend, but the r
 
 | Group | Files |
 |---|---|
-| systemd units | `deploy/systemd/` has 17 files: 10 services, 5 timers, `runr.target`, `runr-journald.conf` |
+| systemd units | `deploy/systemd/` has 16 files: 9 services, 5 timers, `runr.target`, `runr-journald.conf` |
 | Wrappers | `deploy/run-acquisition-source.sh` (128 lines), `deploy/run-acquisition-publisher.sh` (75), `deploy/run-acquisition-cycle.sh` (53) |
 | Operator scripts | `deploy/setup.sh` (117), `deploy/deploy.sh` (47), `deploy/restore-acquisition-states.sh` (74), `deploy/start.sh` (85; shared with Render) |
 | Contracts and templates | `deploy/vps-runtime-contract.json` (88), `deploy/acquisition-data-manifest.json` (340), `deploy/acquisition.env.example` (59) |
