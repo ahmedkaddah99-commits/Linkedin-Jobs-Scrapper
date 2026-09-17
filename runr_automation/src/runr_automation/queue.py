@@ -18,8 +18,7 @@ class JobQueue:
         self.store = store
 
     def enqueue(self, job_type: str, issue_id: str, fingerprint: str, *, priority: int = 0) -> str:
-        key = f"{job_type}:{issue_id}:{fingerprint}"
-        job_id = hashlib.sha256(key.encode()).hexdigest()[:32]
+        job_id = self._job_id(job_type, issue_id, fingerprint)
         with self.store.connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO issues(linear_id, identifier, observed_at) VALUES (?, ?, ?)",
@@ -34,6 +33,52 @@ class JobQueue:
                 (job_id, job_type, issue_id, fingerprint, priority),
             )
         return job_id
+
+    @staticmethod
+    def _job_id(job_type: str, issue_id: str, fingerprint: str) -> str:
+        return hashlib.sha256(f"{job_type}:{issue_id}:{fingerprint}".encode()).hexdigest()[:32]
+
+    @staticmethod
+    def _transition(connection, job_id: str, owner: str, status: str, *, next_retry: str | None = None):
+        cursor = connection.execute(
+            "UPDATE jobs SET status=?, next_retry=?, lease_owner=NULL, lease_expires_at=NULL "
+            "WHERE job_id=? AND status='running' AND lease_owner=?",
+            (status, next_retry, job_id, owner),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"job is not running for lease owner {owner}: {job_id}")
+
+    def complete(self, job_id: str, owner: str) -> None:
+        with self.store.connect() as connection:
+            self._transition(connection, job_id, owner, "complete")
+
+    def wait(self, job_id: str, owner: str, *, next_retry: datetime) -> None:
+        with self.store.connect() as connection:
+            self._transition(connection, job_id, owner, "waiting", next_retry=_iso(next_retry))
+
+    def fail(self, job_id: str, owner: str) -> None:
+        with self.store.connect() as connection:
+            self._transition(connection, job_id, owner, "failed")
+
+    def release(self, job_id: str, owner: str) -> None:
+        with self.store.connect() as connection:
+            self._transition(connection, job_id, owner, "queued")
+
+    def complete_and_enqueue(self, job_id: str, owner: str, next_type: str) -> str:
+        with self.store.connect() as connection:
+            row = connection.execute(
+                "SELECT issue_id, desired_state_fingerprint, priority FROM jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None or row["issue_id"] is None:
+                raise ValueError(f"job is unknown or has no issue: {job_id}")
+            self._transition(connection, job_id, owner, "complete")
+            next_job_id = self._job_id(next_type, row["issue_id"], row["desired_state_fingerprint"])
+            connection.execute(
+                "INSERT OR IGNORE INTO jobs(job_id, type, issue_id, desired_state_fingerprint, status, priority, attempt_count) "
+                "VALUES (?, ?, ?, ?, 'queued', ?, 0)",
+                (next_job_id, next_type, row["issue_id"], row["desired_state_fingerprint"], row["priority"]),
+            )
+        return next_job_id
 
     def claim(self, owner: str, *, now: datetime, lease_seconds: int) -> JobRecord | None:
         now_text = _iso(now)
