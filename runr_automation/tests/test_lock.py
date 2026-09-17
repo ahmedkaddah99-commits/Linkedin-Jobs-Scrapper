@@ -1,6 +1,6 @@
 import pytest
 
-from tools.runr_automation.lock import ControllerLock, LockUnavailable
+from runr_automation.lock import ControllerLock, LockUnavailable
 
 
 def test_controller_lock_allows_one_owner(tmp_path) -> None:

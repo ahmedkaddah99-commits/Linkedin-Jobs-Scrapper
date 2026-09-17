@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tools.runr_automation.state import StateStore
+from runr_automation.state import StateStore
 
 
 def test_state_store_initializes_durable_schema(tmp_path: Path) -> None:

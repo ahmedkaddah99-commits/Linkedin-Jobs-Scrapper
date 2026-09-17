@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from tools.runr_automation.cli import main
+from runr_automation.cli import main
 
 
 def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -22,7 +22,7 @@ def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypa
 def test_reconcile_command_processes_local_pending_events(tmp_path: Path, monkeypatch, capsys) -> None:
     local_app_data = tmp_path / "local-app-data"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
-    from tools.runr_automation.state import StateStore
+    from runr_automation.state import StateStore
 
     store = StateStore(local_app_data / "RunrAutomation" / "state.db")
     with store.connect() as connection:

@@ -1,0 +1,32 @@
+linear:
+  team_id: ""
+  poll_interval_seconds: 90
+  poll_jitter_seconds: 15
+  overlap_seconds: 120
+
+execution:
+  max_concurrent_issues: 2
+  checkpoint_interval_seconds: 300
+  max_attempt_minutes: 45
+  max_attempt_tokens: 80000
+  reserve_tokens: 12000
+  minimum_remaining_ratio: 0.15
+
+providers:
+  order: [codex, opencode_subscription, opencode_openrouter]
+  codex:
+    command: ""
+  opencode_subscription:
+    command: ""
+  openrouter:
+    enabled: false
+    max_usd_per_job: 0
+    max_usd_per_day: 0
+
+logging:
+  level: INFO
+  retain_files: 7
+  include_prompts: false
+
+approvals:
+  expiry_minutes: 60

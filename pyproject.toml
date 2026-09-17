@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "runr_automation/tests"]
 markers = [
   "slow: tests that are useful but not part of the fast local check",
   "external: tests that require external services or credentials",

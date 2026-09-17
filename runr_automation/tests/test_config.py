@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tools.runr_automation.config import load_config
+from runr_automation.config import load_config
 
 
 def test_config_uses_user_data_directory_and_environment_overrides(

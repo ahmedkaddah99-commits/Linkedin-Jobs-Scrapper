@@ -1,4 +1,4 @@
-from tools.runr_automation.redaction import redact, redact_text
+from runr_automation.redaction import redact, redact_text
 
 
 def test_redaction_removes_sensitive_values_from_payloads_and_text() -> None:

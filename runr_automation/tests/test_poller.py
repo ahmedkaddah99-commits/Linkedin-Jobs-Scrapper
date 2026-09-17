@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from tools.runr_automation.linear_client import FakeLinearClient, RemoteIssue
-from tools.runr_automation.poller import Poller
-from tools.runr_automation.state import StateStore
+from runr_automation.linear_client import FakeLinearClient, RemoteIssue
+from runr_automation.poller import Poller
+from runr_automation.state import StateStore
 
 
 def test_poller_restarts_from_overlap_and_deduplicates_events(tmp_path: Path) -> None:

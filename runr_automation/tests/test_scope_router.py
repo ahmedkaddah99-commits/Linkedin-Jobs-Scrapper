@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.runr_automation.scope_router import (
+from runr_automation.scope_router import (
     ScopeError,
     build_scope_manifest,
     load_registry,

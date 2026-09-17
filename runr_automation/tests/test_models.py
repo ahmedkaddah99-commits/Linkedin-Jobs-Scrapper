@@ -1,4 +1,4 @@
-from tools.runr_automation.models import JobRecord, JobStatus
+from runr_automation.models import JobRecord, JobStatus
 
 
 def test_job_record_has_durable_lease_defaults() -> None:

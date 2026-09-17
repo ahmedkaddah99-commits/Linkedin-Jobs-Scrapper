@@ -1,9 +1,8 @@
-from tools.runr_automation.fingerprints import normalized_issue_fingerprint
-from tools.runr_automation.linear_client import RemoteIssue
-from tools.runr_automation.reconciler import Reconciler, invalidated_stages
-from tools.runr_automation.poller import Poller
-from tools.runr_automation.linear_client import FakeLinearClient
-from tools.runr_automation.state import StateStore
+from runr_automation.fingerprints import normalized_issue_fingerprint
+from runr_automation.linear_client import FakeLinearClient, RemoteIssue
+from runr_automation.poller import Poller
+from runr_automation.reconciler import Reconciler, invalidated_stages
+from runr_automation.state import StateStore
 
 
 def test_cosmetic_edits_do_not_invalidate_expensive_stages() -> None:
