@@ -33,6 +33,8 @@ providers:
   order: [codex, opencode_subscription]
   openrouter:
     enabled: false
+    max_usd_per_job: 2.5
+    max_usd_per_day: 12
 """,
         encoding="utf-8",
     )
@@ -50,3 +52,5 @@ providers:
     assert config.reserve_tokens == 9_000
     assert config.provider_order == ("codex", "opencode_subscription")
     assert config.openrouter_enabled is False
+    assert config.openrouter_max_usd_per_job == 2.5
+    assert config.openrouter_max_usd_per_day == 12

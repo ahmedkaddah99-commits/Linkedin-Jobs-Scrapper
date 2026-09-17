@@ -32,6 +32,8 @@ class AutomationConfig:
     reserve_tokens: int = 12_000
     provider_order: tuple[str, ...] = ("codex", "opencode_subscription", "opencode_openrouter")
     openrouter_enabled: bool = False
+    openrouter_max_usd_per_job: float = 0
+    openrouter_max_usd_per_day: float = 0
 
 
 def _positive_int(name: str, default: int, environment: Mapping[str, str]) -> int:
@@ -77,4 +79,6 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
         reserve_tokens=int(execution.get("reserve_tokens", 12_000)),
         provider_order=tuple(providers.get("order") or ("codex", "opencode_subscription", "opencode_openrouter")),
         openrouter_enabled=bool(openrouter.get("enabled", False)),
+        openrouter_max_usd_per_job=float(openrouter.get("max_usd_per_job", 0)),
+        openrouter_max_usd_per_day=float(openrouter.get("max_usd_per_day", 0)),
     )
