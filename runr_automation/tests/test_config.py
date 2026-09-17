@@ -54,3 +54,27 @@ providers:
     assert config.openrouter_enabled is False
     assert config.openrouter_max_usd_per_job == 2.5
     assert config.openrouter_max_usd_per_day == 12
+
+
+def test_provider_commands_and_models_are_loaded_as_argument_lists(tmp_path: Path) -> None:
+    data_dir = tmp_path / "RunrAutomation"
+    data_dir.mkdir()
+    (data_dir / "config.yaml").write_text(
+        """
+providers:
+  codex:
+    command: [C:/tools/codex.exe, exec, "-"]
+    model: gpt-codex
+  opencode_subscription:
+    command: [C:/tools/opencode.exe, run]
+    model: opencode-go/gpt
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(tmp_path, {"LOCALAPPDATA": str(tmp_path)})
+
+    assert config.codex_command == ("C:/tools/codex.exe", "exec", "-")
+    assert config.codex_model == "gpt-codex"
+    assert config.opencode_subscription_command == ("C:/tools/opencode.exe", "run")
+    assert config.opencode_subscription_model == "opencode-go/gpt"

@@ -9,7 +9,22 @@ from runr_automation.state import StateStore
 
 
 def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    local_app_data = tmp_path / "local-app-data"
+    config_dir = local_app_data / "RunrAutomation"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text(
+        """
+providers:
+  codex:
+    command: [C:/tools/codex.exe, exec, "-"]
+    model: codex-model
+  opencode_subscription:
+    command: [C:/tools/opencode.exe, run]
+    model: opencode-model
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
 
     result = main(["--repo-root", str(tmp_path), "doctor"])
 
@@ -21,6 +36,8 @@ def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypa
     )
     assert "token" not in report
     assert "secret" not in report
+    assert report["providers"]["codex"]["source"] == "configured"
+    assert report["providers"]["opencode_subscription"]["model"] == "opencode-model"
 
 
 def test_reconcile_command_processes_local_pending_events(tmp_path: Path, monkeypatch, capsys) -> None:

@@ -31,6 +31,10 @@ class AutomationConfig:
     max_attempt_tokens: int = 80_000
     reserve_tokens: int = 12_000
     provider_order: tuple[str, ...] = ("codex", "opencode_subscription", "opencode_openrouter")
+    codex_command: tuple[str, ...] = ()
+    codex_model: str = "gpt-5.6-luna"
+    opencode_subscription_command: tuple[str, ...] = ()
+    opencode_subscription_model: str = "opencode-go/gpt-5.6-luna"
     openrouter_enabled: bool = False
     openrouter_max_usd_per_job: float = 0
     openrouter_max_usd_per_day: float = 0
@@ -49,6 +53,14 @@ def _positive_int(name: str, default: int, environment: Mapping[str, str]) -> in
     return value
 
 
+def _command(value: object, name: str) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if not isinstance(value, list) or not value or not all(isinstance(part, str) and part for part in value):
+        raise ValueError(f"{name} must be a non-empty YAML list of arguments")
+    return tuple(value)
+
+
 def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = None) -> AutomationConfig:
     values = environment if environment is not None else os.environ
     data_dir = default_data_dir(values)
@@ -62,6 +74,8 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
     linear = file_config.get("linear") or {}
     execution = file_config.get("execution") or {}
     providers = file_config.get("providers") or {}
+    codex = providers.get("codex") or {}
+    opencode_subscription = providers.get("opencode_subscription") or {}
     openrouter = providers.get("openrouter") or {}
     return AutomationConfig(
         repo_root=Path(repo_root).resolve(),
@@ -78,6 +92,14 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
         max_attempt_tokens=int(execution.get("max_attempt_tokens", 80_000)),
         reserve_tokens=int(execution.get("reserve_tokens", 12_000)),
         provider_order=tuple(providers.get("order") or ("codex", "opencode_subscription", "opencode_openrouter")),
+        codex_command=_command(codex.get("command"), "providers.codex.command"),
+        codex_model=str(codex.get("model") or "gpt-5.6-luna"),
+        opencode_subscription_command=_command(
+            opencode_subscription.get("command"), "providers.opencode_subscription.command"
+        ),
+        opencode_subscription_model=str(
+            opencode_subscription.get("model") or "opencode-go/gpt-5.6-luna"
+        ),
         openrouter_enabled=bool(openrouter.get("enabled", False)),
         openrouter_max_usd_per_job=float(openrouter.get("max_usd_per_job", 0)),
         openrouter_max_usd_per_day=float(openrouter.get("max_usd_per_day", 0)),

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -19,6 +18,7 @@ from .poller import Poller
 from .reconciler import Reconciler
 from .queue import JobQueue
 from .state import StateStore
+from .providers.discovery import discover_providers
 
 
 COMMANDS = (
@@ -58,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _doctor(config) -> int:
     StateStore(config.state_db)
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
     print(
         json.dumps(
             {
@@ -67,8 +73,19 @@ def _doctor(config) -> int:
                 "python_executable": sys.executable,
                 "providers": {
                     "order": config.provider_order,
-                    "codex_available": shutil.which("codex") is not None,
-                    "opencode_available": shutil.which("opencode") is not None,
+                    **{
+                        name: {
+                            "available": True,
+                            "model": provider.model,
+                            "source": provider.source,
+                            "version": provider.version,
+                            "executable": provider.executable,
+                        }
+                        for name, provider in discovered.items()
+                    },
+                    "unavailable": [
+                        name for name in ("codex", "opencode_subscription") if name not in discovered
+                    ],
                     "openrouter_enabled": config.openrouter_enabled,
                 },
                 "safe_stop": {
