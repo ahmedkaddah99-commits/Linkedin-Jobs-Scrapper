@@ -43,6 +43,14 @@ runr-auto migrate-subsystems --dry-run
 runr-auto migrate-subsystems --apply
 ```
 
+Run continuously in the foreground with `runr-auto daemon`. To start at login without administrator access:
+
+```powershell
+.\runr_automation\scripts\install-runr-automation-task.ps1
+```
+
+Remove only the startup task (runtime data is preserved) with `.\runr_automation\scripts\uninstall-runr-automation-task.ps1`.
+
 Migration apply snapshots first and is capability-gated. If grouped labels or archival are unavailable, it prints exact manual steps and does not claim success. Review dry-run before apply.
 
 ## Configure for speed

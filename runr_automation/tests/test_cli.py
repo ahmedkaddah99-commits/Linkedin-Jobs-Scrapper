@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from runr_automation.cli import main
+from runr_automation.cli import _daemon, main
+from runr_automation.config import load_config
 
 
 def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -64,3 +65,16 @@ def test_pause_resume_and_status_use_single_runtime_root(tmp_path: Path, monkeyp
     assert json.loads(capsys.readouterr().out.splitlines()[-1])["paused"] is True
     assert main(["--repo-root", str(tmp_path), "resume"]) == 0
     assert not (data_root / "RunrAutomation" / "paused").exists()
+
+
+def test_daemon_skips_polling_while_paused(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    config = load_config(tmp_path)
+    config.data_dir.mkdir(parents=True)
+    (config.data_dir / "paused").write_text("paused", encoding="utf-8")
+    calls: list[str] = []
+
+    result = _daemon(config, run_cycle=lambda _: calls.append("poll") or 0, sleep=lambda _: None, max_cycles=1)
+
+    assert result == 0
+    assert calls == []

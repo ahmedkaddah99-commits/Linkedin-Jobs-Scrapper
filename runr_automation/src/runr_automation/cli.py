@@ -7,10 +7,12 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from .config import load_config
 from .linear_client import LinearGraphQLClient
+from .lock import ControllerLock, LockUnavailable
 from .migration import LinearMigrationClient, SubsystemMigrator
 from .poller import Poller
 from .reconciler import Reconciler
@@ -157,6 +159,30 @@ def _migrate_subsystems(config, *, dry_run: bool) -> int:
     return 0 if result.success else 3
 
 
+def _daemon(config, *, run_cycle=_once, sleep=time.sleep, max_cycles: int | None = None) -> int:
+    lock = ControllerLock(config.data_dir / "locks" / "controller.lock")
+    try:
+        lock.acquire()
+    except LockUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 4
+    cycles = 0
+    try:
+        while max_cycles is None or cycles < max_cycles:
+            if not (config.data_dir / "paused").exists():
+                result = run_cycle(config)
+                if result not in (0,):
+                    return result
+            cycles += 1
+            if max_cycles is None or cycles < max_cycles:
+                sleep(config.poll_interval_seconds)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        lock.release()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.repo_root, os.environ)
@@ -172,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         return _set_paused(config, False)
     if args.command == "once":
         return _once(config)
+    if args.command == "daemon":
+        return _daemon(config)
     if args.command == "migrate-subsystems":
         return _migrate_subsystems(config, dry_run=args.dry_run)
     print(
