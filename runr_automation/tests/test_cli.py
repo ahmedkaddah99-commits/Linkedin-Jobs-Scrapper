@@ -52,3 +52,15 @@ def test_migration_without_token_fails_without_network_or_mutation(tmp_path: Pat
 
     assert result == 2
     assert "no Linear mutation" in capsys.readouterr().err
+
+
+def test_pause_resume_and_status_use_single_runtime_root(tmp_path: Path, monkeypatch, capsys) -> None:
+    data_root = tmp_path / "local"
+    monkeypatch.setenv("LOCALAPPDATA", str(data_root))
+
+    assert main(["--repo-root", str(tmp_path), "pause"]) == 0
+    assert (data_root / "RunrAutomation" / "paused").is_file()
+    assert main(["--repo-root", str(tmp_path), "status"]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["paused"] is True
+    assert main(["--repo-root", str(tmp_path), "resume"]) == 0
+    assert not (data_root / "RunrAutomation" / "paused").exists()

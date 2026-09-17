@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -60,7 +61,17 @@ def _doctor(config) -> int:
                 "data_dir": str(config.data_dir),
                 "state_db": str(config.state_db),
                 "python_executable": sys.executable,
-                "provider_check": "not implemented in core package phase",
+                "providers": {
+                    "order": config.provider_order,
+                    "codex_available": shutil.which("codex") is not None,
+                    "opencode_available": shutil.which("opencode") is not None,
+                    "openrouter_enabled": config.openrouter_enabled,
+                },
+                "safe_stop": {
+                    "max_attempt_seconds": config.max_attempt_seconds,
+                    "max_attempt_tokens": config.max_attempt_tokens,
+                    "reserve_tokens": config.reserve_tokens,
+                },
             },
             sort_keys=True,
         )
@@ -73,7 +84,27 @@ def _status(config) -> int:
     with store.connect() as connection:
         issues = connection.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
         jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-    print(json.dumps({"issues": issues, "jobs": jobs, "state_db": str(config.state_db)}))
+    print(
+        json.dumps(
+            {
+                "issues": issues,
+                "jobs": jobs,
+                "paused": (config.data_dir / "paused").exists(),
+                "state_db": str(config.state_db),
+            }
+        )
+    )
+    return 0
+
+
+def _set_paused(config, paused: bool) -> int:
+    marker = config.data_dir / "paused"
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    if paused:
+        marker.write_text("paused by local operator\n", encoding="utf-8")
+    else:
+        marker.unlink(missing_ok=True)
+    print(json.dumps({"paused": paused, "data_dir": str(config.data_dir)}))
     return 0
 
 
@@ -135,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
         return _status(config)
     if args.command == "reconcile":
         return _reconcile(config)
+    if args.command == "pause":
+        return _set_paused(config, True)
+    if args.command == "resume":
+        return _set_paused(config, False)
     if args.command == "once":
         return _once(config)
     if args.command == "migrate-subsystems":
