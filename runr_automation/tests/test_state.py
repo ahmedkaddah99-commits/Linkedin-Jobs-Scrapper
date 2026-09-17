@@ -12,7 +12,7 @@ def test_state_store_initializes_durable_schema(tmp_path: Path) -> None:
         migration = connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
         ).fetchone()
-        assert migration[0] == 2
+        assert migration[0] == 3
 
         tables = {
             row[0]

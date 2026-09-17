@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _utc_now() -> str:
@@ -54,6 +54,13 @@ class StateStore:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (2, _utc_now()),
+                )
+                current = 2
+            if current < 3:
+                self._apply_v3(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (3, _utc_now()),
                 )
 
     @staticmethod
@@ -186,6 +193,24 @@ class StateStore:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    @staticmethod
+    def _apply_v3(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_stages (
+                issue_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                last_run_at TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                result_fingerprint TEXT NOT NULL,
+                tool_version TEXT NOT NULL,
+                skill_version TEXT NOT NULL,
+                next_reason_to_run TEXT NOT NULL,
+                PRIMARY KEY(issue_id, stage)
             )
             """
         )
