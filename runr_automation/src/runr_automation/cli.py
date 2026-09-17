@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import load_config
 from .linear_client import LinearGraphQLClient
+from .migration import LinearMigrationClient, SubsystemMigrator
 from .poller import Poller
 from .reconciler import Reconciler
 from .state import StateStore
@@ -110,6 +111,21 @@ def _once(config) -> int:
     return 0
 
 
+def _migrate_subsystems(config, *, dry_run: bool) -> int:
+    token = os.environ.get("LINEAR_API_TOKEN")
+    team_id = os.environ.get("RUNR_LINEAR_TEAM_ID", "a6a93ab8-96eb-4ada-84e0-d4942d64db09")
+    if not token:
+        print("migrate-subsystems requires LINEAR_API_TOKEN; no Linear mutation was performed", file=sys.stderr)
+        return 2
+    result = SubsystemMigrator(
+        LinearMigrationClient(token, team_id),
+        snapshot_dir=config.data_dir / "backups",
+        team_id=team_id,
+    ).run(dry_run=dry_run)
+    print(json.dumps(result.__dict__, sort_keys=True))
+    return 0 if result.success else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.repo_root, os.environ)
@@ -121,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         return _reconcile(config)
     if args.command == "once":
         return _once(config)
+    if args.command == "migrate-subsystems":
+        return _migrate_subsystems(config, dry_run=args.dry_run)
     print(
         f"runr-auto {args.command} is not implemented in the core package phase",
         file=sys.stderr,

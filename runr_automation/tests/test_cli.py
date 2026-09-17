@@ -43,3 +43,12 @@ def test_reconcile_command_processes_local_pending_events(tmp_path: Path, monkey
     assert main(["--repo-root", str(tmp_path), "reconcile"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["enqueued_jobs"] == 1
+
+
+def test_migration_without_token_fails_without_network_or_mutation(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.delenv("LINEAR_API_TOKEN", raising=False)
+
+    result = main(["--repo-root", str(tmp_path), "migrate-subsystems", "--dry-run"])
+
+    assert result == 2
+    assert "no Linear mutation" in capsys.readouterr().err
