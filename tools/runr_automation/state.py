@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _utc_now() -> str:
@@ -42,11 +42,18 @@ class StateStore:
             current = connection.execute(
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
             ).fetchone()[0]
-            if current < SCHEMA_VERSION:
+            if current < 1:
                 self._apply_v1(connection)
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (SCHEMA_VERSION, _utc_now()),
+                    (1, _utc_now()),
+                )
+                current = 1
+            if current < 2:
+                self._apply_v2(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (2, _utc_now()),
                 )
 
     @staticmethod
@@ -168,5 +175,17 @@ class StateStore:
                 completed_at TEXT,
                 result_json TEXT NOT NULL DEFAULT '{}'
             );
+            """
+        )
+
+    @staticmethod
+    def _apply_v2(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS controller_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
             """
         )

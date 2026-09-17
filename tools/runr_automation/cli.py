@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 
 from .config import load_config
+from .linear_client import LinearGraphQLClient
+from .poller import Poller
+from .reconciler import Reconciler
 from .state import StateStore
 
 
@@ -73,6 +76,40 @@ def _status(config) -> int:
     return 0
 
 
+def _reconcile(config) -> int:
+    result = Reconciler(StateStore(config.state_db)).run_once()
+    print(json.dumps({"enqueued_jobs": result.enqueued_jobs}))
+    return 0
+
+
+def _once(config) -> int:
+    token = os.environ.get("LINEAR_API_TOKEN")
+    team_id = os.environ.get("RUNR_LINEAR_TEAM_ID")
+    if not token or not team_id:
+        print(
+            "runr-auto once requires LINEAR_API_TOKEN and RUNR_LINEAR_TEAM_ID; no work was performed",
+            file=sys.stderr,
+        )
+        return 2
+    poll_result = Poller(
+        StateStore(config.state_db),
+        LinearGraphQLClient(token, team_id),
+        overlap_seconds=config.poll_jitter_seconds,
+    ).run_once()
+    reconcile_result = Reconciler(StateStore(config.state_db)).run_once()
+    print(
+        json.dumps(
+            {
+                "pages": poll_result.pages,
+                "recorded_events": poll_result.recorded_events,
+                "enqueued_jobs": reconcile_result.enqueued_jobs,
+                "watermark": poll_result.watermark,
+            }
+        )
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.repo_root, os.environ)
@@ -80,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(config)
     if args.command == "status":
         return _status(config)
+    if args.command == "reconcile":
+        return _reconcile(config)
+    if args.command == "once":
+        return _once(config)
     print(
         f"runr-auto {args.command} is not implemented in the core package phase",
         file=sys.stderr,
