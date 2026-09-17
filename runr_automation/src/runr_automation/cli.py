@@ -11,11 +11,13 @@ import time
 from pathlib import Path
 
 from .config import load_config
+from .approvals import ApprovalManager
 from .linear_client import LinearGraphQLClient
 from .lock import ControllerLock, LockUnavailable
 from .migration import LinearMigrationClient, SubsystemMigrator
 from .poller import Poller
 from .reconciler import Reconciler
+from .queue import JobQueue
 from .state import StateStore
 
 
@@ -183,6 +185,29 @@ def _daemon(config, *, run_cycle=_once, sleep=time.sleep, max_cycles: int | None
     return 0
 
 
+def _decide_approval(config, approval_id: str, *, approved: bool, reason: str | None = None) -> int:
+    actor = os.environ.get("USERNAME") or os.environ.get("USER") or "local-user"
+    try:
+        ApprovalManager(StateStore(config.state_db)).decide(
+            approval_id, approved=approved, actor=actor, reason=reason
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps({"approval_id": approval_id, "decision": "approved" if approved else "rejected"}))
+    return 0
+
+
+def _retry(config, job_id: str) -> int:
+    try:
+        JobQueue(StateStore(config.state_db)).retry(job_id)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps({"job_id": job_id, "status": "queued"}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.repo_root, os.environ)
@@ -202,6 +227,12 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon(config)
     if args.command == "migrate-subsystems":
         return _migrate_subsystems(config, dry_run=args.dry_run)
+    if args.command == "approve":
+        return _decide_approval(config, args.approval_id, approved=True)
+    if args.command == "reject":
+        return _decide_approval(config, args.approval_id, approved=False, reason=args.reason)
+    if args.command == "retry":
+        return _retry(config, args.job_id)
     print(
         f"runr-auto {args.command} is not implemented in the core package phase",
         file=sys.stderr,

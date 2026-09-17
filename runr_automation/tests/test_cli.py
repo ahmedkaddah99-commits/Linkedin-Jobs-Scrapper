@@ -1,8 +1,11 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from runr_automation.cli import _daemon, main
 from runr_automation.config import load_config
+from runr_automation.approvals import ActionContext, ApprovalManager
+from runr_automation.state import StateStore
 
 
 def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -23,8 +26,6 @@ def test_doctor_reports_local_paths_without_credentials(tmp_path: Path, monkeypa
 def test_reconcile_command_processes_local_pending_events(tmp_path: Path, monkeypatch, capsys) -> None:
     local_app_data = tmp_path / "local-app-data"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
-    from runr_automation.state import StateStore
-
     store = StateStore(local_app_data / "RunrAutomation" / "state.db")
     with store.connect() as connection:
         connection.execute(
@@ -78,3 +79,14 @@ def test_daemon_skips_polling_while_paused(tmp_path: Path, monkeypatch) -> None:
 
     assert result == 0
     assert calls == []
+
+
+def test_approve_command_records_local_decision(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    config = load_config(tmp_path)
+    manager = ApprovalManager(StateStore(config.state_db))
+    action = ActionContext("deployment", ("RUN-5",), "abc", "issue", "scope", "tests")
+    approval_id = manager.request(action, now=datetime.now(timezone.utc), ttl_seconds=60)
+
+    assert main(["--repo-root", str(tmp_path), "approve", approval_id]) == 0
+    assert manager.authorized(action, now=datetime.now(timezone.utc)) is True

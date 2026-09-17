@@ -92,3 +92,13 @@ class JobQueue:
             return connection.execute(
                 "SELECT * FROM analysis_stages WHERE issue_id=? AND stage=?", (issue_id, stage)
             ).fetchone()
+
+    def retry(self, job_id: str) -> None:
+        with self.store.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE jobs SET status='queued', next_retry=NULL, lease_owner=NULL, lease_expires_at=NULL "
+                "WHERE job_id=? AND status IN ('failed', 'waiting')",
+                (job_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"job is unknown or not retryable: {job_id}")
