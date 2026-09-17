@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
 
 import pytest
 
-from runr_automation.providers.base import ProviderErrorKind, classify_provider_error
+from runr_automation.providers.base import LocalCLIProvider, ProviderErrorKind, classify_provider_error
 from runr_automation.providers.routing import ProviderRouter, RoutingConfig
 
 
@@ -38,3 +40,25 @@ def test_openrouter_requires_both_budgets_and_open_circuit_fails_over() -> None:
 )
 def test_provider_errors_are_classified(message, kind) -> None:
     assert classify_provider_error(message) == kind
+
+
+def test_local_cli_provider_materializes_paths_uses_stdin_and_extracts_session(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("bounded prompt", encoding="utf-8")
+    script = tmp_path / "provider.py"
+    script.write_text(
+        "import pathlib,sys; print(pathlib.Path.cwd()); print(sys.stdin.read()); print('session id: session-123')",
+        encoding="utf-8",
+    )
+    provider = LocalCLIProvider(
+        "codex",
+        sys.executable,
+        (sys.executable, str(script), "{cwd}", "-"),
+        model="test-model",
+    )
+
+    result = provider.run(prompt, cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "bounded prompt" in result.output
+    assert result.session_id == "session-123"

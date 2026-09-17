@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -45,21 +46,43 @@ class ProviderResult:
 class LocalCLIProvider:
     """Runs only an operator-configured command template; discovery never guesses arguments."""
 
-    def __init__(self, name: str, executable: str, command: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        name: str,
+        executable: str,
+        command: tuple[str, ...] = (),
+        *,
+        model: str = "",
+        timeout_seconds: int | None = None,
+    ) -> None:
         self.name = name
         self.executable = executable
         self.command = command
+        self.model = model
+        self.timeout_seconds = timeout_seconds
 
     @property
     def available(self) -> bool:
-        return shutil.which(self.executable) is not None
+        return Path(self.executable).is_file() or shutil.which(self.executable) is not None
 
     def run(self, prompt_path: Path, *, cwd: Path) -> ProviderResult:
         if not self.available:
             raise RuntimeError(f"{self.name} executable is unavailable")
         if not self.command:
             raise RuntimeError(f"{self.name} command template is not configured; run doctor")
-        args = [part.replace("{prompt_file}", str(prompt_path)) for part in self.command]
-        completed = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=None, check=False)
+        args = [
+            part.replace("{prompt_file}", str(prompt_path)).replace("{cwd}", str(cwd))
+            for part in self.command
+        ]
+        completed = subprocess.run(
+            args,
+            cwd=cwd,
+            input=prompt_path.read_text(encoding="utf-8") if "-" in args else None,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=False,
+        )
         output = redact_text(f"{completed.stdout}\n{completed.stderr}".strip())
-        return ProviderResult(completed.returncode, output)
+        match = re.search(r'(?im)(?:session id:\s*|"sessionID"\s*:\s*")([A-Za-z0-9_-]+)', output)
+        return ProviderResult(completed.returncode, output, match.group(1) if match else None)

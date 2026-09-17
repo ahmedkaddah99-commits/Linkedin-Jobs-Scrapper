@@ -48,7 +48,10 @@ class GitWorktreeManager:
 
     def changed_paths(self, worktree: Path) -> tuple[str, ...]:
         result = subprocess.run(
-            ["git", "status", "--porcelain=v1", "-z"], cwd=worktree, check=True, capture_output=True
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
         )
         entries = result.stdout.decode("utf-8", errors="replace").split("\0")
         return tuple(entry[3:] for entry in entries if len(entry) >= 4)

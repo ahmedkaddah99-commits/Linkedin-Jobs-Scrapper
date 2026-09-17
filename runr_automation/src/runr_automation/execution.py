@@ -1,0 +1,197 @@
+"""Scoped provider execution inside issue-specific Git worktrees."""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Protocol
+
+from .attempts import AttemptRecorder
+from .providers.base import ProviderErrorKind, ProviderResult, classify_provider_error
+from .scope_router import ScopeManifest
+from .worktrees import GitWorktreeManager, validate_changed_paths
+
+
+class ExecutionProvider(Protocol):
+    name: str
+    model: str
+
+    def run(self, prompt_path: Path, *, cwd: Path) -> ProviderResult: ...
+
+
+@dataclass(frozen=True)
+class TicketExecutionRequest:
+    job_id: str
+    issue_id: str
+    identifier: str
+    title: str
+    acceptance_criteria: str
+    fingerprint: str
+    scope: ScopeManifest
+    skill: str
+    base_ref: str = "HEAD"
+
+
+@dataclass(frozen=True)
+class TicketExecutionResult:
+    status: str
+    provider: str
+    worktree: Path
+    changed_paths: tuple[str, ...]
+    commit_sha: str | None = None
+    tests_passed: bool | None = None
+    session_id: str | None = None
+    escaped_paths: tuple[str, ...] = ()
+    error_kind: ProviderErrorKind | None = None
+
+
+def build_ticket_prompt(request: TicketExecutionRequest) -> str:
+    reads = "\n".join(f"- {path}" for path in request.scope.allowed_reads)
+    writes = "\n".join(f"- {path}" for path in request.scope.allowed_writes)
+    tests = "\n".join(f"- {command}" for command in request.scope.required_tests) or "- none"
+    return f"""# {request.identifier}: {request.title}
+
+Invoke and follow the `{request.skill}` skill explicitly.
+
+## Acceptance criteria
+
+{request.acceptance_criteria}
+
+## Allowed reads
+
+{reads}
+
+## Allowed writes
+
+{writes}
+
+## Required tests
+
+{tests}
+
+## Hard boundaries
+
+- Work only in the current isolated worktree.
+- Do not commit, deploy, access Linear, install packages, or clean up the worktree.
+- Do not read or write outside the manifest above.
+- If capacity is low or a required action is blocked, stop and report the exact state.
+"""
+
+
+class ImplementationRunner:
+    def __init__(
+        self,
+        worktrees: GitWorktreeManager,
+        attempts: AttemptRecorder,
+        data_dir: Path,
+        *,
+        test_runner: Callable[[Path, tuple[str, ...]], bool],
+    ) -> None:
+        self.worktrees = worktrees
+        self.attempts = attempts
+        self.data_dir = data_dir
+        self.test_runner = test_runner
+
+    def run(self, request: TicketExecutionRequest, provider: ExecutionProvider) -> TicketExecutionResult:
+        worktree, _ = self.worktrees.create(request.identifier, request.base_ref)
+        prompt_dir = self.data_dir / "prompts"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = prompt_dir / f"{request.job_id}.md"
+        prompt_path.write_text(build_ticket_prompt(request), encoding="utf-8")
+        attempt_id = self.attempts.start(request.job_id, provider.name, provider.model)
+        result = provider.run(prompt_path, cwd=worktree)
+        session_id = result.session_id
+        if result.returncode:
+            kind = classify_provider_error(result.output)
+            outcome = "capacity" if kind == ProviderErrorKind.CAPACITY else "failed"
+            self.attempts.finish(attempt_id, outcome, error=result.output, session_id=session_id)
+            self.attempts.checkpoint(
+                request.job_id,
+                "provider_stop",
+                worktree=worktree,
+                session_id=session_id,
+                summary={"provider": provider.name, "error_kind": kind.value},
+            )
+            return TicketExecutionResult(
+                "waiting_for_capacity" if kind == ProviderErrorKind.CAPACITY else "failed",
+                provider.name,
+                worktree,
+                self.worktrees.changed_paths(worktree),
+                session_id=session_id,
+                error_kind=kind,
+            )
+
+        changed_paths = self.worktrees.changed_paths(worktree)
+        escaped = validate_changed_paths(changed_paths, request.scope.allowed_writes)
+        if escaped:
+            self.attempts.finish(attempt_id, "scope_escape", session_id=session_id)
+            self.attempts.checkpoint(
+                request.job_id,
+                "scope_escape",
+                artifact_paths=changed_paths,
+                worktree=worktree,
+                session_id=session_id,
+                summary={"escaped_paths": escaped},
+            )
+            return TicketExecutionResult(
+                "needs_review",
+                provider.name,
+                worktree,
+                changed_paths,
+                session_id=session_id,
+                escaped_paths=escaped,
+            )
+
+        tests_passed = self.test_runner(worktree, request.scope.required_tests)
+        if not tests_passed:
+            self.attempts.finish(attempt_id, "tests_failed", session_id=session_id)
+            self.attempts.checkpoint(
+                request.job_id,
+                "tests_failed",
+                artifact_paths=changed_paths,
+                worktree=worktree,
+                session_id=session_id,
+                summary={"tests_passed": False},
+            )
+            return TicketExecutionResult(
+                "failed", provider.name, worktree, changed_paths, tests_passed=False, session_id=session_id
+            )
+
+        commit_sha = self._commit(request, worktree, changed_paths)
+        self.attempts.finish(attempt_id, "implemented", session_id=session_id)
+        self.attempts.checkpoint(
+            request.job_id,
+            "implemented",
+            artifact_paths=changed_paths,
+            commit_sha=commit_sha,
+            worktree=worktree,
+            session_id=session_id,
+            summary={"tests_passed": True, "provider": provider.name},
+        )
+        return TicketExecutionResult(
+            "implemented",
+            provider.name,
+            worktree,
+            changed_paths,
+            commit_sha=commit_sha,
+            tests_passed=True,
+            session_id=session_id,
+        )
+
+    @staticmethod
+    def _commit(request: TicketExecutionRequest, worktree: Path, changed_paths: tuple[str, ...]) -> str:
+        if not changed_paths:
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=worktree, check=True, capture_output=True, text=True
+            ).stdout.strip()
+        subprocess.run(["git", "add", "--", *changed_paths], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", f"checkpoint({request.identifier}): validated implementation"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+        )
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=worktree, check=True, capture_output=True, text=True
+        ).stdout.strip()
