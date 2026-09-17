@@ -25,6 +25,7 @@ def test_user_config_customizes_speed_and_safe_stop_with_environment_precedence(
 linear:
   poll_interval_seconds: 20
   overlap_seconds: 180
+  team_id: team-from-config
 execution:
   max_concurrent_issues: 4
   max_attempt_minutes: 25
@@ -50,6 +51,7 @@ approvals:
 
     assert config.poll_interval_seconds == 15
     assert config.overlap_seconds == 180
+    assert config.linear_team_id == "team-from-config"
     assert config.max_concurrent_issues == 4
     assert config.max_attempt_seconds == 1500
     assert config.max_attempt_tokens == 60_000

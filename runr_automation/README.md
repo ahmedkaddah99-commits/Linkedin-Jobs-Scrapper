@@ -28,7 +28,7 @@ Run from the product repository root using the required project environment:
 .venv\Scripts\runr-auto.exe --repo-root . doctor
 ```
 
-Python must report `3.12.7`. Copy `config/runr-automation.example.yaml` to `%LOCALAPPDATA%\RunrAutomation\config.yaml`. Do not put credentials in YAML. Export `LINEAR_API_TOKEN` and `RUNR_LINEAR_TEAM_ID` only in the process environment.
+Python must report `3.12.7`. Copy `config/runr-automation.example.yaml` to `%LOCALAPPDATA%\RunrAutomation\config.yaml`. The non-secret Linear team ID may be placed in `linear.team_id` or supplied as `RUNR_LINEAR_TEAM_ID`; the secret `LINEAR_API_TOKEN` must be supplied only in the process environment.
 
 `doctor` reports the selected executable, source, version, and model without invoking a model. Explicit command arrays in YAML override discovery. Commands are argument lists, not shell strings; `{cwd}` and `{prompt_file}` are expanded safely.
 

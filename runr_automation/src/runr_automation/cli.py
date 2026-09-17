@@ -149,7 +149,7 @@ def _reconcile(config) -> int:
 
 def _once(config) -> int:
     token = os.environ.get("LINEAR_API_TOKEN")
-    team_id = os.environ.get("RUNR_LINEAR_TEAM_ID")
+    team_id = os.environ.get("RUNR_LINEAR_TEAM_ID") or config.linear_team_id
     if not token or not team_id:
         print(
             "runr-auto once requires LINEAR_API_TOKEN and RUNR_LINEAR_TEAM_ID; no work was performed",

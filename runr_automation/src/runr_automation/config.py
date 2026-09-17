@@ -24,6 +24,7 @@ class AutomationConfig:
     repo_root: Path
     data_dir: Path
     state_db: Path
+    linear_team_id: str = ""
     poll_interval_seconds: int = 90
     poll_jitter_seconds: int = 15
     overlap_seconds: int = 120
@@ -84,6 +85,7 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
         repo_root=Path(repo_root).resolve(),
         data_dir=data_dir,
         state_db=data_dir / "state.db",
+        linear_team_id=str(values.get("RUNR_LINEAR_TEAM_ID") or linear.get("team_id") or ""),
         poll_interval_seconds=_positive_int(
             "RUNR_AUTOMATION_POLL_INTERVAL_SECONDS", int(linear.get("poll_interval_seconds", 90)), values
         ),
