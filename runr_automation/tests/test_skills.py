@@ -26,3 +26,19 @@ def test_parallelization_skill_treats_parallelism_as_versioned_plan_property() -
     assert "plan version" in text
     assert "cycle" in text
     assert "Never remove" in text
+
+
+def test_existing_lifecycle_skills_use_controller_scope_plan_and_approvals() -> None:
+    required = {
+        "runr-ticket-creation": ("Subsystem grouped label", "Allowed paths", "runr-ticket-deduplication"),
+        "runr-ticket-start": ("scope manifest", "current plan", "dedicated"),
+        "runr-ticket-merge-predeployment": ("local approval", "tested commit SHA", "serialized"),
+        "runr-ticket-batch-merge-predeployment": ("local approval", "tested commit SHA", "serialized"),
+        "runr-ticket-merge-deployment": ("release approval", "tested commit SHA"),
+        "runr-ticket-batch-merge-deployment": ("release approval", "tested commit SHA"),
+        "runr-discard-issue": ("discard approval", "action fingerprint"),
+    }
+    for name, phrases in required.items():
+        text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in phrases:
+            assert phrase in text, f"{name} is missing {phrase}"

@@ -1,0 +1,6 @@
+interface:
+  display_name: Runr Ticket Start
+  short_description: Start one Runr issue in an isolated worktree
+  default_prompt: Use the Runr ticket start skill for this issue.
+policy:
+  allow_implicit_invocation: false
