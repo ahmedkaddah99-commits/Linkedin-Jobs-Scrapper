@@ -13,10 +13,18 @@ execution:
   minimum_remaining_ratio: 0.15
 
 providers:
-  order: [codex, opencode_subscription, opencode_openrouter]
+  # Subscription-backed providers are tried in this order. OpenRouter is never
+  # used unless it is explicitly enabled with positive budgets below.
+  order: [codex, opencode_subscription]
   codex:
+    model: gpt-5.6-luna
+    # Leave command empty for capability-probed VS Code/PATH discovery.
+    # Commands are YAML argument lists, never shell command strings.
     command: ""
   opencode_subscription:
+    model: opencode-go/gpt-5.6-luna
+    # Leave empty to discover PATH OpenCode or Desktop shared auth.
+    # The prompt attachment must be last because OpenCode's --file accepts arrays.
     command: ""
   openrouter:
     enabled: false

@@ -44,6 +44,8 @@ def test_discovery_uses_matching_desktop_opencode_cli_when_not_on_path(tmp_path:
 
     command = providers["opencode_subscription"]
     assert command.argv[:4] == ("C:/npm/npx.cmd", "--yes", "opencode-ai@1.18.30", "run")
+    assert command.argv[4] == "Execute the attached bounded ticket."
+    assert command.argv[-2:] == ("--file", "{prompt_file}")
     assert command.source == "desktop-shared-auth"
 
 

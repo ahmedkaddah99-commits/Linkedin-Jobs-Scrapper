@@ -142,20 +142,52 @@ class ImplementationRunner:
         session_id = result.session_id
         if result.returncode:
             kind = classify_provider_error(result.output)
-            outcome = "capacity" if kind == ProviderErrorKind.CAPACITY else "failed"
+            retryable = kind in {ProviderErrorKind.CAPACITY, ProviderErrorKind.TRANSIENT}
+            changed_paths = self.worktrees.changed_paths(worktree)
+            escaped = validate_changed_paths(changed_paths, request.scope.allowed_writes)
+            if retryable and escaped:
+                self.attempts.finish(attempt_id, "scope_escape", error=result.output, session_id=session_id)
+                self.attempts.checkpoint(
+                    request.job_id,
+                    "scope_escape",
+                    artifact_paths=changed_paths,
+                    worktree=worktree,
+                    session_id=session_id,
+                    summary={"escaped_paths": escaped, "provider": provider.name},
+                )
+                return TicketExecutionResult(
+                    "needs_review",
+                    provider.name,
+                    worktree,
+                    changed_paths,
+                    session_id=session_id,
+                    escaped_paths=escaped,
+                    error_kind=kind,
+                )
+            tests_passed = self.test_runner(worktree, request.scope.required_tests) if retryable else None
+            commit_sha = self._commit(request, worktree, changed_paths) if retryable else None
+            outcome = "capacity" if retryable else "failed"
             self.attempts.finish(attempt_id, outcome, error=result.output, session_id=session_id)
             self.attempts.checkpoint(
                 request.job_id,
                 "provider_stop",
+                artifact_paths=changed_paths,
+                commit_sha=commit_sha,
                 worktree=worktree,
                 session_id=session_id,
-                summary={"provider": provider.name, "error_kind": kind.value},
+                summary={
+                    "provider": provider.name,
+                    "error_kind": kind.value,
+                    "tests_passed": tests_passed,
+                },
             )
             return TicketExecutionResult(
-                "waiting_for_capacity" if kind == ProviderErrorKind.CAPACITY else "failed",
+                "waiting_for_capacity" if retryable else "failed",
                 provider.name,
                 worktree,
-                self.worktrees.changed_paths(worktree),
+                changed_paths,
+                commit_sha=commit_sha,
+                tests_passed=tests_passed,
                 session_id=session_id,
                 error_kind=kind,
             )

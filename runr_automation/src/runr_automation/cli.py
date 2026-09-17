@@ -26,6 +26,7 @@ from .attempts import AttemptRecorder
 from .engine import ControllerCycle, ExecutionEngine
 from .execution import ImplementationRunner, run_required_tests
 from .worktrees import GitWorktreeManager
+from .smoke import run_provider_verification
 
 
 COMMANDS = (
@@ -40,6 +41,7 @@ COMMANDS = (
     "approve",
     "reject",
     "retry",
+    "verify-provider",
 )
 
 
@@ -60,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument("--reason", required=True)
         elif command == "retry":
             subparser.add_argument("job_id")
+        elif command == "verify-provider":
+            subparser.add_argument("provider", choices=("codex", "opencode_subscription"))
+            subparser.add_argument("--run-id", required=True)
     return parser
 
 
@@ -184,12 +189,13 @@ def _once(config) -> int:
         providers,
         provider_order=config.provider_order,
         owner=f"{socket.gethostname()}-{os.getpid()}",
+        approval_ttl_seconds=config.approval_ttl_seconds,
     )
     cycle = ControllerCycle(
         Poller(
             store,
             LinearGraphQLClient(token, team_id),
-            overlap_seconds=config.poll_jitter_seconds,
+            overlap_seconds=config.overlap_seconds,
         ),
         Reconciler(store),
         engine,
@@ -273,6 +279,27 @@ def _retry(config, job_id: str) -> int:
     return 0
 
 
+def _verify_provider(config, provider_name: str, run_id: str) -> int:
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
+    command = discovered.get(provider_name)
+    if command is None:
+        print(f"{provider_name} is unavailable; run doctor", file=sys.stderr)
+        return 2
+    provider = (
+        CodexCLIProvider(command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds)
+        if provider_name == "codex"
+        else OpenCodeCLIProvider(command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds)
+    )
+    report = run_provider_verification(config.data_dir, provider_name, provider, run_id=run_id)
+    print(json.dumps(report, sort_keys=True))
+    return 0 if report["status"] == "awaiting_approval" and report["tests_passed"] else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.repo_root, os.environ)
@@ -298,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         return _decide_approval(config, args.approval_id, approved=False, reason=args.reason)
     if args.command == "retry":
         return _retry(config, args.job_id)
+    if args.command == "verify-provider":
+        return _verify_provider(config, args.provider, args.run_id)
     print(
         f"runr-auto {args.command} is not implemented in the core package phase",
         file=sys.stderr,

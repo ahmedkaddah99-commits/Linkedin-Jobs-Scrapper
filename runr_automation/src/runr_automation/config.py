@@ -26,11 +26,13 @@ class AutomationConfig:
     state_db: Path
     poll_interval_seconds: int = 90
     poll_jitter_seconds: int = 15
+    overlap_seconds: int = 120
     max_concurrent_issues: int = 2
     max_attempt_seconds: int = 45 * 60
     max_attempt_tokens: int = 80_000
     reserve_tokens: int = 12_000
-    provider_order: tuple[str, ...] = ("codex", "opencode_subscription", "opencode_openrouter")
+    approval_ttl_seconds: int = 3600
+    provider_order: tuple[str, ...] = ("codex", "opencode_subscription")
     codex_command: tuple[str, ...] = ()
     codex_model: str = "gpt-5.6-luna"
     opencode_subscription_command: tuple[str, ...] = ()
@@ -77,6 +79,7 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
     codex = providers.get("codex") or {}
     opencode_subscription = providers.get("opencode_subscription") or {}
     openrouter = providers.get("openrouter") or {}
+    approvals = file_config.get("approvals") or {}
     return AutomationConfig(
         repo_root=Path(repo_root).resolve(),
         data_dir=data_dir,
@@ -87,11 +90,13 @@ def load_config(repo_root: str | Path, environment: Mapping[str, str] | None = N
         poll_jitter_seconds=_positive_int(
             "RUNR_AUTOMATION_POLL_JITTER_SECONDS", int(linear.get("poll_jitter_seconds", 15)), values
         ),
+        overlap_seconds=int(linear.get("overlap_seconds", 120)),
         max_concurrent_issues=int(execution.get("max_concurrent_issues", 2)),
         max_attempt_seconds=int(execution.get("max_attempt_minutes", 45)) * 60,
         max_attempt_tokens=int(execution.get("max_attempt_tokens", 80_000)),
         reserve_tokens=int(execution.get("reserve_tokens", 12_000)),
-        provider_order=tuple(providers.get("order") or ("codex", "opencode_subscription", "opencode_openrouter")),
+        approval_ttl_seconds=int(approvals.get("expiry_minutes", 60)) * 60,
+        provider_order=tuple(providers.get("order") or ("codex", "opencode_subscription")),
         codex_command=_command(codex.get("command"), "providers.codex.command"),
         codex_model=str(codex.get("model") or "gpt-5.6-luna"),
         opencode_subscription_command=_command(

@@ -1,85 +1,139 @@
 # Runr Local Automation
 
-Runr Local Automation is a laptop-only controller for turning Runr Linear issues into bounded, recoverable engineering work. Source, tests, scripts, skills, examples, and documentation live in this folder. Mutable state stays together under `%LOCALAPPDATA%\RunrAutomation` and is never committed.
+Runr Local Automation is a laptop-only controller that turns structured Linear issues into isolated, tested Git commits and then stops for local approval. All versioned source, tests, scripts, skills, examples, and documentation live in this `runr_automation/` folder. All mutable state lives together under `%LOCALAPPDATA%\RunrAutomation`.
 
-## What it is—and is not
+## What it is
 
-It is a poll-based Linear controller needing no webhook, public port, VPS, or paid orchestrator; a durable SQLite ledger; a strict code-scope boundary; and a recovery layer for provider limits, restarts, and network loss.
+- A poll-based Linear controller with no webhook, public port, VPS, or hosted orchestrator.
+- A durable SQLite queue with idempotent events, leases, attempts, checkpoints, provider circuits, and approvals.
+- A strict execution boundary: one issue-specific Git branch/worktree and only ticket-declared write paths.
+- A local provider router that discovers the newest compatible Codex CLI and OpenCode CLI/Desktop shared-auth package.
+- A recovery layer that preserves safe partial work when a provider reports capacity, loses its connection, or reaches the local timeout.
 
-It is not a deployment service, secret manager, replacement for Linear workflow states, or guarantee that Codex/OpenCode expose subscription balances. It cannot bypass approvals, grant writes from subsystem ownership, auto-close ambiguous duplicates, remove user dependency relations, or silently spend OpenRouter credits.
+## What it is not
 
-## Install
+- It is not a deployment service. Successful work stops at an unapproved `predeployment` record.
+- It does not auto-merge, push, deploy, archive projects, delete worktrees, or discard changes.
+- It does not infer write permission from broad subsystem ownership. The ticket's `Allowed paths` are the write allowlist.
+- It cannot read a hidden Codex/OpenCode subscription balance when the CLI does not expose one. In that case it uses bounded time, observed errors, and configured token estimates; it never claims an exact remaining balance.
+- OpenRouter is not implemented as an execution adapter and is never silently used. Keep it disabled.
 
-From the repository root:
+## Install and first check
+
+Run from the product repository root using the required project environment:
 
 ```powershell
 .venv\Scripts\python.exe --version
 .venv\Scripts\python.exe -m pip install -e .\runr_automation
-.venv\Scripts\runr-auto.exe doctor
+.venv\Scripts\runr-auto.exe --repo-root . doctor
 ```
 
-Python must report `3.12.7`. Set `LINEAR_API_TOKEN` and optionally `RUNR_LINEAR_TEAM_ID`; values are never written to state. Copy `config/runr-automation.example.yaml` to `%LOCALAPPDATA%\RunrAutomation\config.yaml` and edit that copy—never add credentials.
+Python must report `3.12.7`. Copy `config/runr-automation.example.yaml` to `%LOCALAPPDATA%\RunrAutomation\config.yaml`. Do not put credentials in YAML. Export `LINEAR_API_TOKEN` and `RUNR_LINEAR_TEAM_ID` only in the process environment.
 
-## Exact operation
+`doctor` reports the selected executable, source, version, and model without invoking a model. Explicit command arrays in YAML override discovery. Commands are argument lists, not shell strings; `{cwd}` and `{prompt_file}` are expanded safely.
 
-1. `once` reads Linear changes from a durable overlapping watermark and records events idempotently.
-2. Reconciliation compares normalized fingerprints and queues only invalidated stages.
-3. Scope routing reads `docs/subsystems.yaml`: one Subsystem label bounds reads; only ticket `Allowed paths` grant writes; co-owners authorize declared cross-subsystem paths.
-4. Eligible work uses an issue-specific branch/worktree plus issue/resource leases.
-5. Model output is schema-checked. Python owns paths, graphs, state transitions, and Linear writes.
-6. Every checkpoint validates changed paths and runs configured focused tests.
-7. Release actions wait for a local approval tied to the tested commit and current fingerprints.
+## Required Linear ticket shape
 
-Available operator commands:
+The controller accepts structured fields or these Markdown sections in the issue description:
+
+```markdown
+## Primary subsystem
+- api
+
+## Allowed paths
+- backend/example.py
+
+## Minimal required reading
+- docs/INDEX.md
+
+## Acceptance criteria
+- The bounded behavior works.
+
+## Safe local verification commands
+- python -m pytest tests/test_example.py -q
+```
+
+Exactly one grouped `Subsystem` label can supply the subsystem when the section is absent. Allowed paths must belong to that subsystem or a declared co-owner. Safe verification commands are shell-free and limited to local Python, Node, npm, or npx executables. The configured project-venv interpreter replaces ticket references to Python.
+
+## How one cycle works
+
+1. `once` polls Linear from an overlapping durable watermark and records changes idempotently.
+2. Reconciliation queues deterministic `normalize`, `deduplicate`, `research`, `parallelize`, and `implement` stages.
+3. Scope routing reads `docs/subsystems.yaml` and builds exact read/write/test boundaries.
+4. The implementation stage creates or resumes `runr-auto/<issue>` in `%LOCALAPPDATA%\RunrAutomation\worktrees`.
+5. Codex runs first by default; capacity/transient failure opens a durable circuit and safely hands off to OpenCode.
+6. Changed paths are validated, required tests run with Python 3.12.7, and valid work is checkpoint-committed.
+7. A fingerprint-bound predeployment approval is created. Nothing is deployed.
+
+Prompts are outside Git under the runtime root. Stored provider errors and checkpoint summaries are redacted. Worktrees are deliberately preserved for inspection and recovery.
+
+## Commands
 
 ```powershell
-runr-auto doctor
-runr-auto status
-runr-auto once
-runr-auto reconcile
-runr-auto pause
-runr-auto resume
-runr-auto migrate-subsystems --dry-run
-runr-auto migrate-subsystems --apply
+runr-auto --repo-root . doctor
+runr-auto --repo-root . status
+runr-auto --repo-root . once
+runr-auto --repo-root . daemon
+runr-auto --repo-root . reconcile
+runr-auto --repo-root . pause
+runr-auto --repo-root . resume
+runr-auto --repo-root . retry <job-id>
+runr-auto --repo-root . approve <approval-id>
+runr-auto --repo-root . reject <approval-id> --reason "reason"
+runr-auto --repo-root . migrate-subsystems --dry-run
+runr-auto --repo-root . migrate-subsystems --apply
 ```
 
-Run continuously in the foreground with `runr-auto daemon`. To start at login without administrator access:
+Use `Ctrl+C` for a safe foreground stop. Durable state is retained. `pause` prevents new daemon cycles; `resume` allows them again.
+
+To verify either installed provider through a real isolated controller ticket, without Linear or the product repository:
+
+```powershell
+runr-auto --repo-root . verify-provider codex --run-id codex-check-1
+runr-auto --repo-root . verify-provider opencode_subscription --run-id opencode-check-1
+```
+
+Each command creates a tiny fixture repository under `%LOCALAPPDATA%\RunrAutomation\verification`, runs all five stages, executes a Python 3.12.7 acceptance test, commits the scoped edit, and stops at approval. Repeating the same run ID proves restart idempotency and does not call the provider again.
+
+## Configure for speed and safety
+
+- `linear.poll_interval_seconds`: 30-90 seconds is a practical range. Lower is faster but polls more often.
+- `execution.max_concurrent_issues`: reserved for the scheduler; execution is intentionally serial until conflict-aware scheduling is enabled.
+- `execution.max_attempt_minutes`: hard provider-process deadline. A timeout becomes a recoverable handoff.
+- `execution.max_attempt_tokens` and `reserve_tokens`: conservative policy values. Current Codex/OpenCode adapters do not expose authoritative live balances, so these are estimates rather than active streaming cutoffs.
+- `providers.order`: reorder `codex` and `opencode_subscription` to change failover preference.
+- Provider `model`: select the subscription-backed model passed to that CLI.
+- Provider `command`: pin an executable and argument list when discovery is not desired.
+
+The biggest speed improvement is precise tickets: minimal reading, narrow allowed paths, one focused test, and a clear acceptance criterion. Broad scope makes both models slower and increases review risk.
+
+## Capacity, timeout, and recovery behavior
+
+On a `429`, quota/capacity response, connection timeout, or local process deadline, the runner:
+
+1. records the redacted provider attempt and session ID when available;
+2. validates all changed paths;
+3. refuses to commit and marks review-needed if scope escaped;
+4. otherwise runs focused tests, checkpoint-commits even when incomplete, and records the test result;
+5. opens a 15-minute provider circuit and tries the next configured provider;
+6. leaves the job waiting when no provider remains.
+
+Authentication, malformed output, and permanent tool errors fail visibly instead of being mislabeled as capacity. Use `status`, inspect the runtime checkpoint, fix the cause, then `retry <job-id>`. No cleanup is automatic.
+
+## Startup and removal
+
+Install the current-user startup task without administrator access:
 
 ```powershell
 .\runr_automation\scripts\install-runr-automation-task.ps1
 ```
 
-Remove only the startup task (runtime data is preserved) with `.\runr_automation\scripts\uninstall-runr-automation-task.ps1`.
+Remove only that task while preserving runtime data:
 
-Migration apply snapshots first and is capability-gated. If grouped labels or archival are unavailable, it prints exact manual steps and does not claim success. Review dry-run before apply.
+```powershell
+.\runr_automation\scripts\uninstall-runr-automation-task.ps1
+```
 
-## Configure for speed
+Back up `%LOCALAPPDATA%\RunrAutomation` to preserve state, worktrees, migration snapshots, and handoffs. Uninstall the package with `.venv\Scripts\python.exe -m pip uninstall runr-local-automation`; remove runtime data only after manually reviewing it.
 
-Edit the runtime YAML:
-
-- `linear.poll_interval_seconds`: 30–90 seconds is a practical range; lower detects faster but makes more requests.
-- `execution.max_concurrent_issues`: start at 2; raise only for compatible current-wave tickets and adequate machine resources.
-- `execution.checkpoint_interval_seconds`: lower loses less work but validates/commits more often.
-- `max_attempt_minutes`, `max_attempt_tokens`, and `reserve_tokens`: bound attempts and preserve handoff capacity.
-- `providers.order`: keep Codex and subscription-backed OpenCode ahead of paid fallback.
-- `openrouter.enabled`: remains false unless explicitly enabled with nonzero per-job and daily budgets.
-
-Precise `Required reading`, `Allowed paths`, and `Tests` fields usually improve speed more than a stronger model because they reduce context and validation. Do not use WS-12 as blanket scope, run conflicting tickets concurrently, or disable tests. Environment variables such as `RUNR_AUTOMATION_POLL_INTERVAL_SECONDS` override YAML.
-
-## Safe stoppage near Codex/OpenCode limits
-
-The shared guard uses authoritative remaining-token data when a provider exposes it. Otherwise it uses tokens consumed in the attempt, elapsed time, configured reserves, and rate/capacity errors. Before the threshold it stops new model work, validates scope, runs focused tests where possible, commits only the dedicated issue worktree, and writes a redacted handoff under `%LOCALAPPDATA%\RunrAutomation\checkpoints`. The handoff records commit, test result, resumable session ID, and next action; the job becomes `Waiting for Capacity`.
-
-If scope validation fails, it does not commit and marks `Needs Review`. A scope-valid checkpoint with failing tests is saved as incomplete, never called successful. When a CLI exposes no balance API, the reserve is a conservative estimate—not the account's actual remaining credits.
-
-## Stop, recover, and uninstall
-
-- Stop foreground operation with `Ctrl+C`; durable state remains.
-- Use `runr-auto pause`, `runr-auto resume`, and `runr-auto status` for maintenance.
-- After sleep/network loss, run `runr-auto once`; overlap plus event keys prevent gaps and duplicates.
-- Back up `%LOCALAPPDATA%\RunrAutomation` to preserve state, snapshots, and handoffs.
-- Uninstall with `.venv\Scripts\python.exe -m pip uninstall runr-local-automation`.
-
-No credentials, full prompts, or unredacted command errors belong in the repository, SQLite, checkpoints, or logs. Predeployment, deployment, destructive cleanup, and project archival remain explicit approval boundaries.
-
-See `docs/specs/2026-09-17-local-linear-automation-design.md` for the design and `docs/plans/2026-09-17-runr-automation.md` for the remaining phased implementation.
+See `docs/specs/2026-09-17-local-linear-automation-design.md` for design constraints and `docs/VERIFICATION.md` for current evidence.

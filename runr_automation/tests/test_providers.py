@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -62,3 +63,26 @@ def test_local_cli_provider_materializes_paths_uses_stdin_and_extracts_session(t
     assert result.returncode == 0
     assert "bounded prompt" in result.output
     assert result.session_id == "session-123"
+
+
+def test_local_cli_provider_turns_timeout_into_a_retryable_result(tmp_path: Path, monkeypatch) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("bounded prompt", encoding="utf-8")
+    provider = LocalCLIProvider(
+        "codex",
+        sys.executable,
+        (sys.executable, "provider.py"),
+        model="test-model",
+        timeout_seconds=1,
+    )
+
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 1, output="partial", stderr="deadline")
+
+    monkeypatch.setattr(subprocess, "run", timed_out)
+
+    result = provider.run(prompt, cwd=tmp_path)
+
+    assert result.returncode == 124
+    assert classify_provider_error(result.output) == ProviderErrorKind.TRANSIENT
+    assert "timed out" in result.output

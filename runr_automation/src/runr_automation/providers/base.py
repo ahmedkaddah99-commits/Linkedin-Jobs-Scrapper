@@ -74,15 +74,28 @@ class LocalCLIProvider:
             part.replace("{prompt_file}", str(prompt_path)).replace("{cwd}", str(cwd))
             for part in self.command
         ]
-        completed = subprocess.run(
-            args,
-            cwd=cwd,
-            input=prompt_path.read_text(encoding="utf-8") if "-" in args else None,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=cwd,
+                input=prompt_path.read_text(encoding="utf-8") if "-" in args else None,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            partial = "\n".join(
+                value.decode(errors="replace") if isinstance(value, bytes) else str(value or "")
+                for value in (exc.stdout, exc.stderr)
+                if value
+            )
+            return ProviderResult(
+                124,
+                redact_text(f"provider timed out after {self.timeout_seconds} seconds\n{partial}".strip()),
+            )
+        except OSError as exc:
+            return ProviderResult(127, redact_text(f"provider command failed: {exc}"))
         output = redact_text(f"{completed.stdout}\n{completed.stderr}".strip())
         match = re.search(r'(?im)(?:session id:\s*|"sessionID"\s*:\s*")([A-Za-z0-9_-]+)', output)
         return ProviderResult(completed.returncode, output, match.group(1) if match else None)

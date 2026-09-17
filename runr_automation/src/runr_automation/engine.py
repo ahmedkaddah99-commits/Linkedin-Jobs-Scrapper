@@ -99,6 +99,9 @@ class ExecutionEngine:
             processed += 1
             try:
                 context = self._issue_context(job.issue_id)
+                if job.desired_state_fingerprint != context.fingerprint:
+                    self.queue.complete(job.job_id, self.owner)
+                    continue
                 if job.job_type in _NEXT_STAGE:
                     self._record_stage(context, job.job_type)
                     self.queue.complete_and_enqueue(job.job_id, self.owner, _NEXT_STAGE[job.job_type])

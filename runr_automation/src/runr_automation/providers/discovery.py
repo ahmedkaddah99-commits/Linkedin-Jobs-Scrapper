@@ -114,7 +114,7 @@ def _discover_opencode(model: str, probe: ProviderProbe) -> ProviderCommand | No
     if executable:
         return ProviderCommand(
             "opencode_subscription",
-            (executable, "run", "--auto", "--model", model, "--dir", "{cwd}", "--format", "json", "--file", "{prompt_file}", "Execute the attached bounded ticket."),
+            (executable, "run", "Execute the attached bounded ticket.", "--auto", "--model", model, "--dir", "{cwd}", "--format", "json", "--file", "{prompt_file}"),
             model,
             "path",
         )
@@ -131,7 +131,7 @@ def _discover_opencode(model: str, probe: ProviderProbe) -> ProviderCommand | No
         return None
     return ProviderCommand(
         "opencode_subscription",
-        (*command, "--auto", "--model", model, "--dir", "{cwd}", "--format", "json", "--file", "{prompt_file}", "Execute the attached bounded ticket."),
+        (*command, "Execute the attached bounded ticket.", "--auto", "--model", model, "--dir", "{cwd}", "--format", "json", "--file", "{prompt_file}"),
         model,
         "desktop-shared-auth",
         version,

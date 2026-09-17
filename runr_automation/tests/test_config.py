@@ -24,6 +24,7 @@ def test_user_config_customizes_speed_and_safe_stop_with_environment_precedence(
         """
 linear:
   poll_interval_seconds: 20
+  overlap_seconds: 180
 execution:
   max_concurrent_issues: 4
   max_attempt_minutes: 25
@@ -35,6 +36,8 @@ providers:
     enabled: false
     max_usd_per_job: 2.5
     max_usd_per_day: 12
+approvals:
+  expiry_minutes: 30
 """,
         encoding="utf-8",
     )
@@ -46,6 +49,7 @@ providers:
     config = load_config(tmp_path, environment)
 
     assert config.poll_interval_seconds == 15
+    assert config.overlap_seconds == 180
     assert config.max_concurrent_issues == 4
     assert config.max_attempt_seconds == 1500
     assert config.max_attempt_tokens == 60_000
@@ -54,6 +58,7 @@ providers:
     assert config.openrouter_enabled is False
     assert config.openrouter_max_usd_per_job == 2.5
     assert config.openrouter_max_usd_per_day == 12
+    assert config.approval_ttl_seconds == 1800
 
 
 def test_provider_commands_and_models_are_loaded_as_argument_lists(tmp_path: Path) -> None:

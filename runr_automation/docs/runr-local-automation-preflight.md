@@ -1,5 +1,7 @@
 # Runr Local Automation Preflight
 
+> Completion update (2026-09-17): the original preflight below is historical. The controller is now implemented in `runr_automation/`, its mutable runtime is consolidated under `%LOCALAPPDATA%\RunrAutomation`, and real Codex plus OpenCode controller tickets passed. See `../README.md` and `VERIFICATION.md` for current operation and evidence.
+
 **Phase:** Preflight and specification lock  
 **Date:** 2026-09-17  
 **Repository:** `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper`  

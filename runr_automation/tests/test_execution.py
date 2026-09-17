@@ -28,6 +28,12 @@ class WritingProvider:
         return ProviderResult(0, self.output, "session-1")
 
 
+class PartialCapacityProvider(WritingProvider):
+    def run(self, prompt_path: Path, *, cwd: Path) -> ProviderResult:
+        super().run(prompt_path, cwd=cwd)
+        return ProviderResult(1, "429 capacity exhausted", "session-capacity")
+
+
 def _repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -101,6 +107,31 @@ def test_runner_rejects_scope_escape_without_commit(tmp_path: Path) -> None:
     assert result.status == "needs_review"
     assert result.commit_sha is None
     assert result.escaped_paths == ("forbidden/result.txt",)
+
+
+def test_runner_checkpoints_scope_valid_partial_work_on_capacity_stop(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    store = StateStore(tmp_path / "state.db")
+    job_id = JobQueue(store).enqueue("implement", "linear-1", "fingerprint-1")
+    runner = ImplementationRunner(
+        GitWorktreeManager(repo, tmp_path / "worktrees"),
+        AttemptRecorder(store),
+        tmp_path,
+        test_runner=lambda *_: False,
+    )
+
+    result = runner.run(_request(job_id), PartialCapacityProvider("allowed/result.txt"))
+
+    assert result.status == "waiting_for_capacity"
+    assert result.commit_sha
+    assert result.tests_passed is False
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=result.worktree, check=True,
+        capture_output=True, text=True,
+    ).stdout == ""
+    with store.connect() as connection:
+        checkpoint = connection.execute("SELECT * FROM checkpoints WHERE job_id=?", (job_id,)).fetchone()
+    assert checkpoint["commit_sha"] == result.commit_sha
 
 
 def test_required_tests_use_argument_lists_and_reject_unapproved_executables(tmp_path: Path) -> None:

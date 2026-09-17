@@ -118,3 +118,35 @@ def test_issue_runs_from_poll_to_scoped_commit_and_approval_with_capacity_failov
     rerun = engine.run_available(now=datetime(2026, 9, 17, 10, 1, tzinfo=timezone.utc))
     assert rerun.processed == 0
     assert JobQueue(store).claim("other", now=datetime(2026, 9, 17, 10, 1, tzinfo=timezone.utc), lease_seconds=30) is None
+
+
+def test_stale_job_is_completed_without_running_provider(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    data_dir = tmp_path / "runtime"
+    store = StateStore(data_dir / "state.db")
+    issue = RemoteIssue(
+        "linear-stale", "RUN-STALE", "2026-09-17T10:00:00+00:00", "Current", "structured",
+        payload={
+            "title": "Current", "acceptance_criteria": "current", "subsystem": "smoke",
+            "allowed_paths": ["allowed/result.txt"],
+        },
+    )
+    Poller(store, FakeLinearClient([issue])).run_once()
+    stale_job = JobQueue(store).enqueue("implement", "linear-stale", "obsolete-fingerprint")
+    runner = ImplementationRunner(
+        GitWorktreeManager(repo, data_dir / "worktrees"), AttemptRecorder(store), data_dir,
+        test_runner=lambda *_: True,
+    )
+    engine = ExecutionEngine(
+        store, repo, runner, {"opencode_subscription": SuccessfulProvider()},
+        provider_order=("opencode_subscription",), owner="worker-stale",
+    )
+
+    result = engine.run_available(now=datetime(2026, 9, 17, 10, tzinfo=timezone.utc))
+
+    assert result.processed == 1
+    with store.connect() as connection:
+        job = connection.execute("SELECT status FROM jobs WHERE job_id=?", (stale_job,)).fetchone()
+        attempt_count = connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
+    assert job["status"] == "complete"
+    assert attempt_count == 0
