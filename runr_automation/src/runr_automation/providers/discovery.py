@@ -81,6 +81,8 @@ def _discover_codex(model: str, probe: ProviderProbe) -> ProviderCommand | None:
             "exec",
             "-s",
             "workspace-write",
+            "-m",
+            model,
             "-c",
             'model_reasoning_effort="high"',
             "--color",

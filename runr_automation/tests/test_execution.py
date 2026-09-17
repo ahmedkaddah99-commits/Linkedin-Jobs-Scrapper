@@ -1,8 +1,9 @@
 import subprocess
 from pathlib import Path
+import sys
 
 from runr_automation.attempts import AttemptRecorder
-from runr_automation.execution import ImplementationRunner, TicketExecutionRequest
+from runr_automation.execution import ImplementationRunner, TicketExecutionRequest, run_required_tests
 from runr_automation.providers.base import ProviderResult
 from runr_automation.queue import JobQueue
 from runr_automation.scope_router import ScopeManifest
@@ -100,3 +101,10 @@ def test_runner_rejects_scope_escape_without_commit(tmp_path: Path) -> None:
     assert result.status == "needs_review"
     assert result.commit_sha is None
     assert result.escaped_paths == ("forbidden/result.txt",)
+
+
+def test_required_tests_use_argument_lists_and_reject_unapproved_executables(tmp_path: Path) -> None:
+    passing = f'"{sys.executable}" -c "print(123)"'
+
+    assert run_required_tests(tmp_path, (passing,), python_executable=Path(sys.executable)) is True
+    assert run_required_tests(tmp_path, ("curl https://example.com",), python_executable=Path(sys.executable)) is False

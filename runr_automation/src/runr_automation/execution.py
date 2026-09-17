@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -11,6 +12,43 @@ from .attempts import AttemptRecorder
 from .providers.base import ProviderErrorKind, ProviderResult, classify_provider_error
 from .scope_router import ScopeManifest
 from .worktrees import GitWorktreeManager, validate_changed_paths
+
+
+_TEST_EXECUTABLES = {"python", "python.exe", "node", "node.exe", "npm", "npm.cmd", "npx", "npx.cmd"}
+
+
+def run_required_tests(
+    worktree: Path,
+    commands: tuple[str, ...],
+    *,
+    python_executable: Path,
+    timeout_seconds: int = 900,
+) -> bool:
+    """Run only locally approved test executables without a command shell."""
+
+    for command in commands:
+        try:
+            args = [part[1:-1] if len(part) >= 2 and part[0] == part[-1] == '"' else part for part in shlex.split(command, posix=False)]
+        except ValueError:
+            return False
+        if not args:
+            return False
+        executable_name = Path(args[0]).name.casefold()
+        if executable_name not in _TEST_EXECUTABLES:
+            return False
+        if executable_name in {"python", "python.exe"} or args[0].replace("/", "\\").casefold().endswith(
+            ".venv\\scripts\\python.exe"
+        ):
+            args[0] = str(python_executable)
+        try:
+            completed = subprocess.run(
+                args, cwd=worktree, capture_output=True, text=True, timeout=timeout_seconds, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if completed.returncode:
+            return False
+    return True
 
 
 class ExecutionProvider(Protocol):

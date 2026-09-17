@@ -37,6 +37,13 @@ class GitWorktreeManager:
         branch = f"runr-auto/{slug}"
         path = self.worktree_root / slug
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_dir():
+            current = subprocess.run(
+                ["git", "branch", "--show-current"], cwd=path, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            if current != branch:
+                raise RuntimeError(f"worktree {path} belongs to {current}, expected {branch}")
+            return path, branch
         subprocess.run(
             ["git", "worktree", "add", "-b", branch, str(path), base_ref],
             cwd=self.repo_root,

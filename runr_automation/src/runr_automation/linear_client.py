@@ -82,7 +82,7 @@ class LinearGraphQLClient:
               id identifier updatedAt title description
               state { name }
               project { id }
-              labels { nodes { id } }
+              labels { nodes { id name parent { name } } }
             }
             pageInfo { hasNextPage endCursor }
           }

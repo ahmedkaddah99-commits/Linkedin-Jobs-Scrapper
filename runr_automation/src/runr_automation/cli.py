@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import time
 from pathlib import Path
@@ -19,6 +20,12 @@ from .reconciler import Reconciler
 from .queue import JobQueue
 from .state import StateStore
 from .providers.discovery import discover_providers
+from .providers.codex_cli import CodexCLIProvider
+from .providers.opencode_cli import OpenCodeCLIProvider
+from .attempts import AttemptRecorder
+from .engine import ControllerCycle, ExecutionEngine
+from .execution import ImplementationRunner, run_required_tests
+from .worktrees import GitWorktreeManager
 
 
 COMMANDS = (
@@ -144,19 +151,60 @@ def _once(config) -> int:
             file=sys.stderr,
         )
         return 2
-    poll_result = Poller(
-        StateStore(config.state_db),
-        LinearGraphQLClient(token, team_id),
-        overlap_seconds=config.poll_jitter_seconds,
-    ).run_once()
-    reconcile_result = Reconciler(StateStore(config.state_db)).run_once()
+    store = StateStore(config.state_db)
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
+    providers = {}
+    if "codex" in discovered:
+        command = discovered["codex"]
+        providers["codex"] = CodexCLIProvider(
+            command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds
+        )
+    if "opencode_subscription" in discovered:
+        command = discovered["opencode_subscription"]
+        providers["opencode_subscription"] = OpenCodeCLIProvider(
+            command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds
+        )
+    runner = ImplementationRunner(
+        GitWorktreeManager(config.repo_root, config.data_dir / "worktrees"),
+        AttemptRecorder(store),
+        config.data_dir,
+        test_runner=lambda worktree, tests: run_required_tests(
+            worktree, tests, python_executable=Path(sys.executable)
+        ),
+    )
+    engine = ExecutionEngine(
+        store,
+        config.repo_root,
+        runner,
+        providers,
+        provider_order=config.provider_order,
+        owner=f"{socket.gethostname()}-{os.getpid()}",
+    )
+    cycle = ControllerCycle(
+        Poller(
+            store,
+            LinearGraphQLClient(token, team_id),
+            overlap_seconds=config.poll_jitter_seconds,
+        ),
+        Reconciler(store),
+        engine,
+    ).run()
     print(
         json.dumps(
             {
-                "pages": poll_result.pages,
-                "recorded_events": poll_result.recorded_events,
-                "enqueued_jobs": reconcile_result.enqueued_jobs,
-                "watermark": poll_result.watermark,
+                "pages": cycle.poll.pages,
+                "recorded_events": cycle.poll.recorded_events,
+                "enqueued_jobs": cycle.reconcile.enqueued_jobs,
+                "watermark": cycle.poll.watermark,
+                "processed_jobs": cycle.engine.processed,
+                "awaiting_approval": cycle.engine.awaiting_approval,
+                "waiting_for_capacity": cycle.engine.waiting,
+                "failed_jobs": cycle.engine.failed,
             }
         )
     )
