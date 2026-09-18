@@ -1,6 +1,0 @@
-interface:
-  display_name: Runr Batch Predeployment
-  short_description: Promote selected reviewed Runr issues to predeployment
-  default_prompt: Use the Runr batch predeployment merge skill for these issues.
-policy:
-  allow_implicit_invocation: false

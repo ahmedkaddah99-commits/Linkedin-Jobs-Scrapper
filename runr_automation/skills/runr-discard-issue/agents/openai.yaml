@@ -1,6 +1,0 @@
-interface:
-  display_name: Runr Discard Issue
-  short_description: Discard selected Runr issue work safely
-  default_prompt: Use the Runr discard skill for this issue.
-policy:
-  allow_implicit_invocation: false

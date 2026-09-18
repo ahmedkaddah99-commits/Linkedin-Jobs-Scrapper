@@ -1,6 +1,0 @@
-interface:
-  display_name: Runr Ticket Creation
-  short_description: Create or normalize an executable Runr Linear issue
-  default_prompt: Use the Runr ticket creation skill to prepare this issue.
-policy:
-  allow_implicit_invocation: false

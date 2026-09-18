@@ -1,6 +1,0 @@
-interface:
-  display_name: Runr Merge Deployment
-  short_description: Promote one tested Runr issue to deployment
-  default_prompt: Use the Runr deployment merge skill for this issue.
-policy:
-  allow_implicit_invocation: false
