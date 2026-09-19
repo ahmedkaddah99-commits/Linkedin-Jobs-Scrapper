@@ -20,6 +20,19 @@ def test_research_skill_enforces_manifest_and_evidence_freshness() -> None:
     assert "not merely" in text
 
 
+def test_research_skill_hands_current_evidence_to_implementation_ready() -> None:
+    text = (ROOT / "skills" / "runr-ticket-research" / "SKILL.md").read_text(encoding="utf-8")
+    for phrase in (
+        "implementation can start",
+        "exact `Ready` Issue Status label",
+        "linear_save_issue",
+        "remove every other `Issue Status` child",
+        "re-read the exact issue",
+        "must not move to `Ready`",
+    ):
+        assert phrase.casefold() in text.casefold(), f"runr-ticket-research is missing {phrase}"
+
+
 def test_parallelization_skill_treats_parallelism_as_versioned_plan_property() -> None:
     text = (ROOT / "skills" / "runr-parallelization-plan" / "SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\nname: runr-parallelization-plan\n")

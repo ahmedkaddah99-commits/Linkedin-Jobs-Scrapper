@@ -76,6 +76,7 @@ Status and Issue Status label changes are explicit skill actions. The grouped Is
 | Skill | Required starting status/label | Status/label while running | Successful result/label | Implementation failure | Integration failure | Blocked result |
 |---|---|---|---|---|---|---|
 | `runr-ticket-creation` | New issue / Backlog | - | Todo or Ready | - | - | Waiting for Predecessor, Missing Requirement, or External Blocked |
+| `runr-ticket-research` | Todo or Ready | Existing label | Ready when Research State is Current and implementation can start | - | - | Waiting for Predecessor, Missing Requirement, or External Blocked |
 | `runr-ticket-start` | Ready, Implementation Fix Required, or Integration Fix Required | In Progress | In Review | Implementation Fix Required | - | Appropriate blocked status |
 | `runr-ticket-merge-predeployment` | In Review | In Review | Ready for Production | - | Integration Fix Required | Appropriate blocked status, or remain In Review for temporary infrastructure failure |
 | `runr-ticket-merge-deployment` | Ready for Production | Ready for Production | Done | - | Integration Fix Required when the change is defective | Appropriate blocked status, or remain Ready for Production |

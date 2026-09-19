@@ -11,4 +11,15 @@ External research runs only when requested or when internal evidence identifies 
 
 Write a bounded evidence artifact and return one Research State. Freshness follows the input fingerprint and cited premise, not merely elapsed time. Missing access becomes `Research Blocked`; ambiguity requiring product choice becomes `Needs Decision`.
 
+## Implementation handoff
+
+`Current` means the evidence artifact is complete, its input fingerprint and cited premise are current, and the research result explicitly states whether implementation can start. When implementation can start, this skill hands the exact Linear issue to the implementation skill by moving its lifecycle marker to `Ready`:
+
+1. Resolve the exact issue and the exact `Ready` Issue Status label under the `Issue Status` group using the registry in `docs/tickets/TEMPLATE.md`. If the exact unarchived child is missing, create it with `linear_save_issue_label`; never create a duplicate.
+2. Call `linear_save_issue` with the `Ready` label in `addLabels` and remove every other `Issue Status` child through `removeLabels`. Preserve unrelated labels.
+3. Set the native Linear state to `Ready` only when that exact native state exists. The grouped `Ready` label remains authoritative when the native state is unavailable.
+4. Re-read the exact issue and verify that exactly one `Issue Status` child is assigned and that it is `Ready` before reporting the handoff.
+
+Research does not create an implementation branch or worktree and does not assign `In Progress`; those actions belong to the implementation skill. `Research Blocked` and `Needs Decision` must not move to `Ready`. Use the appropriate blocked Issue Status label instead: `Waiting for Predecessor` for an unresolved dependency, `Missing Requirement` for missing scope or an owner decision, or `External Blocked` for unavailable external access. Apply the same exact-label cleanup and re-read verification to a blocked transition.
+
 Never inspect beyond allowed reads, infer write permission, or hide unsupported claims behind model confidence.
