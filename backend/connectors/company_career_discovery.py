@@ -394,6 +394,9 @@ def _score_candidate(
     if source in {"sitemap", "robots_sitemap"}:
         score += 0.1
         evidence.append(f"found_in_{source}")
+    if source == "json_ld":
+        score += 0.3
+        evidence.append("found_in_json_ld")
 
     ats_type = detect_ats_type(url)
     if ats_type:
@@ -975,10 +978,116 @@ def discover_many(
     return results
 
 
+def build_discovery_receipt(result: CareerDiscoveryResult) -> dict[str, Any]:
+    """One bounded, cacheable receipt per employer discovery outcome."""
+
+    career_url = result.validated_career_url or result.primary_career_url
+    return {
+        "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+        "company_domain": result.company_domain,
+        "company_name": result.company_name,
+        "homepage_url": result.homepage_url,
+        "career_url": career_url,
+        "reason_code": result.reason_code or result.crawl_status,
+        "ats_type": result.ats_type,
+        "confidence_score": result.confidence_score,
+        "provenance": result.provenance,
+        "freshness": result.freshness,
+        "host_policy": result.host_policy,
+        "discovered_at": result.discovered_at,
+    }
+
+
+def _receipt_cache_key(target: dict) -> str:
+    homepage = normalize_url(
+        str(target.get("homepage_url") or target.get("url") or target.get("company_domain") or "")
+    )
+    return canonicalize_url(homepage) or compact_company_key(target)
+
+
+def compact_company_key(target: dict) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(target.get("company_name") or "").casefold()).strip("-")
+
+
+def collect_discovery_receipts(
+    targets: Iterable[dict],
+    *,
+    cache: dict[str, dict] | None = None,
+    fetch: Fetcher | None = None,
+    request_timeout_seconds: int = 20,
+    shallow_crawl_pages: int = 8,
+    use_rendered_fallback: bool = False,
+    allow_domain_guessing: bool = False,
+    sleep_seconds: float = 0.0,
+    usage_callback=None,
+) -> list[dict[str, Any]]:
+    """Collect per-employer receipts, reusing cached receipts when provided.
+
+    The cache is caller-owned and bounded by the caller: every hit avoids a
+    full discovery pass (no requests) and returns the same receipt.
+    """
+
+    receipts: list[dict[str, Any]] = []
+    for target in targets:
+        cache_key = _receipt_cache_key(target)
+        if cache is not None and cache_key in cache:
+            receipts.append(dict(cache[cache_key]))
+            continue
+        result = discover_career_url(
+            homepage_url=str(target.get("homepage_url") or target.get("url") or ""),
+            company_domain=str(target.get("company_domain") or target.get("domain") or ""),
+            company_name=str(target.get("company_name") or target.get("name") or ""),
+            fetch=fetch,
+            request_timeout_seconds=request_timeout_seconds,
+            shallow_crawl_pages=shallow_crawl_pages,
+            use_rendered_fallback=use_rendered_fallback,
+            allow_domain_guessing=allow_domain_guessing,
+            usage_callback=usage_callback,
+        )
+        receipt = build_discovery_receipt(result)
+        if cache is not None and cache_key:
+            cache[cache_key] = receipt
+        receipts.append(receipt)
+        if sleep_seconds > 0:
+            time.sleep(float(sleep_seconds))
+    return receipts
+
+
+def build_career_coverage_benchmark(results: Iterable[CareerDiscoveryResult]) -> dict[str, Any]:
+    """Deterministic offline coverage metric over a fixture employer set.
+
+    ``career_targeted_coverage`` counts only validated career surfaces; the
+    homepage is never a career target, so a homepage-only baseline scores 0.
+    """
+
+    items = list(results)
+    total = len(items)
+    found = [item for item in items if item.validated_career_url or item.primary_career_url]
+    homepage_only = [
+        item
+        for item in items
+        if not (item.validated_career_url or item.primary_career_url)
+    ]
+    reason_counts: dict[str, int] = {}
+    for item in items:
+        reason = item.reason_code or item.crawl_status
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "employers": total,
+        "career_targets_found": len(found),
+        "career_targeted_coverage": round(len(found) / total, 4) if total else 0.0,
+        "homepage_only_employers": len(homepage_only),
+        "reason_codes": reason_counts,
+    }
+
+
 __all__ = [
     "CareerDiscoveryResult",
     "CareerUrlCandidate",
     "FetchResult",
+    "build_career_coverage_benchmark",
+    "build_discovery_receipt",
+    "collect_discovery_receipts",
     "discover_career_url",
     "discover_many",
     "domain_from_url",

@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from backend.connectors.company_career_discovery import (
     FetchResult,
+    build_career_coverage_benchmark,
+    collect_discovery_receipts,
     detect_ats_type,
     discover_career_url,
     domain_from_url,
@@ -1103,6 +1105,176 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual(mock_normalize.call_args.kwargs["scrapeops_country_code"], "de")
         self.assertEqual(jobs[0]["company_site_domain_policy_id"], "workday_de")
         self.assertEqual(jobs[0]["company_site_locality_mode"], "strict_local_only")
+
+
+ATS_FIXTURE_HOMEPAGE = "https://www.acme-corp.example"
+
+ATS_FIXTURE_BOARDS = {
+    "greenhouse": "https://boards.greenhouse.io/acme-corp",
+    "lever": "https://jobs.lever.co/acme-corp",
+    "workday": "https://acme.wd1.myworkdayjobs.com/en-US/careers",
+    "personio": "https://acme.jobs.personio.de",
+    "recruitee": "https://acme.recruitee.com",
+    "smartrecruiters": "https://careers.smartrecruiters.com/acme-corp",
+    "softgarden": "https://acme.softgarden.io",
+}
+
+
+class CareerDiscoveryFixtureTests(unittest.TestCase):
+    def test_fixture_covers_every_named_ats_host(self):
+        for ats_type, board_url in ATS_FIXTURE_BOARDS.items():
+            with self.subTest(ats=ats_type):
+                fetch = FakeFetcher(
+                    {
+                        ATS_FIXTURE_HOMEPAGE: {
+                            "text": f'<a href="{board_url}">Karriere</a>',
+                        }
+                    }
+                )
+                result = discover_career_url(homepage_url=ATS_FIXTURE_HOMEPAGE, fetch=fetch)
+
+                self.assertEqual(result.reason_code, "career_url_found")
+                self.assertEqual(result.validated_career_url.rstrip("/"), board_url)
+                self.assertEqual(result.ats_type, ats_type)
+                self.assertGreaterEqual(result.confidence_score, 0.55)
+                self.assertIn("provenance", result.to_dict())
+                self.assertTrue(result.freshness)
+                self.assertTrue(result.host_policy)
+                self.assertTrue(result.host_policy["allowed"])
+
+    def test_fixture_generic_json_ld_jobposting_yields_career_target(self):
+        job_url = "https://www.acme-corp.example/jobs/product-owner-123"
+        html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@graph":[{"@type":"JobPosting","title":"Product Owner",'
+            f'"url":"{job_url}"}}]}}'
+            "</script></head><body></body></html>"
+        )
+        fetch = FakeFetcher({ATS_FIXTURE_HOMEPAGE: {"text": html}})
+
+        result = discover_career_url(homepage_url=ATS_FIXTURE_HOMEPAGE, fetch=fetch)
+
+        self.assertEqual(result.reason_code, "career_url_found")
+        self.assertEqual(result.validated_career_url, job_url)
+        self.assertEqual(result.candidates[0].source, "json_ld")
+        self.assertGreaterEqual(result.confidence_score, 0.55)
+
+    def test_fixture_unsupported_external_host_is_never_published(self):
+        external_url = "https://careers.unsupported-external.example/jobs"
+        fetch = FakeFetcher(
+            {
+                ATS_FIXTURE_HOMEPAGE: {
+                    "text": f'<a href="{external_url}">Jobs</a>',
+                }
+            }
+        )
+
+        result = discover_career_url(homepage_url=ATS_FIXTURE_HOMEPAGE, fetch=fetch)
+
+        self.assertEqual(result.reason_code, "no_career_target_found")
+        self.assertEqual(result.validated_career_url, "")
+        self.assertEqual(result.primary_career_url, "")
+        self.assertNotEqual(result.homepage_url, external_url)
+        self.assertFalse(
+            any(candidate.url == external_url for candidate in result.candidates)
+        )
+
+    def test_discovery_never_returns_homepage_as_career_url(self):
+        fetch = FakeFetcher(
+            {ATS_FIXTURE_HOMEPAGE: {"text": "<html><body>Welcome</body></html>"}}
+        )
+
+        result = discover_career_url(homepage_url=ATS_FIXTURE_HOMEPAGE, fetch=fetch)
+
+        self.assertEqual(result.validated_career_url, "")
+        self.assertNotEqual(
+            (result.primary_career_url or "").rstrip("/"),
+            ATS_FIXTURE_HOMEPAGE,
+        )
+        self.assertEqual(result.reason_code, "no_career_target_found")
+
+    def test_collect_discovery_receipts_caches_and_reports_observables(self):
+        board_url = ATS_FIXTURE_BOARDS["lever"]
+        fetch = FakeFetcher(
+            {
+                ATS_FIXTURE_HOMEPAGE: {
+                    "text": f'<a href="{board_url}">Jobs</a>',
+                }
+            }
+        )
+        targets = [{"company_name": "Acme", "homepage_url": ATS_FIXTURE_HOMEPAGE}]
+
+        cache: dict = {}
+        first = collect_discovery_receipts(targets, cache=cache, fetch=fetch)
+        second = collect_discovery_receipts(targets, cache=cache, fetch=fetch)
+
+        self.assertEqual(first, second)
+        receipt = first[0]
+        self.assertEqual(receipt["career_url"], board_url)
+        self.assertEqual(receipt["reason_code"], "career_url_found")
+        self.assertEqual(receipt["ats_type"], "lever")
+        self.assertIn("confidence_score", receipt)
+        self.assertIn("freshness", receipt)
+        self.assertIn("host_policy", receipt)
+        self.assertIn("provenance", receipt)
+        self.assertIn("policy_version", receipt)
+        self.assertTrue(cache)
+
+    def test_offline_benchmark_measures_career_targeted_coverage_with_bounded_requests(self):
+        ats_homepage_url = "https://www.acme-corp.example"
+        ats_board_url = ATS_FIXTURE_BOARDS["greenhouse"]
+        json_ld_homepage_url = "https://www.beta-corp.example"
+        json_ld_job_url = "https://www.beta-corp.example/jobs/product-owner-123"
+        quiet_homepage_url = "https://www.quiet-corp.example"
+        json_ld_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@graph":[{"@type":"JobPosting","title":"Product Owner",'
+            f'"url":"{json_ld_job_url}"}}]}}'
+            "</script></head><body></body></html>"
+        )
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            normalized = url.rstrip("/")
+            if normalized == ats_homepage_url:
+                return FetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=f'<a href="{ats_board_url}">Jobs</a>',
+                )
+            if normalized == json_ld_homepage_url:
+                return FetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=json_ld_html,
+                )
+            if normalized == quiet_homepage_url:
+                return FetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text="<html><body>About us</body></html>",
+                )
+            return FetchResult(url, url, 404, text="")
+
+        results = [
+            discover_career_url(homepage_url=ats_homepage_url, fetch=fetch),
+            discover_career_url(homepage_url=json_ld_homepage_url, fetch=fetch),
+            discover_career_url(homepage_url=quiet_homepage_url, fetch=fetch),
+        ]
+        benchmark = build_career_coverage_benchmark(results)
+
+        self.assertEqual(benchmark["employers"], 3)
+        self.assertEqual(benchmark["career_targets_found"], 2)
+        self.assertEqual(benchmark["career_targeted_coverage"], 0.6667)
+        self.assertEqual(benchmark["homepage_only_employers"], 1)
+        self.assertIn("no_career_target_found", benchmark["reason_codes"])
+        self.assertLessEqual(len(calls), 50)
+        self.assertTrue(all(url.startswith("https://") for url in calls))
+        self.assertFalse(any("localhost" in url for url in calls))
 
 
 if __name__ == "__main__":
