@@ -45,6 +45,7 @@ from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRMED", "SATURATED_RECOVERED"})
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
+RUNTIME_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
 
 
 def _text(value: object) -> str:
@@ -1110,7 +1111,7 @@ def run_delivery(
             origin="scheduled",
             created_by="producer_bridge",
             scheduled_run_id=cycle_id,
-            policy_version="publication_policy_v1",
+            policy_version=RUNTIME_PUBLICATION_POLICY_VERSION,
         )
         store.complete_cycle(
             cycle_id,

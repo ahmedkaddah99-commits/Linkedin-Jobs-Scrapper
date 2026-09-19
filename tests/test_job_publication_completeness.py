@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from scripts.audit_job_publication_completeness import run_audit
+from scripts.publish_producer_states import RUNTIME_PUBLICATION_POLICY_VERSION
 from backend.acquisition.job_publication_completeness import (
     REASON_BLOCKED_OR_ERROR_BODY,
     REASON_CLOSED_BEFORE_POSTED_AT,
@@ -552,6 +553,10 @@ def test_audit_reports_trusted_linkedin_url_relaxation_impact():
     impact = report["policy_impact"]["trusted_linkedin_job_detail_url"]
     assert impact["additional_publishable_records"] == 1
     assert impact["additional_publishable_by_source"] == {"linkedin": 1}
+
+
+def test_runtime_publisher_uses_blocking_publication_policy():
+    assert RUNTIME_PUBLICATION_POLICY_VERSION == "publication_policy_v2"
 
 
 if __name__ == "__main__":

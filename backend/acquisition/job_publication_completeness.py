@@ -645,6 +645,7 @@ def validate_job_for_publication(
     min_description_chars: int = 80,
     stale_after_days: int = 90,
     require_application_destination: bool = True,
+    allow_trusted_linkedin_detail_url: bool = True,
 ) -> CompletenessResult:
     """Classify one canonical job record for publication.
 
@@ -763,9 +764,12 @@ def validate_job_for_publication(
         elif not is_valid_url(application_url):
             mark(REASON_INVALID_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
             field_states["application_url"] = "invalid"
-        elif _is_linkedin_source(record) and is_linkedin_job_detail_url(application_url):
-            field_states["application_url"] = "present"
-            field_states["application_url"] = "invalid"
+        elif is_linkedin_job_detail_url(application_url):
+            if allow_trusted_linkedin_detail_url and _is_linkedin_source(record):
+                field_states["application_url"] = "present"
+            else:
+                mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
+                field_states["application_url"] = "invalid"
         elif is_tracking_only_url(application_url):
             mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
             field_states["application_url"] = "invalid"

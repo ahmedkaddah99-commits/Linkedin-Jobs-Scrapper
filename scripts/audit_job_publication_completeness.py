@@ -33,6 +33,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.acquisition.job_publication_completeness import (
+    REQUIRED_COMPANY_FIELDS,
+    REQUIRED_JOB_FIELDS,
     STATUSES,
     CompletenessResult,
     validate_job_for_publication,
@@ -98,6 +100,62 @@ def _pct(numerator: int, denominator: int) -> float:
     return round(100.0 * numerator / denominator, 2) if denominator else 0.0
 
 
+def _required_field_coverage(
+    results: list[CompletenessResult],
+) -> dict[str, dict[str, dict[str, int]]]:
+    coverage: dict[str, dict[str, dict[str, int]]] = {}
+    for group, fields in {
+        "job": REQUIRED_JOB_FIELDS,
+        "company": REQUIRED_COMPANY_FIELDS,
+    }.items():
+        coverage[group] = {}
+        for field in fields:
+            counts = Counter({"present": 0, "missing": 0, "invalid": 0, "unknown": 0})
+            for result in results:
+                state = result.field_states.get(field, "missing")
+                counts[state] += 1
+            coverage[group][field] = dict(counts)
+    return coverage
+
+
+def _url_policy_impact(
+    records: list[dict[str, Any]],
+    contract_results: list[CompletenessResult],
+    *,
+    company_registry: set[str] | None,
+    now: datetime,
+    min_description_chars: int,
+    stale_after_days: int,
+) -> dict[str, Any]:
+    strict_results = [
+        validate_job_for_publication(
+            record,
+            now=now,
+            company_registry=company_registry,
+            min_description_chars=min_description_chars,
+            stale_after_days=stale_after_days,
+            allow_trusted_linkedin_detail_url=False,
+        )
+        for record in records
+    ]
+    additional_by_source: Counter[str] = Counter()
+    additional = 0
+    for record, strict, contract in zip(records, strict_results, contract_results):
+        if contract.publishable and not strict.publishable:
+            additional += 1
+            additional_by_source[_source(record)] += 1
+    return {
+        "additional_publishable_records": additional,
+        "additional_publishable_by_source": dict(sorted(additional_by_source.items())),
+        "precision_recall_impact": {
+            "additional_eligible_records_as_recall_proxy": additional,
+            "precision_requires_labeled_truth": True,
+            "recall_requires_labeled_truth": True,
+            "comparison_policy": "reject_trusted_linkedin_job_detail_url",
+        },
+    }
+
+
 def run_audit(
     records: list[dict[str, Any]],
     *,
@@ -132,6 +190,18 @@ def run_audit(
                 stale_after_days=stale_after_days,
             )
         )
+
+    required_field_coverage = _required_field_coverage(results)
+    policy_impact = {
+        "trusted_linkedin_job_detail_url": _url_policy_impact(
+            unique,
+            results,
+            company_registry=company_registry,
+            now=now,
+            min_description_chars=min_description_chars,
+            stale_after_days=stale_after_days,
+        )
+    }
 
     outcome_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
@@ -217,6 +287,8 @@ def run_audit(
         "outcome_by_source": {src: dict(c) for src, c in sorted(source_outcome.items())},
         "top_blocking_reasons": top_reasons,
         "company_coverage": company_coverage,
+        "required_field_coverage": required_field_coverage,
+        "policy_impact": policy_impact,
         "missing_canonical_company_identity": missing_company_identity,
         "invalid_or_missing_application_url_count": len(invalid_application_url),
         "missing_description_count": missing_or_placeholder_description,

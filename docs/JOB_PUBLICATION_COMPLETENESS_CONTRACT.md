@@ -1,10 +1,10 @@
 # Job Publication Completeness Contract
 
 - **Contract version:** `job_publication_completeness_v1`
-- **Owner:** F (OpenCode, this workstream)
-- **Status:** Implemented, un-wired (integration is C-owned; see "Wiring" below)
-- **Base SHA:** `848408f3024c3c675abb3f8d6696563eb4184c50`
-- **Final SHA:** branch tip at handoff (see `docs/OPENCODE_F_JOB_COMPLETENESS_HANDOFF.md`)
+- **Owner:** WS-03 Acquisition and Collectors
+- **Status:** Implemented and runtime-enforced by the producer publisher
+- **Base SHA:** `405c70e7dbc3bc4853d39a46b88358e5d23c4f45`
+- **Final SHA:** branch tip at handoff
 
 ## 1. Purpose
 
@@ -54,11 +54,11 @@ Optionally the caller passes:
 
 ## 4. Field classification
 
-Salary, benefits, seniority, employment type and similar fields are **not**
-automatically mandatory; actual Runr behavior does not require them to render a
-publishable job.
+Salary and benefits are intentionally non-blocking. Logo, seniority, employment
+type, workplace arrangement, and company enrichment are blocking because the
+catalog contract requires a useful, trustworthy job and company presentation.
 
-### Required for publication
+### Required job fields
 
 A record missing any of these is `not_publishable_missing_required` (or a more
 specific status when the failure is identity/placeholder/invalid).
@@ -66,8 +66,6 @@ specific status when the failure is identity/placeholder/invalid).
 | Field | Canonical source fields | Failure reason |
 |---|---|---|
 | Stable canonical job identity | `canonical_job_id` | `missing_canonical_job_id` |
-| Stable canonical company ID | `canonical_company_id` / `company_id` | `missing_canonical_company_id`, `unknown_canonical_company_id` |
-| Non-placeholder company display name | `company_name` / `employer_name` | `missing_company_name`, `placeholder_company_name` |
 | Meaningful job title | `title` | `missing_title`, `placeholder_title` |
 | Trustworthy direct application/job URL | `application_destination.resolved_url` / `apply_url` | `missing_application_url`, `invalid_application_url`, `tracking_only_application_url`, `listing_fallback_application_url` |
 | Sufficient job description | `description_text` | `missing_description`, `placeholder_description`, `insufficient_description`, `blocked_or_error_body` |
@@ -76,6 +74,18 @@ specific status when the failure is identity/placeholder/invalid).
 | Source-specific job identity | `source_job_id` / `external_job_id` | `missing_source_job_id` |
 | Observation/freshness timestamp | `observed_at` | `missing_observed_at`, `stale_observation` |
 | Active publication state | `lifecycle_state` | `closed_lifecycle_state` |
+| Seniority | `seniority` / `experience_level` | `missing_seniority` |
+| Employment type | `employment_type` / `employmentType` | `missing_employment_type` |
+| Workplace arrangement | `workplace_arrangement` / `workplace_type` / `remote_type` | `missing_workplace_arrangement` |
+
+### Required company fields
+
+| Field | Canonical source fields | Failure reason |
+|---|---|---|
+| Stable canonical company ID | `canonical_company_id` / `company_id` | `missing_canonical_company_id`, `unknown_canonical_company_id` |
+| Non-placeholder company display name | `company_name` / `employer_name` | `missing_company_name`, `placeholder_company_name` |
+| Company logo | `company_logo` / `logo_url` / `logo` | `missing_company_logo` |
+| Company enrichment | `company_enrichment` / `enrichment` / `company_metadata` | `missing_company_enrichment` |
 
 ### Conditionally required
 
@@ -86,13 +96,9 @@ specific status when the failure is identity/placeholder/invalid).
 | Cross-source consistency | Conflicting identity fields must not be silently merged | `conflicting_source_values` |
 | Ownership / dedupe certainty | No unresolved ownership or dedupe conflict | `unresolved_ownership_conflict`, `uncertain_dedupe_identity` |
 
-### Recommended (not blocking)
-
-`employment_type`, `workplace_arrangement`, `experience_level`, `salary`.
-
 ### Optional (not blocking)
 
-`benefits`, `seniority`, `company_logo`, `company_enrichment`.
+`salary`, `benefits`.
 
 ## 5. Deterministic statuses
 
@@ -121,8 +127,13 @@ order: `stale_or_closed` > `unresolved_identity` > `placeholder` > `invalid` >
 | `unresolved_ownership_conflict` | unresolved_identity |
 | `missing_company_name` | missing_required |
 | `placeholder_company_name` | placeholder |
+| `missing_company_logo` | missing_required |
+| `missing_company_enrichment` | missing_required |
 | `missing_title` | missing_required |
 | `placeholder_title` | placeholder |
+| `missing_seniority` | missing_required |
+| `missing_employment_type` | missing_required |
+| `missing_workplace_arrangement` | missing_required |
 | `missing_application_url` | missing_required |
 | `invalid_application_url` | invalid |
 | `tracking_only_application_url` | invalid |
@@ -145,19 +156,27 @@ via `CompletenessResult.to_dict()`.
 
 ## 7. Application URL policy
 
-A job detail page is a **valid user-facing application/job URL** as long as it
-links directly to the advertised posting. Accepted destination classes:
-`dedicated_apply`, `embedded_apply`, `job_detail_with_apply`, `job_detail_only`.
+A job detail page is a valid user-facing job URL when it links directly to the
+advertised posting. LinkedIn job-detail URLs are accepted when the source is
+LinkedIn and the record is not explicitly Easy Apply-only. Accepted destination
+classes are `dedicated_apply`, `embedded_apply`, `job_detail_with_apply`, and
+trusted LinkedIn `job_detail_only`.
 
 Rejected: `redirect_apply`, `listing_fallback`, `search_results`,
 `portal_listing`, `careers_index`, `unresolved`, empty strings, URLs that are
 not HTTP/HTTPS, tracking-only/shortener links (`bit.ly`, `lnkd.in`, …), and
 URLs whose only query parameters are tracking keys.
 
+Explicit Easy Apply-only records are rejected even when other source evidence is
+present. An unknown Easy Apply marker is not itself a rejection when the URL is
+otherwise trusted. Employer job-detail/listing fallbacks remain rejected; they
+must provide a direct application destination.
+
 Real-data observation: every LinkedIn record in the RC-023 historical snapshot
-(188,206 jobs) used the LinkedIn job-detail view URL as its apply URL; this is
-treated as acceptable. Employer records often lack an explicit apply URL; the
-source job-detail URL is used as a fallback and is also acceptable.
+(188,206 jobs) used the LinkedIn job-detail view URL as its apply URL. The audit
+helper reports the eligibility delta from comparing the trusted-detail policy to
+a strict detail-URL rejection policy; exact precision/recall requires labelled
+truth and is therefore reported as a proxy impact, not invented as a metric.
 
 ## 8. Description policy
 
@@ -275,17 +294,36 @@ Totals reconcile exactly (300 = sum of outcome counts). The synthetic sample
 and report remain committed at `data/audit/report/completeness_audit.{json,md}`.
 The real-data report is at `data/audit/real/completeness_audit_real.{json,md}`.
 
+### 11.3 T32 policy-impact reporting
+
+Every audit JSON report now includes `required_field_coverage` with separate
+`job` and `company` maps. Each field reports present, missing, invalid, and
+unknown counts. It also includes
+`policy_impact.trusted_linkedin_job_detail_url`, which compares the contract
+policy with strict rejection of LinkedIn detail URLs and reports the additional
+eligible records by source. Exact precision and recall are not claimed without
+labelled truth; the report exposes the eligibility delta as a recall proxy and
+explicitly marks both exact metrics as requiring labels.
+
 ## 12. Tests
 
 ```
-.venv\Scripts\python.exe -m pytest tests/test_job_publication_completeness.py tests/test_job_source_merging.py tests/test_job_completeness_audit.py tests/test_real_job_data_audit.py -q
+.venv\Scripts\python.exe -m pytest tests/test_job_publication_completeness.py -q
 ```
 
-Result: **53 passed**. Boundary conditions covered include: every status, every
-reason-code family, input immutability, collector-success-does-not-imply-
-publishable, source-scan-incompleteness-does-not-invalidate, real producer
-state field mapping, and audit reconciliation.
+The focused T32 contract suite currently reports **53 passed**. It covers the
+blocking owner-marked fields, non-blocking salary/benefits, trusted LinkedIn
+detail URLs, Easy Apply-only rejection, separate audit field coverage, URL
+policy impact, input immutability, and the runtime publisher policy constant.
+The older broad audit fixtures in `tests/test_job_completeness_audit.py` and
+`tests/test_real_job_data_audit.py` intentionally omit these newly blocking
+fields; they therefore remain compatibility failures until those fixtures are
+migrated in their owning ticket scope.
 
-## 13. Wiring (C-owned, not applied here)
+## 13. Runtime wiring and audit evidence
 
-See `docs/OPENCODE_F_JOB_COMPLETENESS_HANDOFF.md`.
+The incremental producer publisher uses `publication_policy_v2`, so the
+completeness gate is blocking before a publication head advances. The audit
+report includes `required_field_coverage` split into `job` and `company` groups
+and `policy_impact.trusted_linkedin_job_detail_url`, including additional
+eligible records by source plus precision/recall proxy notes.
