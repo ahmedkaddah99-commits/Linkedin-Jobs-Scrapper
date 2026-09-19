@@ -235,6 +235,7 @@ subsystems:
       - No values for sync-false env keys committed to the repo.
       - No enabling acquisition/enrichment switches on Render (acquisition runs on the VPS only).
       - CI never pushes/loads Docker images (push:false, load:false).
+      - Local checkpoint pruning removes only generations with a verified off-host receipt and keeps at least two verified generations (RC-024/T44).
 
   - id: frontend
     workstream: WS-8

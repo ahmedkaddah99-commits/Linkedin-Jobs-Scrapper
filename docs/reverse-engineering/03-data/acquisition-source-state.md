@@ -1,4 +1,5 @@
 > Source: deployment/render-turso-r2 | SHA: 58a96674 | Verified: 2026-09-14
+> Updated by T44 (RUN-44, 2026-09-19): recorded the recovered 2026-09-19 producer/enrichment/export/code set and its versioned off-host preservation (§5.4).
 
 # Acquisition source state (WS-3 data doc)
 
@@ -68,6 +69,15 @@ Authoritative schemas are the DDL in the producers; restored volumes below are t
 | `linkedin_legacy_archive` (~2.0 GB) | `/srv/runr/backups/linkedin/linkedin_germany_discovery_state_pre_v2.db` | forensic comparison only |
 | `linkedin_legacy_v2_state` (~116 MB) | `/srv/runr/backups/linkedin/linkedin_germany_discovery_state_v2.db` | historical; "do not use as the 14-table producer state" |
 
+### 5.4 Recovered 2026-09-19 acquisition set and off-host preservation (T44)
+
+The historical producer state was recovered non-destructively on 2026-09-19 after the former local snapshots root disappeared; the full evidence and per-file SHA-256 values are in `data/audit/runr_source_state/2026-09-19/recovery_manifest.md`. The recovered set is 13 files / 4,915,180,506 bytes: the LinkedIn producer DB (14-table schema; `jobs` 188,206; `job_company_observations` 188,206; integrity ok), the employer producer DB (`companies` 428, `jobs` 2,612), the company identity/enrichment SQLite (`url_resolution` 15,454), three company-source CSVs (the `company_sources_linkedin_ids.csv` input holds 12,059 resolved LinkedIn company IDs), the LinkedIn/employer exports, the RC-024 employer checkpoint record (`not_uploaded`), the complete-history Git bundle (verified refs: `deployment/render-turso-r2` `30c8d5f1`, `temp/runr-linkedin-final` `e8469711`, `temp/runr-employer-final` `6ea7f460`, `temp/runr-production-final` `58a96674`) and the recovery manifest itself.
+
+- **Versioned preservation manifest:** `data/audit/runr_source_state/2026-09-19/offhost_preservation_manifest.json` (schema `runr.acquisition.recovery-manifest.v1`; per asset: bytes, SHA-256, logical role, retention class, source revisions for the bundle, SQLite integrity/row-count expectations).
+- **Off-host storage:** S3/R2 under the checkpoint prefix `runr/acquisition/checkpoints/recovery/2026-09-19/<relative-path>`; every object carries a `sha256` metadata record and is HEAD/download verified against the manifest.
+- **Verification/restore drill:** `scripts/acquisition_state_backup.py preserve-recovery-set` (upload) and `verify-recovery-set --download-dir <isolated dir>` (HEAD + isolated download + SHA-256 + SQLite integrity/schema/row counts + `git bundle verify`; never touches active state). Runbook: `data/audit/runr_source_state/2026-09-19/offhost_preservation_runbook.md`.
+- The RC-024 scheduled checkpoint pipeline (timer `runr-acquisition-backup.timer`) owns recurring off-host preservation from the live producer state; see `../02-deployment/vps-runtime-and-acquisition-timers.md`.
+
 Versioning/restore: `deploy/restore-acquisition-states.sh` validates (`--role all --allow-state-drift`), canonicalizes via `scripts/canonicalize_producer_states.py` into `/srv/runr/state/versions/<release>`, then atomically switches the `active` symlink (L53–69). Checkpoints/backups: `scripts/acquisition_state_backup.py` (SQLite Online-Backup; optional S3/R2 upload; tests `tests/test_rc024_backup_restore.py`).
 
 ## 6. Exports, receipts, locks
@@ -107,6 +117,7 @@ Do not open restored state DBs outside an authorized host; do not run the restor
 | Generated audit outputs (4) | VERIFIED (scope: static — file list matches; provenance inferred from generating scripts' usage lines) |
 | Producer state schemas | VERIFIED (scope: static DDL read; 15/5 tables enumerated) |
 | Restored volumes / row counts | UNKNOWN on the actual host — manifest values are a 2026-09-08 documentary snapshot; mutable state drift is expected and allowed |
+| Recovered 2026-09-19 set (§5.4) | VERIFIED locally (bytes, SHA-256, SQLite integrity/row counts re-run 2026-09-19); off-host preservation verified per runbook receipt |
 | `Company-Urls/` | RETIRED/HISTORICAL (only on `0d7f2b5c`) |
 | `scripts/audit_runr_data_readiness.py` (T11) | PLANNED-NOT-IMPLEMENTED — untracked, feature checkout only; `DEFAULT_RUNR_ROOT` points at a stale worktree (readiness-audit bug, ticket T11) |
 

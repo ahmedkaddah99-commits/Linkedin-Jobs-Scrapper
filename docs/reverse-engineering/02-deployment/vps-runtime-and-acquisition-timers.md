@@ -1,4 +1,5 @@
 > Source: deployment/render-turso-r2 | SHA: 58a96674 | Verified: 2026-09-14
+> Updated by T44 (RUN-44, 2026-09-19): added the scheduled off-host backup service and timer; WS7-G11 closed in §10.
 
 # VPS runtime and acquisition timers
 
@@ -19,11 +20,11 @@ It can also host the API, the customer worker and the static frontend, but the r
 
 ## 2. Owned paths
 
-`deploy/` has 27 files:
+`deploy/` has 29 files:
 
 | Group | Files |
 |---|---|
-| systemd units | `deploy/systemd/` has 16 files: 9 services, 5 timers, `runr.target`, `runr-journald.conf` |
+| systemd units | `deploy/systemd/` has 18 files: 10 services, 6 timers, `runr.target`, `runr-journald.conf` |
 | Wrappers | `deploy/run-acquisition-source.sh` (128 lines), `deploy/run-acquisition-publisher.sh` (75), `deploy/run-acquisition-cycle.sh` (53) |
 | Operator scripts | `deploy/setup.sh` (117), `deploy/deploy.sh` (47), `deploy/restore-acquisition-states.sh` (74), `deploy/start.sh` (85; shared with Render) |
 | Contracts and templates | `deploy/vps-runtime-contract.json` (88), `deploy/acquisition-data-manifest.json` (340), `deploy/acquisition.env.example` (59) |
@@ -46,6 +47,7 @@ All paths are under `deploy/systemd/`. Every service sets `UMask=0077`, `NoNewPr
 | `runr-acquisition-publisher.service` | oneshot | `runr-acquisition` | `run-acquisition-publisher.sh` (L16) | `.env.acquisition` only (no provider file) | **12h** (L23) | 200% / 4G / 6G / 256 | same | multi-user | yes |
 | `runr-acquisition-cycle.service` | oneshot | `runr-acquisition` | `run-acquisition-cycle.sh` (L25) | `.env.acquisition` + provider; roots set explicitly (L17–24); **no** live-network override | **infinity** (L32) | 300% / 6G / 9G / 512 | same | multi-user | yes |
 | `runr-acquisition-export.service` | oneshot | `runr-acquisition` | `.venv/bin/python scripts/build_master_jobs_catalog.py --linkedin-csv … --employer-csv … --output …/combined/master_jobs.csv` (L19–22) | `.env.acquisition`; **`After=` + `Wants=runr-acquisition-cycle.service` (L3–4)** | default (disabled for oneshot) | 100% / 2G / 3G / 64 | `/srv/runr/exports` | **none** | **no** |
+| `runr-acquisition-backup.service` (T44) | oneshot | `runr-acquisition` | `.venv/bin/python scripts/acquisition_state_backup.py scheduled-backup --role linkedin …` then `--role employer …` with `--upload` (two `ExecStart=` lines, fail-fast) | `.env.acquisition`; `${RUNR_LINKEDIN_STATE_DB}`, `${RUNR_EMPLOYER_STATE_DB}`, `${RUNR_ACQUISITION_BACKUP_ROOT}`, `${RUNR_ACQUISITION_DATA_MANIFEST}` | **4h** | 200% / 4G / 6G / 256 | `/srv/runr/state`, `/srv/runr/backups` | multi-user | yes |
 
 | Timer | `OnCalendar` (host clock; "UTC" per `da565e94`) | `RandomizedDelaySec` | `Persistent` | Unit |
 |---|---|---|---|---|
@@ -54,6 +56,9 @@ All paths are under `deploy/systemd/`. Every service sets `UMask=0077`, `NoNewPr
 | `runr-acquisition-employer.timer` | `*-*-* 02:30:00` | 300 | true | employer.service |
 | `runr-acquisition-publisher.timer` | `*-*-* 04:00:00` | 300 | true | publisher.service |
 | `runr-acquisition-export.timer` | `*-*-* 06:00:00` | 300 | true | (implicit) export.service |
+| `runr-acquisition-backup.timer` (T44) | `*-*-* 05:00:00` | 300 | true | backup.service |
+
+The backup timer sits between the publisher (04:00) and the export timer (06:00). `setup.sh` enables it directly (`systemctl enable --now runr-acquisition-backup.timer`); it is **not** a member of `runr.target`'s `Wants=` so a failed backup unit never silently drops out of `systemctl list-timers`.
 
 **`runr.target`** (L3–4) `Wants=` and `After=`:
 - `runr-api.service`
@@ -146,6 +151,14 @@ runr-acquisition-cycle.service (legacy combined)
 runr-acquisition-export.service
  └─ scripts/build_master_jobs_catalog.py (direct; no non-empty check, unlike the cycle wrapper)
 
+runr-acquisition-backup.service (T44)
+ └─ .venv/bin/python scripts/acquisition_state_backup.py scheduled-backup (twice: linkedin, then employer)
+     ├─ create_checkpoint: read-only source, SQLite Online Backup API, no WAL/SHM sidecars
+     ├─ input manifest = sha256 of deploy/acquisition-data-manifest.json (validated input contract of the generation)
+     ├─ preserve_checkpoint_off_host: database object uploaded first, checkpoint manifest last
+     └─ prune_local_checkpoints(apply): removes only generations with a verified off-host receipt;
+        keeps at least two verified generations (defaults: local 3, remote 7)
+
 deploy/restore-acquisition-states.sh (operator)
  ├─ refuse non-symlink active path or existing release dir (L21–32); flock canonicalize.lock (L34–39)
  ├─ validate_acquisition_runtime.py --role all --allow-state-drift (L44–49)
@@ -219,9 +232,10 @@ The handoff numbers are host overrides from the 2026-09-10/11 pilot and are supe
 - No systemd unit, deploy script or the contract (`primary_mechanism: systemd`) uses PM2.
 - Production use is UNKNOWN; the repo shows none.
 
-**Backups (RC-024).**
-- `scripts/acquisition_state_backup.py` (WS-3) provides these CLI subcommands: backup via the SQLite Online Backup API, optional R2 upload with the manifest last, validate, restore, remote-restore, and prune with epoch-fenced leases.
-- **No unit, timer or `deploy/` wrapper invokes it**, so backup scheduling on the host is UNKNOWN (WS7-G11).
+**Backups (RC-024, closed by T44).**
+- `scripts/acquisition_state_backup.py` (WS-3) provides these CLI subcommands: backup via the SQLite Online Backup API, optional R2 upload with the manifest last, validate, restore, remote-restore, prune with epoch-fenced leases, plus the T44 additions `scheduled-backup` (create + upload + prune in one command), `preserve-recovery-set` and `verify-recovery-set` (versioned off-host preservation of the 2026-09-19 recovered asset set).
+- **`runr-acquisition-backup.service` + `.timer` now invoke it** (05:00 daily, after the publisher, before the export timer; installed and enabled by `setup.sh`). Pruning only removes generations with a verified off-host receipt and retains at least two verified generations. A failed upload leaves the local checkpoint without a receipt for retry; the unit reports failure through its exit code and journald (T44; WS7-G11 closed).
+- The one-time 2026-09-19 recovered-set preservation (13 files, 4,915,180,506 bytes) is an operator command, not a timer: `preserve-recovery-set --manifest data/audit/runr_source_state/2026-09-19/offhost_preservation_manifest.json --recovery-root <recovery root> --upload`, then `verify-recovery-set --manifest … --download-dir <isolated dir>` for the isolated restore drill. Runbook and receipt: `data/audit/runr_source_state/2026-09-19/`.
 - The restore path is `deploy/restore-acquisition-states.sh`.
 - The contract forbids browser profiles in backups (L86).
 
@@ -234,9 +248,9 @@ The handoff numbers are host overrides from the 2026-09-10/11 pilot and are supe
 
 | Test | Covers |
 |---|---|
-| `tests/test_rc023_vps_runtime.py` | contract keys (L15–26), acquisition env boundary (L29–43), hardening (L46–69), setup/deploy/start pins (L72–89), journald and target (L92–99, **stale assertion**) |
+| `tests/test_rc023_vps_runtime.py` | contract keys (L15–26), acquisition env boundary (L29–43), hardening (L46–69), setup/deploy/start pins (L72–89), journald and target (L92–99, **stale assertion**); T44: backup unit/timer/setup/contract/env assertions |
 | `tests/test_acquisition_runtime_manifest.py` | `validate_manifest` seed/state validation and drift rejection |
-| `tests/test_rc024_backup_restore.py` | checkpoint, restore, lease and prune (script level) |
+| `tests/test_rc024_backup_restore.py` | checkpoint, restore, lease and prune (script level); T44: scheduled backup, recovery-set preservation, isolated verify drill |
 | `tests/test_production_completion_regressions.py` | reads `deploy/run-acquisition-source.sh` |
 
 Not executed in Phase 2 (offline; no host):
@@ -278,7 +292,7 @@ sh -n deploy/run-acquisition-source.sh deploy/run-acquisition-publisher.sh deplo
 | Export service/timer | PARTIAL (defined, but not installed by `setup.sh`; pulls in the cycle, N-5) |
 | Long-lived acquisition worker | PARTIAL (installed but outside the target; scheduler disabled; contract and test still reference it) |
 | State restore with atomic switch | IMPLEMENTED-UNVERIFIED |
-| Scheduled off-host backups | UNKNOWN (library exists; no scheduler in tree) |
+| Scheduled off-host backups | IMPLEMENTED (T44: `runr-acquisition-backup.service`/`.timer` at 05:00 daily; upload before manifest; receipt-gated pruning keeps ≥2 verified generations; host schedule enablement is U2 scope) |
 | VPS-hosted API/customer worker/frontend | IMPLEMENTED-UNVERIFIED (Render is the recorded public API) |
 | PM2 process management | UNKNOWN (U9) |
 
@@ -307,7 +321,7 @@ sh -n deploy/run-acquisition-source.sh deploy/run-acquisition-publisher.sh deplo
 | WS7-G8 | VPS enrichment enabled in the env example vs handoff "disabled"; no unit owns enrichment explicitly |
 | WS7-G9 | `static_server.py` binds `0.0.0.0` vs contract `inbound_ports: []` |
 | WS7-G10 | Export service lacks the cycle wrapper's both-CSVs-present guard |
-| WS7-G11 | No scheduled backup unit |
+| WS7-G11 | No scheduled backup unit — **closed by T44** (`runr-acquisition-backup.service`/`.timer`, `setup.sh` enables the timer, `scheduled-backup` CLI) |
 
 ## Agent context and remaining work
 
@@ -325,5 +339,5 @@ sh -n deploy/run-acquisition-source.sh deploy/run-acquisition-publisher.sh deplo
   2. Remove export `Wants=`/`After=` on the cycle (or point it at the publisher), install it in `setup.sh` or delete it (N-5, WS7-G4).
   3. `SuccessExitStatus=75` for the collectors and publisher (WS7-G7).
   4. Bind `static_server.py` to a configurable host, defaulting to loopback on the VPS (WS7-G9).
-  5. Add a backup timer or record that backups are manual (WS7-G11).
+  5. ~~Add a backup timer or record that backups are manual (WS7-G11).~~ Done by T44 (RUN-44).
   6. Reconcile the enrichment switch with WS-3 (WS7-G8).

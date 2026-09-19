@@ -97,3 +97,69 @@ def test_logs_are_bounded_and_application_target_includes_acquisition_worker() -
     assert "RuntimeMaxUse=256M" in journald
     assert "MaxRetentionSec=14day" in journald
     assert "runr-acquisition-worker.service" in target
+
+
+def test_scheduled_backup_unit_is_hardened_non_root_and_uploads_before_prune() -> None:
+    unit = _read_unit("runr-acquisition-backup.service")
+
+    assert "Type=oneshot" in unit
+    assert "User=runr-acquisition" in unit
+    assert "Group=runr-acquisition" in unit
+    assert "User=root" not in unit
+    assert "EnvironmentFile=/opt/runr/.env.acquisition" in unit
+    assert "UMask=0077" in unit
+    assert "NoNewPrivileges=true" in unit
+    assert "PrivateTmp=true" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ProtectHome=true" in unit
+    assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" in unit
+    assert "ReadWritePaths=/srv/runr/state /srv/runr/backups" in unit
+    assert "scripts/acquisition_state_backup.py scheduled-backup" in unit
+    assert unit.count("scheduled-backup --role linkedin") == 1
+    assert unit.count("scheduled-backup --role employer") == 1
+    assert "--upload" in unit
+    assert "TimeoutStartSec=4h" in unit
+
+
+def test_backup_timer_is_a_bounded_daily_schedule() -> None:
+    timer = _read_unit("runr-acquisition-backup.timer")
+
+    assert "OnCalendar=*-*-* 05:00:00" in timer
+    assert "Persistent=true" in timer
+    assert "RandomizedDelaySec=300" in timer
+    assert "Unit=runr-acquisition-backup.service" in timer
+    assert "WantedBy=timers.target" in timer
+
+
+def test_setup_installs_and_enables_the_backup_schedule() -> None:
+    setup = (ROOT / "deploy" / "setup.sh").read_text(encoding="utf-8")
+
+    assert "runr-acquisition-backup.service" in setup
+    assert "runr-acquisition-backup.timer" in setup
+    assert "sudo systemctl enable --now runr-acquisition-backup.timer" in setup
+
+
+def test_runtime_contract_owns_the_backup_schedule_and_retention() -> None:
+    contract = json.loads((ROOT / "deploy" / "vps-runtime-contract.json").read_text(encoding="utf-8"))
+    acquisition = contract["roles"]["acquisition"]
+
+    assert acquisition["backup_unit"] == "runr-acquisition-backup.service"
+    assert acquisition["backup_timer"] == "runr-acquisition-backup.timer"
+    assert "scripts/acquisition_state_backup.py" in acquisition["backup_entrypoint"]
+    assert contract["retention"]["backup_local_generations_min"] >= 2
+    assert contract["retention"]["backup_remote_generations_min"] >= 2
+    assert contract["retention"]["backup_prune_requires_verified_off_host_receipt"] is True
+    assert contract["retention"]["backup_object_prefix"] == "runr/acquisition/checkpoints"
+
+
+def test_acquisition_env_example_declares_backup_configuration_without_secret_drift() -> None:
+    example = (ROOT / "deploy" / "acquisition.env.example").read_text(encoding="utf-8")
+
+    assert "RUNR_ACQUISITION_BACKUP_ROOT=/srv/runr/backups" in example
+    assert "RUNR_ACQUISITION_BACKUP_REMOTE_PREFIX=runr/acquisition/checkpoints" in example
+    assert "RUNR_ACQUISITION_BACKUP_LOCAL_KEEP=3" in example
+    assert "RUNR_ACQUISITION_BACKUP_REMOTE_KEEP=7" in example
+    assert "CLERK_" not in example
+    assert "CREEM_" not in example
+    assert "TRACKER_GOOGLE_OAUTH_" not in example
+    assert "DEEPSEEK_" not in example

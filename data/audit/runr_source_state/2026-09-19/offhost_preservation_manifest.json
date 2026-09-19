@@ -1,0 +1,159 @@
+{
+  "schema_version": "runr.acquisition.recovery-manifest.v1",
+  "recovery_id": "2026-09-19",
+  "remote_prefix": "runr/acquisition/checkpoints",
+  "recovery_source_root": "C:/Users/ahmed/Projects_Local/runr-acquisition-recovery/2026-09-19",
+  "repository_evidence": "data/audit/runr_source_state/2026-09-19/recovery_manifest.md",
+  "total_bytes": 4915180506,
+  "publication_order": [
+    "assets",
+    "set_receipt"
+  ],
+  "assets": [
+    {
+      "relative_path": "linkedin/master_linkedin_jobs_state.db",
+      "bytes": 3479191552,
+      "sha256": "ADC5C1AB7AC5B7BDCA67CDABD7687FDD29913AFAE188FAB2ABA4377A41327525",
+      "logical_role": "linkedin_producer_state",
+      "retention_class": "producer_state",
+      "sqlite_tables": [
+        "company_scans",
+        "company_slug_aliases",
+        "detail_attempts",
+        "detail_queue",
+        "job_company_observations",
+        "jobs",
+        "lifecycle_events",
+        "ownership_exclusions",
+        "proxy_health",
+        "query_partitions",
+        "runs",
+        "search_cards",
+        "search_pages",
+        "source_company_groups"
+      ],
+      "sqlite_row_counts": {
+        "jobs": 188206,
+        "job_company_observations": 188206,
+        "company_scans": 11921,
+        "search_cards": 198491,
+        "search_pages": 52386,
+        "detail_queue": 198491,
+        "detail_attempts": 198493,
+        "lifecycle_events": 187415,
+        "source_company_groups": 11896
+      },
+      "notes": "SQLite Online Backup copy; 14-table producer schema; 188206 jobs"
+    },
+    {
+      "relative_path": "linkedin/master_linkedin_jobs.csv",
+      "bytes": 775613386,
+      "sha256": "5DB2EB21032CC9D6FF8BB837A71E58D6E7E4E1BEF827CE8C5429367377292033",
+      "logical_role": "linkedin_export",
+      "retention_class": "export"
+    },
+    {
+      "relative_path": "employer/master_employer_jobs_state.db",
+      "bytes": 83841024,
+      "sha256": "4F779500C9CD5FB66342CB36BD2FD236CEFB9B9EEBB3CAF13876FCA8B1265AAF",
+      "logical_role": "employer_producer_state",
+      "retention_class": "producer_state",
+      "sqlite_tables": [
+        "companies",
+        "jobs"
+      ],
+      "sqlite_row_counts": {
+        "companies": 428,
+        "jobs": 2612
+      }
+    },
+    {
+      "relative_path": "employer/master_employer_jobs.csv",
+      "bytes": 38097370,
+      "sha256": "49BEF439521161F0D251DD3E331A4CCB615DD354214B0559BAF0E59D8EC16790",
+      "logical_role": "employer_export",
+      "retention_class": "export"
+    },
+    {
+      "relative_path": "employer/master_employer_jobs.jsonl",
+      "bytes": 40036727,
+      "sha256": "C22D44216006B5B6F4E9FD1115057694E81CB4DF9F096A8F3DB6AB7027DA7811",
+      "logical_role": "employer_export",
+      "retention_class": "export"
+    },
+    {
+      "relative_path": "employer/master_employer_jobs_metrics.json",
+      "bytes": 456,
+      "sha256": "FAF48365397FF8D65F95E242D1F6EC11F578204711608855B37C79F46D8F5715",
+      "logical_role": "employer_export_metrics",
+      "retention_class": "export"
+    },
+    {
+      "relative_path": "employer/checkpoint.json",
+      "bytes": 2377,
+      "sha256": "AA452DA6DC1F8E5ABDC26E3332F28F9FEE8273217F6B1FED9E41A749BD719DF1",
+      "logical_role": "employer_checkpoint_record",
+      "retention_class": "historical_record",
+      "notes": "RC-024 checkpoint record with off_host.status not_uploaded"
+    },
+    {
+      "relative_path": "company/linkedin_id_resolution.sqlite3",
+      "bytes": 413691904,
+      "sha256": "4DA05480F291DBDF47C4BBD7988D1DA8B79206CB2310332F3F5A32DFBA627F2E",
+      "logical_role": "company_identity_enrichment_state",
+      "retention_class": "producer_state",
+      "sqlite_tables": [
+        "request_log",
+        "run_meta",
+        "url_resolution"
+      ],
+      "sqlite_row_counts": {
+        "url_resolution": 15454,
+        "run_meta": 10
+      }
+    },
+    {
+      "relative_path": "company/company_sources_linkedin_ids.csv",
+      "bytes": 18807044,
+      "sha256": "B8B8512C0669CF57754A2783ED3E9E9B341FA4A0B7ABCD3DB9A7CFC91CD3DCE0",
+      "logical_role": "company_source_input",
+      "retention_class": "producer_input",
+      "notes": "17601 rows x 118 columns; 12059 resolved LinkedIn company IDs"
+    },
+    {
+      "relative_path": "company/company_registry_canonical.csv",
+      "bytes": 11968530,
+      "sha256": "DEDE5FD5052EC8CC85886344C66C1761D818FC686E437670E8B5AC1636914F87",
+      "logical_role": "company_registry",
+      "retention_class": "producer_input"
+    },
+    {
+      "relative_path": "company/company_master.csv",
+      "bytes": 17482721,
+      "sha256": "F54BB4BF8DE3AAEB7C37AC9B3238E403CF998B32A6E8EFC9BC0F8C6B7DD6C6F5",
+      "logical_role": "company_master",
+      "retention_class": "producer_input"
+    },
+    {
+      "relative_path": "code/runr-producer-code-and-history.bundle",
+      "bytes": 36440939,
+      "sha256": "05138FD61556FA995A0C550E0F27A3F8EB0C6E583F4AA0CA92C2611514726E36",
+      "logical_role": "collector_code_history",
+      "retention_class": "code_history",
+      "source_revisions": {
+        "deployment/render-turso-r2": "30c8d5f1641951148de3e30f44165e8e69fb764e",
+        "temp/runr-linkedin-final": "e84697110c199085fb625df253aae0354b236571",
+        "temp/runr-employer-final": "6ea7f460e5175d8b4b74a00e3c804a3bc34b9d5f",
+        "temp/runr-production-final": "58a96674b5cc77bd9da0877d2adaad64abe41b85"
+      },
+      "git_bundle_verify": true
+    },
+    {
+      "relative_path": "RECOVERY_MANIFEST.md",
+      "bytes": 6476,
+      "sha256": "A84DA59A044B6D0CCC3B05665B7C56AD5CD941A3C24F4552CC8E0DB5F580612C",
+      "logical_role": "recovery_evidence",
+      "retention_class": "historical_record"
+    }
+  ]
+}

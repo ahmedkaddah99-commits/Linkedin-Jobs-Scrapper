@@ -13,13 +13,17 @@ from scripts.acquisition_state_backup import (
     CheckpointError,
     LeaseFenced,
     OwnershipConflict,
+    RemoteStoreError,
     SingleWriterLease,
     create_checkpoint,
     preserve_checkpoint_off_host,
+    preserve_recovery_set,
     prune_local_checkpoints,
     restore_remote_checkpoint,
     restore_checkpoint,
+    scheduled_backup,
     validate_checkpoint,
+    verify_remote_recovery_set,
 )
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState, run_collection
 from scripts.master_linkedin_jobs_catalog import StateStore
@@ -356,3 +360,171 @@ def test_restored_checkpoint_resumes_actual_employer_producer_without_collection
     assert resumed["final_export_completed"] is True
     with (tmp_path / "resumed-export" / "master_employer_jobs.csv").open(encoding="utf-8-sig", newline="") as handle:
         assert [row["source_job_id"] for row in csv.DictReader(handle)] == ["fixture-job"]
+
+
+def _make_git_bundle(path: Path) -> None:
+    import subprocess
+
+    repo = path.parent / "fixture-repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    git("init", "-b", "main", "-q")
+    git("-c", "user.name=fixture", "-c", "user.email=fixture@example", "commit", "--allow-empty", "-m", "fixture one")
+    git("-c", "user.name=fixture", "-c", "user.email=fixture@example", "commit", "--allow-empty", "-m", "fixture two")
+    subprocess.run(["git", "-C", str(repo), "bundle", "create", str(path), "main"], check=True, capture_output=True)
+
+
+def _recovery_fixture(root: Path, *, tamper: Path | None = None) -> Path:
+    import hashlib
+
+    recovery = root / "recovery-source"
+    sqlite_path = recovery / "company" / "identity.sqlite3"
+    sqlite_path.parent.mkdir(parents=True)
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT)")
+        connection.execute("CREATE TABLE run_meta (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO jobs (title) VALUES ('one')")
+        connection.execute("INSERT INTO jobs (title) VALUES ('two')")
+    bundle_path = recovery / "code" / "history.bundle"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    _make_git_bundle(bundle_path)
+    plain_path = recovery / "exports" / "metrics.json"
+    plain_path.parent.mkdir(parents=True, exist_ok=True)
+    plain_path.write_text('{"fixture": true}\n', encoding="utf-8")
+    if tamper is not None:
+        tamper.write_text("tampered\n", encoding="utf-8")
+
+    def asset(rel: str, role: str, retention: str, **extra: object) -> dict[str, object]:
+        target = recovery / rel
+        return {
+            "relative_path": rel,
+            "bytes": target.stat().st_size,
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "logical_role": role,
+            "retention_class": retention,
+            **extra,
+        }
+
+    manifest = {
+        "schema_version": "runr.acquisition.recovery-manifest.v1",
+        "recovery_id": "fixture-recovery",
+        "remote_prefix": "runr/acquisition/checkpoints",
+        "publication_order": ["assets", "set_receipt"],
+        "assets": [
+            asset("company/identity.sqlite3", "company_identity_enrichment_state", "producer_state",
+                  sqlite_tables=["jobs", "run_meta"], sqlite_row_counts={"jobs": 2}),
+            asset("code/history.bundle", "collector_code_history", "code_history", git_bundle_verify=True),
+            asset("exports/metrics.json", "employer_export_metrics", "export"),
+        ],
+    }
+    manifest_path = root / "recovery-preservation-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def test_preserve_recovery_set_uploads_assets_and_writes_set_receipt_last(tmp_path: Path) -> None:
+    manifest_path = _recovery_fixture(tmp_path)
+    remote = _MemoryRemote()
+
+    receipt = preserve_recovery_set(manifest_path, remote, recovery_root=tmp_path / "recovery-source")
+
+    assert len(remote.calls) == 3
+    assert all(key.startswith("runr/acquisition/checkpoints/recovery/fixture-recovery/") for key in remote.calls)
+    assert [key.rsplit("/", 1)[-1] for key in remote.calls] == ["identity.sqlite3", "history.bundle", "metrics.json"]
+    assert receipt["manifest_is_commit_record"] is True
+    assert len(receipt["assets"]) == 3
+    assert (tmp_path / "preservation-receipt.json").is_file()
+    second = preserve_recovery_set(manifest_path, remote, recovery_root=tmp_path / "recovery-source")
+    assert [asset["off_host"]["status"] for asset in second["assets"]] == ["already_present"] * 3
+
+
+def test_preserve_recovery_set_refuses_local_drift_without_upload(tmp_path: Path) -> None:
+    tamper = tmp_path / "recovery-source" / "exports" / "metrics.json"
+    manifest_path = _recovery_fixture(tmp_path)
+    tamper.write_text("tampered\n", encoding="utf-8")
+    remote = _MemoryRemote()
+
+    with pytest.raises(CheckpointError, match="drift"):
+        preserve_recovery_set(manifest_path, remote, recovery_root=tmp_path / "recovery-source")
+    assert all(not key.endswith("metrics.json") for key in remote.calls)
+    assert not (tmp_path / "preservation-receipt.json").exists()
+
+
+def test_verify_remote_recovery_set_isolated_restore_drill(tmp_path: Path) -> None:
+    manifest_path = _recovery_fixture(tmp_path)
+    remote = _MemoryRemote()
+    preserve_recovery_set(manifest_path, remote, recovery_root=tmp_path / "recovery-source")
+    download_dir = tmp_path / "drill" / "isolated-download"
+
+    report = verify_remote_recovery_set(manifest_path, remote, download_dir=download_dir)
+
+    assert report["recovery_id"] == "fixture-recovery"
+    assert [asset["head_verification"] for asset in report["assets"]] == ["ok", "ok", "ok"]
+    sqlite_report = next(asset for asset in report["assets"] if asset["relative_path"] == "company/identity.sqlite3")
+    assert sqlite_report["sqlite"]["integrity_check"] == "ok"
+    assert sqlite_report["sqlite"]["row_counts"]["jobs"] == 2
+    bundle_report = next(asset for asset in report["assets"] if asset["relative_path"] == "code/history.bundle")
+    assert bundle_report["bundle"]["git_bundle_verify"] == "ok"
+    assert download_dir.is_dir()
+    assert (download_dir / "code" / "history.bundle").is_file()
+    with pytest.raises(CheckpointError, match="refusing overwrite"):
+        verify_remote_recovery_set(manifest_path, remote, download_dir=download_dir)
+
+
+def test_verify_remote_recovery_set_fails_closed_on_missing_object(tmp_path: Path) -> None:
+    manifest_path = _recovery_fixture(tmp_path)
+    remote = _MemoryRemote()
+
+    with pytest.raises(RemoteStoreError, match="missing off-host"):
+        verify_remote_recovery_set(manifest_path, remote, download_dir=tmp_path / "drill" / "isolated-download")
+    assert not (tmp_path / "drill" / "isolated-download").exists()
+
+
+def test_scheduled_backup_uploads_before_manifest_and_prunes_verified_generations(tmp_path: Path) -> None:
+    source = tmp_path / "state" / "master_employer_jobs_state.db"
+    source.parent.mkdir()
+    state = EmployerState(source)
+    state.connection.execute(
+        "INSERT INTO jobs(source_key, payload_json, updated_at) VALUES (?, ?, ?)",
+        ("fixture-job", json.dumps({"title": "Fixture job"}), "fixture"),
+    )
+    state.connection.commit()
+    state.close()
+    data_manifest = tmp_path / "acquisition-data-manifest.json"
+    data_manifest.write_text('{"schema_version": "fixture"}\n', encoding="utf-8")
+    checkpoint_root = tmp_path / "backups"
+    remote = _MemoryRemote()
+
+    first = scheduled_backup(
+        role="employer",
+        source_db=source,
+        checkpoint_root=checkpoint_root,
+        data_manifest=data_manifest,
+        source_version="fixture-release-rc024",
+        remote_prefix="runr/acquisition/checkpoints",
+        upload=True,
+        remote=remote,
+    )
+    assert [key.rsplit("/", 1)[-1] for key in remote.calls] == ["master_employer_jobs_state.db", "checkpoint.json"]
+    assert first["off_host"]["manifest_is_commit_record"] is True
+    assert len(first["input_manifest_sha256"]) == 64
+    assert first["checkpoint"]["cycle"]["cycle_id"].startswith("backup-")
+    assert first["retained_local_generations_minimum"] >= 2
+    checkpoint_dir = checkpoint_root / "employer" / str(first["checkpoint"]["checkpoint_id"])
+    assert validate_checkpoint(checkpoint_dir, expected_role="employer")["backup"]["wal_consistent"] is True
+
+    scheduled_backup(
+        role="employer",
+        source_db=source,
+        checkpoint_root=checkpoint_root,
+        data_manifest=data_manifest,
+        source_version="fixture-release-rc024",
+        upload=True,
+        remote=remote,
+        local_keep=2,
+    )
+    generations = list((checkpoint_root / "employer").iterdir())
+    assert len(generations) == 2
+    assert first["checkpoint"]["checkpoint_id"] in {g.name for g in generations}
+    assert first["pruned_local_generations"] == []
