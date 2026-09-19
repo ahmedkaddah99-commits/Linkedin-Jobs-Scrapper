@@ -22,6 +22,7 @@ from scripts.master_linkedin_jobs_catalog import (
     RunnerConfig,
     StateStore,
 )
+from scripts.run_manifested_linkedin import build_dry_run_receipt
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -249,3 +250,77 @@ def test_pipeline_respects_request_accounting(tmp_path: Path) -> None:
     assert metrics["requests"] == 4
     assert metrics["detail_requests"] == 2
     assert metrics["jobs_written"] == 2
+
+
+def _duplicate_card_page(job_id: str) -> str:
+    card = (
+        '<li class="job-card-container" data-entity-urn="urn:li:jobPosting:{job_id}">'
+        '<a href="https://www.linkedin.com/company/acme">Acme</a>'
+        '<a href="https://www.linkedin.com/jobs/view/{job_id}"></a>'
+        '<h3 class="base-search-card__title">Engineer</h3>'
+        '<span class="job-search-card__location">Berlin, Germany</span>'
+        '<time datetime="2026-08-31">1 day ago</time>'
+        "</li>"
+    ).format(job_id=job_id)
+    return (
+        '<html><body><ul class="jobs-search__results-list">'
+        + card
+        + card
+        + "</ul></body></html>"
+    )
+
+
+def _publishable_detail_page() -> str:
+    return (
+        '<article class="top-card-layout">'
+        '<h1 class="top-card-layout__title">Senior Engineer</h1>'
+        '<h4 class="top-card-layout__second-subline">'
+        '<a href="https://www.linkedin.com/company/acme">Acme</a>'
+        "</h4>"
+        '<div class="top-card-layout__first-subline"><span>Berlin, Germany</span></div>'
+        '<a class="top-card-layout__cta--primary" '
+        'data-tracking-control-name="public_jobs_apply-link-offsite" '
+        'href="https://jobs.acme.example/apply/1234567890">Apply</a>'
+        '<section class="show-more-less-html">'
+        '<div class="description__text description__text--rich">'
+        "<p>Build and operate reliable data systems that keep the customer "
+        "catalog complete. You will design bounded collection pipelines, keep "
+        "durable state snapshots consistent, and make identity resolution "
+        "observable for every job the producer captures each day.</p>"
+        "</div></section></article>"
+    )
+
+
+def test_receipt_classes_distinguish_parsed_cards_from_deduped_jobs(tmp_path: Path) -> None:
+    """A search page repeating one job card parses twice but stores one job.
+
+    The pipelined enqueue publishes every batched task to the workers, so one
+    duplicated card is fetched twice; the durable catalog and observation
+    tables deduplicate by ``(linkedin_company_id, linkedin_job_id)``. The
+    receipt therefore reports parsed cards (2) separately from durable
+    identity-resolved jobs (1) instead of trusting the write counter.
+    """
+
+    transport = ScriptedTransport(
+        search_body=_duplicate_card_page("1234567890"),
+        detail_body=_publishable_detail_page(),
+    )
+    metrics, _ = run_smoke(tmp_path, pipeline_enabled=True, transport=transport)
+
+    # Pre-existing pipelined over-fetch: one duplicated card, two detail
+    # requests. Owned by the producer library (not a T29 allowed path); the
+    # receipt must still resolve the durable identity to exactly one job.
+    assert metrics["jobs_written"] == 2
+    assert sum(kind == "detail" for _, kind in transport.urls) == 2
+
+    receipt = build_dry_run_receipt(
+        metrics,
+        tmp_path / "output" / "master_linkedin_jobs_state.db",
+        {"max_requests": 0},
+    )
+    # parsed counts every card parsed from the page (2), while
+    # identity_resolved counts durable deduplicated observations (1).
+    assert receipt["parsed"] == metrics["valid_cards"] == 2
+    assert receipt["identity_resolved"] == 1
+    assert receipt["rejected"] == 0
+    assert receipt["publishable"] == 1

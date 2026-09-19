@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.linkedin_company_enrichment_pipeline import (
+    TRANSPORT_ACCESS_FAILURES,
     CachedWebshareFetcher,
     EnrichmentPipeline,
     FetchResponse,
@@ -367,6 +368,41 @@ class LinkedInCompanyPipelineTests(unittest.TestCase):
         self.assertEqual(network_calls, [])
         self.assertTrue(metrics.scrapeops_budget_exhausted)
         self.assertEqual(metrics.scrapeops_requests, 0)
+
+    def test_transport_response_classes_are_bounded(self):
+        """Every transport outcome lands in the documented closed class set."""
+
+        def response(status, body=b"", classification=""):
+            return FetchResponse(
+                "https://example.test",
+                "https://example.test/",
+                status,
+                "text/html",
+                body,
+                1,
+                status_classification=classification,
+            )
+
+        expected = [
+            (response(999), "blocked"),
+            (response(403), "blocked"),
+            (response(429), "rate_limited"),
+            (response(404), "legitimate_not_found"),
+            (response(0), "network_error"),
+            (response(503), "network_error"),
+            (response(200, b"captcha security verification"), "challenge"),
+            (
+                response(200, b"<html><body>" + b"x" * 90 + b"</body></html>"),
+                "valid_html",
+            ),
+            (response(200, b"plain text"), "valid_no_data"),
+            (response(200, b""), "malformed"),
+        ]
+        allowed = TRANSPORT_ACCESS_FAILURES | {"legitimate_not_found", "valid_html", "valid_no_data"}
+        for response_item, expected_class in expected:
+            label = classify_transport_response(response_item)
+            self.assertEqual(label, expected_class)
+            self.assertIn(label, allowed)
 
 
 if __name__ == "__main__":
