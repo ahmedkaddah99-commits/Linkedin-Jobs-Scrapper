@@ -46,6 +46,17 @@ If the issue has any other Issue Status label, do not start it. If the requested
 
 If the intended worktree already exists, verify its branch and path before use. Never silently reuse a worktree belonging to another issue. If the baseline or worktree cannot be verified, assign the appropriate blocked Issue Status label and stop.
 
+## Persistent repository virtual environment
+
+Git worktrees do not inherit ignored directories such as `.venv`. Before implementation begins, verify the shared checkout's `.venv\Scripts\python.exe` reports exactly `Python 3.12.7`, then expose that canonical environment in the dedicated worktree with an explicit Windows directory junction:
+
+```powershell
+New-Item -ItemType Junction -Path "<worktree>\.venv" -Target "<shared-checkout>\.venv"
+<worktree>\.venv\Scripts\python.exe --version
+```
+
+If the canonical interpreter is missing or reports another version, stop and use the appropriate blocked status. If `.venv` already exists in the worktree, verify that it is the junction to the canonical environment; never overwrite a non-junction or use a global interpreter.
+
 ## Lifecycle status
 
 After isolation succeeds, assign the In Progress Issue Status label and set the native state to In Progress. Keep that label while implementation is running.

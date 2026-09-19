@@ -47,6 +47,24 @@ If baseline, branch identity, scope, or worktree ownership cannot be verified, a
 
 Follow the acceptance criteria and prohibited-change list. Read only allowed paths and write only `Allowed paths`; validate every changed path before handoff. Preserve unrelated user changes and untracked files. Do not install packages, access production, use credentials, or alter deployment configuration unless the ticket explicitly allows it.
 
+## Persistent repository virtual environment
+
+Git worktrees do not inherit ignored directories such as `.venv`. The canonical environment is the shared checkout's `.venv` directory, and every dedicated implementation worktree must expose that same environment through a directory junction named `.venv`.
+
+Immediately after creating or resuming a worktree:
+
+1. Verify `<shared-checkout>\.venv\Scripts\python.exe --version` reports exactly `Python 3.12.7`. If the canonical interpreter is missing or has another version, stop; never use a global interpreter.
+2. If `<worktree>\.venv` is absent, create an explicit Windows directory junction to the canonical `.venv`:
+
+```powershell
+New-Item -ItemType Junction -Path "<worktree>\.venv" -Target "<shared-checkout>\.venv"
+```
+
+3. If a worktree already has `.venv`, verify it is the junction to the canonical environment. Do not overwrite a non-junction or an environment with a different target.
+4. Run `<worktree>\.venv\Scripts\python.exe --version` before any ticket command and require `Python 3.12.7`.
+
+This keeps the environment persistent across Runr tickets without copying it into Git worktrees or placing it in ticket branches.
+
 For this repository, verify the interpreter before tests:
 
 ```powershell
