@@ -22,6 +22,11 @@ from scripts.master_linkedin_jobs_catalog import (
     StateStore,
     read_current_catalog_generation,
 )
+from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
+from scripts.publish_producer_states import (
+    _ensure_publisher_checkpoint_table,
+    _publisher_checkpoint,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -154,7 +159,8 @@ def test_linkedin_explicit_state_keeps_generation_journal_and_db_outside_exports
         table_count = connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchone()[0]
-    assert table_count == 15
+        assert table_count == 16
+
 
 
 def test_linkedin_default_state_path_remains_output_dir(tmp_path: Path) -> None:
@@ -395,3 +401,31 @@ def test_manifest_runtime_commands_use_posix_state_and_export_mounts() -> None:
     assert "--state-dir /srv/runr/state/employer --require-existing-state" in commands["scripts/master_employer_jobs_catalog.py"]
     assert "--state-dir /srv/runr/state/linkedin --require-existing-state" in commands["scripts/run_manifested_linkedin.py"]
     assert "--state-dir /srv/runr/state/employer --require-existing-state" in commands["scripts/run_manifested_employer.py"]
+
+
+def test_publisher_creates_checkpoint_table_with_expected_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "catalog.db"
+    store = SqliteAcquisitionStore(db_path)
+    _ensure_publisher_checkpoint_table(store)
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(acquisition_publisher_checkpoints)"
+            ).fetchall()
+        }
+    assert columns == {
+        "source",
+        "source_rowid",
+        "source_watermark",
+        "bootstrap_complete",
+        "last_cycle_id",
+        "last_publication_id",
+        "updated_at",
+    }
+
+    checkpoint = _publisher_checkpoint(store, "linkedin")
+    assert checkpoint["source"] == "linkedin"
+    assert checkpoint["source_rowid"] == 0
+    assert checkpoint["bootstrap_complete"] is False

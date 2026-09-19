@@ -89,14 +89,21 @@ def test_runtime_setup_pins_python_and_installs_all_role_units() -> None:
     assert 'RUNR_API_HOST:-0.0.0.0' in start
 
 
-def test_logs_are_bounded_and_application_target_includes_acquisition_worker() -> None:
+def test_logs_are_bounded_and_application_target_includes_independent_acquisition_timers() -> None:
     journald = _read_unit("runr-journald.conf")
     target = _read_unit("runr.target")
 
     assert "SystemMaxUse=1G" in journald
     assert "RuntimeMaxUse=256M" in journald
     assert "MaxRetentionSec=14day" in journald
-    assert "runr-acquisition-worker.service" in target
+    # The legacy acquisition worker is intentionally outside the target (C6).
+    assert "runr-acquisition-worker.service" not in target
+    for timer in (
+        "runr-acquisition-linkedin.timer",
+        "runr-acquisition-employer.timer",
+        "runr-acquisition-publisher.timer",
+    ):
+        assert timer in target
 
 
 def test_scheduled_backup_unit_is_hardened_non_root_and_uploads_before_prune() -> None:
@@ -163,3 +170,94 @@ def test_acquisition_env_example_declares_backup_configuration_without_secret_dr
     assert "CREEM_" not in example
     assert "TRACKER_GOOGLE_OAUTH_" not in example
     assert "DEEPSEEK_" not in example
+def test_vps_acquisition_units_run_as_dedicated_user_with_hardening() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "User=runr-acquisition" in unit
+        assert "Group=runr-acquisition" in unit
+        assert "UMask=0077" in unit
+        assert "NoNewPrivileges=true" in unit
+        assert "PrivateTmp=true" in unit
+        assert "ProtectSystem=strict" in unit
+        assert "ProtectHome=true" in unit
+        assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" in unit
+        assert "ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups" in unit
+
+
+def test_vps_acquisition_producer_command_lines_and_timer_ownership() -> None:
+    linkedin = _read_unit("runr-acquisition-linkedin.service")
+    employer = _read_unit("runr-acquisition-employer.service")
+    publisher = _read_unit("runr-acquisition-publisher.service")
+
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-source.sh linkedin" in linkedin
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-source.sh employer" in employer
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-publisher.sh" in publisher
+
+    for unit in (linkedin, employer, publisher):
+        assert "PartOf=runr.target" in unit
+        assert "WantedBy=multi-user.target" in unit[-100:]
+
+    timers = {
+        "runr-acquisition-linkedin.timer": ("Unit=runr-acquisition-linkedin.service", "OnCalendar=*-*-* 02:00:00"),
+        "runr-acquisition-employer.timer": ("Unit=runr-acquisition-employer.service", "OnCalendar=*-*-* 02:30:00"),
+        "runr-acquisition-publisher.timer": ("Unit=runr-acquisition-publisher.service", "OnCalendar=*-*-* 04:00:00"),
+    }
+    for name, (unit_line, schedule) in timers.items():
+        timer = _read_unit(name)
+        assert unit_line in timer
+        assert schedule in timer
+        assert "Persistent=true" in timer
+        assert "RandomizedDelaySec=300" in timer
+
+
+def test_vps_acquisition_units_load_acquisition_env_boundary() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "EnvironmentFile=/opt/runr/.env.acquisition" in unit
+        assert "EnvironmentFile=/opt/runr/.env\n" not in unit
+        assert "CLERK_" not in unit
+        assert "CREEM_" not in unit
+
+    linkedin = _read_unit("runr-acquisition-linkedin.service")
+    employer = _read_unit("runr-acquisition-employer.service")
+    assert "EnvironmentFile=-/opt/runr/.env.acquisition.provider" in linkedin
+    assert "EnvironmentFile=-/opt/runr/.env.acquisition.provider" in employer
+
+    # Live-network override is hard-coded in the producer units (C4); the
+    # .env.acquisition default remains the fail-closed value.
+    assert "Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true" in linkedin
+    assert "Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true" in employer
+
+
+def test_vps_acquisition_env_intends_turso_and_source_version_placeholder() -> None:
+    example = (ROOT / "deploy" / "acquisition.env.example").read_text(encoding="utf-8")
+    assert "DATABASE_BACKEND=turso" in example
+    assert "TURSO_DATABASE_URL=replace-with-secret-store-reference" in example
+    assert "TURSO_AUTH_TOKEN=replace-with-secret-store-reference" in example
+    assert "RUNR_SOURCE_VERSION=replace-with-deployed-git-sha" in example
+
+
+def test_render_customer_plane_intends_turso_and_release_branch() -> None:
+    render = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    # Each Render service must target the same release branch/contract.
+    assert render.count("key: RUNR_RELEASE_BRANCH") == 3
+    assert render.count("value: deployment/render-turso-r2") == 3
+    assert render.count("key: RUNR_RELEASE_CONTRACT_VERSION") == 3
+    assert render.count("value: runr-contract-v1") == 3
+    # Both API and worker bind to the shared Turso catalog.
+    assert render.count("key: DATABASE_BACKEND") == 2
+    assert render.count("value: turso") == 2
+    assert render.count("key: RUNR_STORAGE_BACKEND") == 2
+    assert render.count("value: sqlite") == 2
+    # Acquisition must never run on Render.
+    assert render.count('RUNR_ACQUISITION_LIVE_NETWORK_ENABLED\n        value: "false"') == 2
+    assert render.count('RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY\n        value: "false"') == 2
+    assert render.count('RUNR_COMPANY_ENRICHMENT_ENABLED\n        value: "0"') == 2
