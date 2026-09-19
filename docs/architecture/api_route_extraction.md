@@ -4,6 +4,9 @@ Status: active agent context
 
 Date: 2026-05-31
 
+For the current registered API surface and retired-feature status, see the
+[WS-1 backend API record](../reverse-engineering/01-architecture/backend-api.md).
+
 `backend/api/server.py` is still the compatibility host for the HTTP server, CORS, auth resolution, body parsing helpers, and shared route helper functions. Route bodies live in `backend/api/routes/` by domain.
 
 ## Current Foundation
@@ -11,7 +14,7 @@ Date: 2026-05-31
 - `backend/api/routes/registry.py` owns `RouteRegistry`, `ApiRoute`, and `ApiRouteContext`.
 - `backend/api/routes/__init__.py` builds the registry and is the only place that wires domain route modules together.
 - `backend/api/routes/system.py` owns public GET `/` and `/health`.
-- `backend/api/routes/admin.py` owns admin, billing, settings, analytics, users, secrets, auth/me, and webhooks.
+- `backend/api/routes/admin.py` owns customer billing, ScrapeOps usage, settings, account deletion, auth/me, and Clerk/Creem webhooks. Despite its historical filename, it does not register the retired admin dashboard, analytics, users, tokens, or secrets surfaces.
 - `backend/api/routes/documents.py` owns documents, uploads, exports, CV preview, and ATS export gate.
 - `backend/api/routes/tracker.py` owns tracker, referrals, Gmail/Google OAuth, outreach, rejected jobs, and people discovery.
 - `backend/api/routes/workspace.py` owns workspaces, workspace builder, templates, runs, run resources, and workers.

@@ -1,6 +1,9 @@
 # Production runtime
 
-The production image uses Python 3.12 and includes the runtime dependencies needed by the current application:
+For the authoritative deployment topology and release-state record, see the
+[WS-7 release-process record](../reverse-engineering/02-deployment/release-process-and-production-records.md).
+
+The production API and worker images use Python 3.12 and include the runtime dependencies needed by the current application:
 
 - Node.js and the locked frontend packages
 - Playwright Chromium and its Linux libraries
@@ -8,20 +11,24 @@ The production image uses Python 3.12 and includes the runtime dependencies need
 - LibreOffice Writer for headless document conversion
 - Python packages from `requirements-linux.txt`
 
-The same image is used for the API, continuous worker, and API-owned pre-deploy
-migrations. This prevents dependency drift between service roles.
+The API and worker use separate production images (`Dockerfile.api` and
+`Dockerfile.worker`) with overlapping but role-specific dependencies. The API
+image runs the API-owned pre-deploy migrations; the worker image runs the
+continuous worker. Keep the two image build inputs aligned when shared runtime
+dependencies change.
 
-## Build and inspect the image
+## Build and inspect the images
 
 ```bash
-docker build -t runr:local .
-docker run --rm runr:local node --version
-docker run --rm runr:local python --version
-docker run --rm runr:local tesseract --version
-docker run --rm runr:local libreoffice --version
+docker build -f Dockerfile.api -t runr-api:local .
+docker build -f Dockerfile.worker -t runr-worker:local .
+docker run --rm runr-api:local node --version
+docker run --rm runr-api:local python --version
+docker run --rm runr-api:local tesseract --version
+docker run --rm runr-api:local libreoffice --version
 ```
 
-The image runs as the unprivileged `runr` user. Runtime files under `.backend_data` are ephemeral in Render; production data must therefore use Turso, and persistent artifacts must use object storage rather than the container filesystem.
+Each image runs as the unprivileged `runr` user. Runtime files under `.backend_data` are ephemeral in Render; production data must therefore use Turso, and persistent artifacts must use object storage rather than the container filesystem.
 
 ## Runtime roles
 
@@ -69,7 +76,7 @@ After configuring the development environment:
 docker run --rm \
   -p 8000:8000 \
   --env-file dev.env \
-  runr:local ./deploy/start.sh api
+  runr-api:local ./deploy/start.sh api
 ```
 
 Then verify:

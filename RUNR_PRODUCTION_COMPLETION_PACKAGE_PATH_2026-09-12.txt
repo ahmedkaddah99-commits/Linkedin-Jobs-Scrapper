@@ -1,0 +1,6 @@
+ZIP:
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\RUNR_PRODUCTION_COMPLETION_PACKAGE_2026-09-12.zip
+REPORT:
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\docs\reports\RUNR_PRODUCTION_COMPLETION_REPORT_2026-09-12.md
+SHA256:
+AE6117F5F94AB4F69C150398B41BB6FB67574B74AE3BF3DA927231E9FCA68B0D

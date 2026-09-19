@@ -134,8 +134,45 @@ def test_runner_checkpoints_scope_valid_partial_work_on_capacity_stop(tmp_path: 
     assert checkpoint["commit_sha"] == result.commit_sha
 
 
+def test_runner_blocks_commit_until_external_verification_is_supplied(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    store = StateStore(tmp_path / "state.db")
+    job_id = JobQueue(store).enqueue("implement", "linear-1", "fingerprint-1")
+    request = _request(job_id)
+    request = TicketExecutionRequest(
+        **{
+            **request.__dict__,
+            "scope": ScopeManifest(
+                **{
+                    **request.scope.__dict__,
+                    "external_verification": ("systemd-analyze verify runr.target",),
+                }
+            ),
+        }
+    )
+    runner = ImplementationRunner(
+        GitWorktreeManager(repo, tmp_path / "worktrees"),
+        AttemptRecorder(store),
+        tmp_path,
+        test_runner=lambda *_: True,
+    )
+
+    result = runner.run(request, WritingProvider("allowed/result.txt"))
+
+    assert result.status == "external_verification_required"
+    assert result.commit_sha is None
+    prompt = (tmp_path / "prompts" / f"{job_id}.md").read_text(encoding="utf-8")
+    assert "External verification" in prompt
+    assert "systemd-analyze verify runr.target" in prompt
+    with store.connect() as connection:
+        checkpoint = connection.execute("SELECT * FROM checkpoints WHERE job_id=?", (job_id,)).fetchone()
+    assert checkpoint["phase"] == "external_verification_required"
+
+
 def test_required_tests_use_argument_lists_and_reject_unapproved_executables(tmp_path: Path) -> None:
     passing = f'"{sys.executable}" -c "print(123)"'
+    markdown_wrapped = f'`"{sys.executable}" -c "print(123)"`'
 
     assert run_required_tests(tmp_path, (passing,), python_executable=Path(sys.executable)) is True
+    assert run_required_tests(tmp_path, (markdown_wrapped,), python_executable=Path(sys.executable)) is True
     assert run_required_tests(tmp_path, ("curl https://example.com",), python_executable=Path(sys.executable)) is False

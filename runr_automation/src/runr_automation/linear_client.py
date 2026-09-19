@@ -72,7 +72,7 @@ class LinearGraphQLClient:
         self, updated_after: str | None, *, cursor: str | None = None, page_size: int = 50
     ) -> IssuePage:
         query = """
-        query Issues($teamId: ID!, $after: String, $first: Int!, $updatedAfter: DateTime) {
+        query Issues($teamId: ID!, $after: String, $first: Int!, $updatedAfter: DateTimeOrDuration) {
           issues(
             filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $updatedAfter } }
             first: $first
@@ -88,15 +88,20 @@ class LinearGraphQLClient:
           }
         }
         """
+        variables = {
+            "teamId": self.team_id,
+            "after": cursor,
+            "first": page_size,
+        }
+        if updated_after is None:
+            query = query.replace(", $updatedAfter: DateTimeOrDuration", "")
+            query = query.replace(", updatedAt: { gte: $updatedAfter }", "")
+        else:
+            variables["updatedAfter"] = updated_after
         payload = self._post(
             {
                 "query": query,
-                "variables": {
-                    "teamId": self.team_id,
-                    "after": cursor,
-                    "first": page_size,
-                    "updatedAfter": updated_after,
-                },
+                "variables": variables,
             }
         )
         issues = tuple(_remote_issue(node) for node in payload["data"]["issues"]["nodes"])

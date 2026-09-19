@@ -1,5 +1,8 @@
 # RC-018 worker roles
 
+For the authoritative worker roles and current queue boundaries, see the
+[WS-2 workers/orchestration record](reverse-engineering/01-architecture/backend-workers-and-orchestration.md).
+
 Target branch: `deployment/render-turso-r2`
 
 The shared worker entrypoint now requires an explicit workload boundary. The
@@ -7,10 +10,10 @@ safe default is `customer`; acquisition is opt-in.
 
 | Role | Allowed task family | Claims/executes | Does not enter |
 | --- | --- | --- | --- |
-| `customer` | `customer` | personalized intelligence and queued customer runs, including CV/document workflows | scheduled acquisition, company enrichment, admin imports |
-| `acquisition` | `acquisition` | admin imports, scheduled LinkedIn/employer acquisition, company enrichment | personalized intelligence and queued customer runs |
+| `customer` | `customer` | personalized intelligence and queued customer runs, including CV/document workflows | scheduled acquisition, company enrichment |
+| `acquisition` | `acquisition` | scheduled LinkedIn/employer acquisition, company enrichment | personalized intelligence and queued customer runs |
 
-Role checks happen before a queue claim. The acquisition import and customer
+Role checks happen before a queue claim. The acquisition and customer
 intelligence stores reject a mismatched role without changing queue state, and
 the run lifecycle refuses a non-customer claim. This keeps a mixed queue safe
 even when both processes poll the same database.
@@ -35,7 +38,7 @@ customer workers. They no longer run acquisition work implicitly. An
 acquisition process must set both a unique identity and the role explicitly:
 
 ```text
-WORKER_ID=render_acquisition_worker WORKER_ROLE=acquisition deploy/start.sh worker
+WORKER_ID=render_acquisition_worker WORKER_ROLE=acquisition deploy/start.sh acquisition
 ```
 
 The current Render service is explicitly configured for the customer role.

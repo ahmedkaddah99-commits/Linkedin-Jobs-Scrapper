@@ -1,5 +1,8 @@
 # Render deployment
 
+For the current deployment topology, release evidence, and recorded-versus-live
+state distinction, see the [WS-7 release-process record](../reverse-engineering/02-deployment/release-process-and-production-records.md).
+
 `render.yaml` defines three services:
 
 | Service | Render type | Plan | Region | Purpose |
@@ -8,8 +11,9 @@
 | `runr-api` | Docker web service | Starter | Frankfurt | Runs the public API without free-tier sleep. |
 | `runr-worker` | Docker background worker | Standard | Frankfurt | Continuously claims and processes queued runs. |
 
-The API and worker use the same Docker image with different role commands. The
-worker is the only deployed queue consumer. Do not also deploy
+The API and worker use separate Docker images (`Dockerfile.api` and
+`Dockerfile.worker`) with role-specific build inputs and commands. The worker is
+the only deployed queue consumer. Do not also deploy
 `runr-process-next`, a queue-claiming cron job, or another worker unless queue
 concurrency has been explicitly designed and tested.
 
@@ -47,11 +51,11 @@ Use this workflow instead:
 2. Codex makes the code changes, runs the relevant checks, commits, and pushes
    the branch to GitHub.
 3. Codex opens a pull request back into `deployment/render-turso-r2`.
-4. Render creates a preview environment for the pull request.
-5. Open the PR's Render deployment status and click **View deployment** for
-   `runr-frontend`. That generated `onrender.com` URL is the temporary URL to
-   test the work.
-6. After the preview is verified, tell Codex to merge the PR. The merge commit
+4. Review the Render deployment status for the service or services configured by
+   the Blueprint. The baseline declares a preview plan only for `runr-worker`;
+   it does not enable automatic previews for the whole Blueprint.
+5. Test any generated preview URL before merging.
+6. After any preview is verified, tell Codex to merge the PR. The merge commit
    lands on `deployment/render-turso-r2`, and Render deploys production from
    that branch automatically.
 
@@ -59,17 +63,14 @@ Codex can run the git/GitHub steps itself from this checkout when the GitHub CLI
 is authenticated: create/switch branch, `git commit`, `git push`, open a PR, and
 merge it after approval. No editor sync button is required for those steps.
 
-Preview environments are enabled in `render.yaml` with `previews.generation:
-automatic`. Render posts preview deployment statuses on pull requests against
-the Blueprint's linked branch. Preview environments are updated on every commit
-to the PR branch and are deleted when the PR is merged or closed.
+Preview behavior is service-specific in the baseline. `render.yaml` does not
+declare `previews.generation: automatic`; it declares `previews: plan: starter`
+only for `runr-worker`. Do not assume that every pull request creates a complete
+frontend/API preview environment.
 
-The frontend keeps using `VITE_API_BASE_URL` in production. In previews, Render
-does not copy `sync: false` values, so `render.yaml` also provides
-`VITE_API_EXTERNAL_HOSTNAME` from the preview API service. The frontend derives
-`https://<preview-api-host>/v1` from that value. The API also receives
-`RENDER_FRONTEND_EXTERNAL_HOSTNAME` from the preview frontend service so CORS
-allows the matching preview frontend origin.
+The frontend uses `VITE_API_BASE_URL` in production. `render.yaml` also provides
+`VITE_API_EXTERNAL_HOSTNAME` from `runr-api`; this service reference does not by
+itself create a frontend preview environment.
 
 Secrets marked `sync: false` are not copied to preview environments. Any preview
 that needs Clerk, Turso, R2, Creem, ScrapeOps, DeepSeek, or Google OAuth must

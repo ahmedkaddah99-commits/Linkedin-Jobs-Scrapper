@@ -5,7 +5,7 @@ description: Use when explicitly starting a Runr Linear issue or sub-issue for i
 
 # Runr ticket start
 
-This skill is explicit-only. It is the only skill that begins implementation. It creates the issue's isolated branch and worktree, moves the issue through implementation, and leaves a complete attempt record whether the attempt passes or fails.
+This skill is explicit-only and is the controller-managed implementation entrypoint. It creates the issue's isolated branch and worktree, moves the issue through implementation, and leaves a complete attempt record whether the attempt passes or fails. For one-ticket execution without the full local automation queue, use `runr-ticket-implementation`; do not invoke both paths for the same issue.
 
 ## Controller eligibility gate
 

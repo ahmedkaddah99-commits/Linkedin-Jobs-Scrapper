@@ -33,6 +33,7 @@ class EngineResult:
     awaiting_approval: int = 0
     waiting: int = 0
     failed: int = 0
+    external_blocked: int = 0
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,7 @@ class ExecutionEngine:
 
     def run_available(self, *, now: datetime | None = None) -> EngineResult:
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        processed = awaiting = waiting = failed = 0
+        processed = awaiting = waiting = failed = external_blocked = 0
         while True:
             job = self.queue.claim(self.owner, now=current, lease_seconds=self.lease_seconds)
             if job is None:
@@ -114,6 +115,9 @@ class ExecutionEngine:
                 if outcome == "awaiting_approval":
                     self.queue.complete(job.job_id, self.owner)
                     awaiting += 1
+                elif outcome == "external_blocked":
+                    self.queue.fail(job.job_id, self.owner)
+                    external_blocked += 1
                 elif outcome == "waiting":
                     self.queue.wait(job.job_id, self.owner, next_retry=current + timedelta(minutes=15))
                     waiting += 1
@@ -123,7 +127,7 @@ class ExecutionEngine:
             except (KeyError, TypeError, ValueError, RuntimeError):
                 self.queue.fail(job.job_id, self.owner)
                 failed += 1
-        return EngineResult(processed, awaiting, waiting, failed)
+        return EngineResult(processed, awaiting, waiting, failed, external_blocked)
 
     def _issue_context(self, issue_id: str | None) -> IssueContext:
         if issue_id is None:
@@ -144,6 +148,7 @@ class ExecutionEngine:
             allowed_paths=tuple(payload["allowed_paths"]),
             required_reading=tuple(payload.get("required_reading") or ()),
             required_tests=tuple(payload.get("required_tests") or ()),
+            external_verification=tuple(payload.get("external_verification") or ()),
             co_owners=tuple(payload.get("co_owners") or ()),
             repo_root=self.repo_root,
         )
@@ -196,6 +201,8 @@ class ExecutionEngine:
             if result.status == "waiting_for_capacity":
                 self._open_circuit(provider, now, result.error_kind.value if result.error_kind else "capacity")
                 continue
+            if result.status == "external_verification_required":
+                return "external_blocked"
             if result.status != "implemented" or not result.commit_sha:
                 return "failed"
             scope_fingerprint = hashlib.sha256(repr(context.scope).encode()).hexdigest()

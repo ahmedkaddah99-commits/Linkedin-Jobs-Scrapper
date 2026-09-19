@@ -1,0 +1,322 @@
+{
+  "generated_at": "2026-09-11T10:35:39.152096+00:00",
+  "database_backend": "libsql",
+  "validator_contract": "job_publication_completeness_v1",
+  "decision": "CURRENT_HEAD_PUBLISHABLE_BUT_CATALOG_INCOMPLETE",
+  "head": {
+    "head_id": 1,
+    "publication_id": "acq_publication_5ff941b21ea84b78af39a4a5cb508b3c",
+    "updated_at": "2026-09-11T02:04:07.122458+00:00",
+    "job_count": 47,
+    "status": "valid",
+    "cycle_id": "acq_cycle_818f17433ea047c6b2c86f949cdbdd58",
+    "published_at": "2026-09-10T22:05:38.006591+00:00",
+    "valid_until": "",
+    "policy_version": "publication_policy_v2",
+    "rule_version": "",
+    "origin": "scheduled"
+  },
+  "latest_cycle": {
+    "cycle_id": "acq_cycle_818f17433ea047c6b2c86f949cdbdd58",
+    "window_key": "producer:292c0df8389139f0384e4242",
+    "status": "degraded",
+    "lease_owner": "",
+    "lease_expires_at": "",
+    "scheduled_at": "2026-09-10T21:23:16.764940+00:00",
+    "started_at": "2026-09-11T02:03:56.327961+00:00",
+    "completed_at": "2026-09-11T02:04:07.720211+00:00",
+    "forecast_requests": 0,
+    "forecast_credits": 0,
+    "reserved_requests": 0,
+    "reserved_credits": 0,
+    "actual_requests": 0,
+    "actual_credits": 0,
+    "jobs_observed": 0,
+    "jobs_new": 0,
+    "jobs_updated": 0,
+    "jobs_unchanged": 0,
+    "jobs_closed": 0,
+    "jobs_rejected": 0,
+    "jobs_duplicates": 0,
+    "jobs_published": 47,
+    "publication_id": "acq_publication_5ff941b21ea84b78af39a4a5cb508b3c",
+    "error_code": "partial_source_coverage",
+    "error_message": "One or more source companies lacked closure-safe completeness evidence.",
+    "created_at": "2026-09-10T21:23:16.765011+00:00",
+    "updated_at": "2026-09-11T02:04:07.720211+00:00",
+    "manifest_version": "6bfcba5c01985402d2d1278e8b726baa8e4ac3332e6527be40bc433ab663e447",
+    "scope_key": "producer_state",
+    "lease_token": ""
+  },
+  "counts": {
+    "canonical_companies": 1428,
+    "canonical_jobs": 299,
+    "canonical_company_profiles": 1426,
+    "canonical_company_urls": 1858,
+    "job_source_observations": 3669,
+    "job_posting_versions": 1105,
+    "acquisition_targets": 7421,
+    "acquisition_tasks": 7583,
+    "acquisition_publications": 14,
+    "acquisition_publication_jobs": 1754,
+    "acquisition_job_rejections": 142
+  },
+  "raw_field_gaps": {
+    "canonical_jobs": {
+      "canonical_job_id": 0,
+      "company_id": 0,
+      "identity_key": 0,
+      "title": 0,
+      "location": 22,
+      "canonical_url": 0,
+      "lifecycle_state": 66,
+      "last_verified_at": 0,
+      "current_version_id": 0,
+      "identity_signature": 9,
+      "source_updated_at": 186
+    },
+    "canonical_companies": {
+      "company_id": 0,
+      "canonical_name": 0,
+      "entity_kind": 0,
+      "provenance_url": 2
+    },
+    "canonical_company_profiles": {
+      "company_id": 0,
+      "profile_json": 0,
+      "logo_object_key": 525,
+      "logo_source_url": 525,
+      "logo_verified_at": 525,
+      "profile_status": 0
+    },
+    "canonical_company_urls": {
+      "company_id": 0,
+      "url_type": 0,
+      "url": 0,
+      "canonical_url": 0,
+      "validation_status": 0,
+      "selected_primary": 0
+    },
+    "job_posting_versions": {
+      "version_id": 0,
+      "canonical_job_id": 0,
+      "version_number": 0,
+      "content_hash": 0,
+      "title": 0,
+      "description": 136,
+      "location": 54,
+      "apply_url": 411,
+      "source_observation_id": 0,
+      "payload_json": 0
+    },
+    "job_source_observations": {
+      "observation_id": 0,
+      "canonical_job_id": 0,
+      "target_id": 0,
+      "cycle_id": 0,
+      "task_id": 0,
+      "external_job_id": 0,
+      "original_url": 0,
+      "apply_url": 0,
+      "source_ats": 5,
+      "content_hash": 0,
+      "payload_json": 0,
+      "observed_at": 0,
+      "source_display_name": 585,
+      "source_connector": 585,
+      "application_url": 3011,
+      "application_classification": 613
+    }
+  },
+  "job_completeness": {
+    "current_head": {
+      "total": 47,
+      "publishable": 47,
+      "status_counts": {
+        "publishable_complete": 47
+      },
+      "reason_counts": {}
+    },
+    "all_canonical_jobs": {
+      "total": 299,
+      "publishable": 93,
+      "status_counts": {
+        "publishable_complete": 93,
+        "not_publishable_invalid": 170,
+        "stale_or_closed": 35,
+        "not_publishable_missing_required": 1
+      },
+      "reason_counts": {
+        "listing_fallback_application_url": 186,
+        "missing_description": 46,
+        "missing_location": 22,
+        "closed_lifecycle_state": 35,
+        "insufficient_description": 6
+      },
+      "field_problem_counts": {
+        "application_url": 186,
+        "description": 52,
+        "location_or_remote": 22,
+        "lifecycle_state": 35
+      }
+    }
+  },
+  "company_readiness": {
+    "total": 1428,
+    "canonical_ready": 1428,
+    "presentation_ready": 1379,
+    "enrichment_complete": 893,
+    "head_total": 2,
+    "head_presentation_ready": 2,
+    "blocker_counts": {
+      "missing_selected_primary_url": 49,
+      "missing_verified_logo": 525,
+      "missing_company_profile": 2
+    }
+  },
+  "target_states": [
+    {
+      "maturity_state": "proven",
+      "enabled": 1,
+      "publication_enabled": 1,
+      "quarantined": 0,
+      "count": 7407
+    },
+    {
+      "maturity_state": "candidate",
+      "enabled": 1,
+      "publication_enabled": 1,
+      "quarantined": 0,
+      "count": 7
+    },
+    {
+      "maturity_state": "unproven",
+      "enabled": 1,
+      "publication_enabled": 1,
+      "quarantined": 0,
+      "count": 4
+    },
+    {
+      "maturity_state": "quarantined",
+      "enabled": 0,
+      "publication_enabled": 0,
+      "quarantined": 1,
+      "count": 3
+    }
+  ],
+  "task_states": [
+    {
+      "status": "pending",
+      "count": 7369
+    },
+    {
+      "status": "completed",
+      "count": 96
+    },
+    {
+      "status": "partial",
+      "count": 39
+    },
+    {
+      "status": "incomplete",
+      "count": 35
+    },
+    {
+      "status": "failed",
+      "count": 21
+    },
+    {
+      "status": "reconciled_unknown",
+      "count": 14
+    },
+    {
+      "status": "blocked",
+      "count": 5
+    },
+    {
+      "status": "running",
+      "count": 4
+    }
+  ],
+  "observation_application_classifications": [
+    {
+      "classification": "employer_job_detail",
+      "count": 1489
+    },
+    {
+      "classification": "ats_job_detail",
+      "count": 909
+    },
+    {
+      "classification": "ats_application",
+      "count": 617
+    },
+    {
+      "classification": "unknown",
+      "count": 613
+    },
+    {
+      "classification": "employer_application",
+      "count": 41
+    }
+  ],
+  "observation_connectors": [
+    {
+      "connector": "greenhouse",
+      "count": 1483
+    },
+    {
+      "connector": "lever",
+      "count": 617
+    },
+    {
+      "connector": "",
+      "count": 585
+    },
+    {
+      "connector": "personio",
+      "count": 425
+    },
+    {
+      "connector": "smartrecruiters",
+      "count": 170
+    },
+    {
+      "connector": "workday",
+      "count": 160
+    },
+    {
+      "connector": "recruitee",
+      "count": 154
+    },
+    {
+      "connector": "generic_jsonld",
+      "count": 47
+    },
+    {
+      "connector": "linkedin",
+      "count": 22
+    },
+    {
+      "connector": "career_site",
+      "count": 5
+    },
+    {
+      "connector": "softgarden",
+      "count": 1
+    }
+  ],
+  "paths": {
+    "collector_root": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper",
+    "runr_root": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview",
+    "env_file_used_redacted": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\user_config\\.env",
+    "migration_transcript": "C:\\Users\\ahmed\\.codex\\attachments\\0383ee05-fb65-451e-9a36-ed608b63fda5\\pasted-text.txt",
+    "runr_completeness_contract": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview\\docs\\JOB_PUBLICATION_COMPLETENESS_CONTRACT.md",
+    "runr_completeness_validator": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview\\backend\\acquisition\\job_publication_completeness.py",
+    "audit_script": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\scripts\\audit_runr_data_readiness.py",
+    "json_report": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\data\\audit\\runr_readiness\\2026-09-11\\audit_summary.json",
+    "markdown_report": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\data\\audit\\runr_readiness\\2026-09-11\\audit_report.md",
+    "jobs_queue": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\data\\audit\\runr_readiness\\2026-09-11\\jobs_readiness.csv",
+    "companies_queue": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\data\\audit\\runr_readiness\\2026-09-11\\companies_readiness.csv"
+  }
+}

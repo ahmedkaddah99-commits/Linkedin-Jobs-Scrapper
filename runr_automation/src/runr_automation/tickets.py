@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from collections.abc import Mapping
 from typing import Any
 
@@ -11,16 +12,20 @@ _ALIASES = {
     "primary subsystem": "subsystem",
     "subsystem": "subsystem",
     "allowed paths": "allowed_paths",
+    "exact allowed paths": "allowed_paths",
     "source sha and exact source paths": "allowed_paths",
     "minimal required reading": "required_reading",
     "required reading": "required_reading",
     "acceptance criteria": "acceptance_criteria",
     "safe local verification commands": "required_tests",
     "safe verification commands": "required_tests",
+    "safe verification": "required_tests",
     "required tests": "required_tests",
     "co owners": "co_owners",
     "co owner subsystem ids": "co_owners",
 }
+
+_EXTERNAL_VERIFICATION_EXECUTABLES = {"systemd-analyze"}
 
 
 def _heading(value: str) -> str:
@@ -30,18 +35,94 @@ def _heading(value: str) -> str:
 def _sections(description: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
+    bold_section = False
     for raw in description.splitlines():
         line = raw.strip()
         if line.startswith("#"):
             current = _ALIASES.get(_heading(line.lstrip("#").strip()))
+            bold_section = False
             if current:
                 sections.setdefault(current, [])
             continue
+        bold = re.fullmatch(r"\*\*(?P<label>.+?):\*\*(?:\s*(?P<value>.*))?", line)
+        if bold:
+            current = _ALIASES.get(_heading(bold.group("label")))
+            bold_section = True
+            if current:
+                sections.setdefault(current, [])
+                _append_section_value(
+                    sections,
+                    current,
+                    bold.group("value") or "",
+                    normalize_bold_co_owners=True,
+                )
+            continue
         if current and line:
-            value = re.sub(r"^[-*]\s+", "", line).strip()
-            if value and value.casefold() not in {"none", "n/a"}:
-                sections[current].append(value)
+            _append_section_value(
+                sections,
+                current,
+                line,
+                normalize_bold_co_owners=bold_section,
+            )
     return sections
+
+
+def _append_section_value(
+    sections: dict[str, list[str]],
+    current: str,
+    raw_value: str,
+    *,
+    normalize_bold_co_owners: bool,
+) -> None:
+    value = re.sub(r"^[-*]\s+", "", raw_value).strip()
+    if not value or value.casefold() in {"none", "n/a"}:
+        return
+    values = re.split(r"\s*;\s*", value) if current in {
+        "allowed_paths",
+        "required_reading",
+        "co_owners",
+    } else [value]
+    for item in values:
+        item = item.strip()
+        if not item:
+            continue
+        if current == "co_owners" and normalize_bold_co_owners:
+            match = re.match(r"^WS[- ]?(\d+)\b", item, re.IGNORECASE)
+            if not match:
+                continue
+            item = f"WS-{int(match.group(1)):02d}"
+        sections[current].append(item)
+
+
+def strip_markdown_wrapper(value: str) -> str:
+    cleaned = value.strip()
+    while len(cleaned) >= 2 and cleaned[0] == cleaned[-1] == "`":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+def _command_name(command: str) -> str | None:
+    try:
+        args = shlex.split(command, posix=False)
+    except ValueError:
+        return None
+    if not args:
+        return None
+    return args[0].replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+
+
+def _partition_verification_commands(values: list[str]) -> tuple[list[str], list[str]]:
+    local: list[str] = []
+    external: list[str] = []
+    for value in values:
+        command = strip_markdown_wrapper(value)
+        if not command:
+            continue
+        if _command_name(command) in _EXTERNAL_VERIFICATION_EXECUTABLES:
+            external.append(command)
+        else:
+            local.append(command)
+    return local, external
 
 
 def _list(value: Any) -> list[str]:
@@ -75,6 +156,12 @@ def normalize_ticket_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     elif isinstance(acceptance, (list, tuple)):
         acceptance = "\n".join(str(item) for item in acceptance)
     subsystem = payload.get("subsystem") or next(iter(parsed.get("subsystem", [])), None) or _subsystem_label(payload)
+    raw_verification = _list(payload.get("required_tests")) or parsed.get("required_tests", [])
+    required_tests, discovered_external = _partition_verification_commands(raw_verification)
+    explicit_external = [
+        strip_markdown_wrapper(value) for value in _list(payload.get("external_verification"))
+    ]
+    external_verification = list(dict.fromkeys([*explicit_external, *discovered_external]))
     return {
         **dict(payload),
         "title": str(payload.get("title") or "").strip(),
@@ -82,6 +169,7 @@ def normalize_ticket_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "subsystem": str(subsystem).strip() if subsystem else None,
         "allowed_paths": _list(payload.get("allowed_paths")) or parsed.get("allowed_paths", []),
         "required_reading": _list(payload.get("required_reading")) or parsed.get("required_reading", []),
-        "required_tests": _list(payload.get("required_tests")) or parsed.get("required_tests", []),
+        "required_tests": required_tests,
+        "external_verification": external_verification,
         "co_owners": _list(payload.get("co_owners")) or parsed.get("co_owners", []),
     }

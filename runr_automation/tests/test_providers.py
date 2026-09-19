@@ -65,6 +65,27 @@ def test_local_cli_provider_materializes_paths_uses_stdin_and_extracts_session(t
     assert result.session_id == "session-123"
 
 
+def test_local_cli_provider_decodes_utf8_provider_output(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("bounded prompt", encoding="utf-8")
+    script = tmp_path / "provider.py"
+    script.write_text(
+        "import sys; sys.stdout.buffer.write(bytes.fromhex('72696768742071756f74653a20e2809d0a'))",
+        encoding="utf-8",
+    )
+    provider = LocalCLIProvider(
+        "codex",
+        sys.executable,
+        (sys.executable, str(script), "-"),
+        model="test-model",
+    )
+
+    result = provider.run(prompt, cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "right quote: ”" in result.output
+
+
 def test_local_cli_provider_turns_timeout_into_a_retryable_result(tmp_path: Path, monkeypatch) -> None:
     prompt = tmp_path / "prompt.md"
     prompt.write_text("bounded prompt", encoding="utf-8")

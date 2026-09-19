@@ -107,6 +107,7 @@ class ScopeManifest:
     denied_roots: tuple[str, ...]
     required_tests: tuple[str, ...]
     content_hashes: tuple[tuple[str, str], ...] = ()
+    external_verification: tuple[str, ...] = ()
 
     def validate_write_paths(self, changed_paths: Iterable[str]) -> None:
         invalid = [
@@ -135,6 +136,7 @@ def build_scope_manifest(
     allowed_paths: Iterable[str],
     required_reading: Iterable[str] = (),
     required_tests: Iterable[str] = (),
+    external_verification: Iterable[str] = (),
     co_owners: Iterable[str] = (),
     repo_root: str | Path | None = None,
 ) -> ScopeManifest:
@@ -195,6 +197,7 @@ def build_scope_manifest(
         denied_roots=denied_roots,
         required_tests=tuple(required_tests),
         content_hashes=tuple(content_hashes),
+        external_verification=tuple(external_verification),
     )
 
 

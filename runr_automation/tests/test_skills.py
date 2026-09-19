@@ -42,3 +42,20 @@ def test_existing_lifecycle_skills_use_controller_scope_plan_and_approvals() -> 
         text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         for phrase in phrases:
             assert phrase in text, f"{name} is missing {phrase}"
+
+
+def test_independent_implementation_skill_is_single_issue_and_stops_at_review() -> None:
+    text = (ROOT / "skills" / "runr-ticket-implementation" / "SKILL.md").read_text(encoding="utf-8")
+    assert text.startswith("---\nname: runr-ticket-implementation\n")
+    for phrase in (
+        "one exact Linear issue",
+        "dedicated worktree",
+        "scope manifest",
+        "Allowed paths",
+        "attempt log",
+        "In Review",
+        "never merge",
+        "never deploy",
+        "shared checkout",
+    ):
+        assert phrase in text, f"runr-ticket-implementation is missing {phrase}"

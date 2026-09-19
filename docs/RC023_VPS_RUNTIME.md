@@ -1,5 +1,8 @@
 # RC-023 VPS runtime preparation
 
+For the authoritative VPS/runtime topology and release-state record, see the
+[WS-7 release-process record](reverse-engineering/02-deployment/release-process-and-production-records.md).
+
 Status: offline preparation complete on the B worktree; VPS acceptance is
 pending an authorized host and C's accepted runtime/release integration tip.
 This document does not claim a purchased machine, a deployed service, a port
@@ -47,7 +50,9 @@ benchmark before production use.
   hardened systemd settings.
 - `deploy/systemd/runr-frontend.service` — non-root static server with no
   customer environment file.
-- `deploy/systemd/runr.target` — includes the separate acquisition worker.
+- `deploy/systemd/runr.target` — groups the API, customer worker, frontend, and
+  acquisition timers; the separate acquisition worker service is not a member
+  of this target.
 - `deploy/systemd/runr-journald.conf` — bounded system/runtime journal usage
   and 14-day retention.
 - `deploy/setup.sh` — requires Python 3.12.7, creates the `runr` user and

@@ -7,6 +7,7 @@ Canonical skills owned by the local controller:
 - `runr-ticket-research`
 - `runr-parallelization-plan`
 - `runr-ticket-start`
+- `runr-ticket-implementation`
 - `runr-ticket-merge-predeployment`
 - `runr-ticket-batch-merge-predeployment`
 - `runr-ticket-merge-deployment`

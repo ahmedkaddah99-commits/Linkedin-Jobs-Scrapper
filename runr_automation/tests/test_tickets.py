@@ -50,3 +50,68 @@ def test_structured_fields_override_markdown_and_subsystem_label_fills_missing_v
     assert normalized["allowed_paths"] == ["right.txt"]
     assert normalized["acceptance_criteria"] == "Right result"
     assert normalized["subsystem"] == "smoke"
+
+
+def test_linear_bold_metadata_ticket_becomes_executable_fields() -> None:
+    payload = {
+        "title": "Verify live topology",
+        "description": """
+**Primary subsystem:** WS-07 Deployment Release and CI
+**Co-owners:** WS-03 Acquisition; VPS/Render operator
+**Exact allowed paths:** deploy/start.sh; render.yaml; tests/test_topology.py
+**Required reading:** docs/reverse-engineering/02-deployment/render.md; docs/subsystems.yaml
+
+**Acceptance criteria:**
+
+* Capture the release evidence.
+* Capture the database binding evidence.
+
+**Safe verification:**
+
+* .venv\\Scripts\\python.exe -m pytest -q tests/test_topology.py
+""",
+    }
+
+    normalized = normalize_ticket_payload(payload)
+
+    assert normalized["subsystem"] == "WS-07 Deployment Release and CI"
+    assert normalized["co_owners"] == ["WS-03"]
+    assert normalized["allowed_paths"] == [
+        "deploy/start.sh",
+        "render.yaml",
+        "tests/test_topology.py",
+    ]
+    assert normalized["required_reading"] == [
+        "docs/reverse-engineering/02-deployment/render.md",
+        "docs/subsystems.yaml",
+    ]
+    assert normalized["acceptance_criteria"] == (
+        "Capture the release evidence.\nCapture the database binding evidence."
+    )
+    assert normalized["required_tests"] == [
+        ".venv\\Scripts\\python.exe -m pytest -q tests/test_topology.py"
+    ]
+
+
+def test_verification_commands_strip_markdown_wrapping_and_preserve_external_checks() -> None:
+    payload = {
+        "title": "Verify service topology",
+        "description": """
+**Primary subsystem:** WS-07 Deployment Release and CI
+**Exact allowed paths:** deploy/systemd/runr.target
+**Acceptance criteria:**
+* The service topology is verified.
+**Safe verification:**
+* `.venv\\Scripts\\python.exe -m pytest -q tests/test_topology.py`
+* `systemd-analyze verify the acquisition units on the VPS`
+""",
+    }
+
+    normalized = normalize_ticket_payload(payload)
+
+    assert normalized["required_tests"] == [
+        ".venv\\Scripts\\python.exe -m pytest -q tests/test_topology.py"
+    ]
+    assert normalized["external_verification"] == [
+        "systemd-analyze verify the acquisition units on the VPS"
+    ]

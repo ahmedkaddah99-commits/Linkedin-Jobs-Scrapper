@@ -120,6 +120,52 @@ def test_issue_runs_from_poll_to_scoped_commit_and_approval_with_capacity_failov
     assert JobQueue(store).claim("other", now=datetime(2026, 9, 17, 10, 1, tzinfo=timezone.utc), lease_seconds=30) is None
 
 
+def test_external_verification_blocks_approval_after_local_tests_pass(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    data_dir = tmp_path / "runtime"
+    store = StateStore(data_dir / "state.db")
+    issue = RemoteIssue(
+        "linear-external",
+        "RUN-102",
+        "2026-09-17T10:00:00+00:00",
+        "Verify service topology",
+        "structured",
+        lifecycle_state="Ready",
+        payload={
+            "title": "Verify service topology",
+            "acceptance_criteria": "the service topology is verified",
+            "subsystem": "smoke",
+            "allowed_paths": ["allowed/"],
+            "required_tests": ["focused-test"],
+            "external_verification": ["systemd-analyze verify runr.target"],
+        },
+    )
+    poller = Poller(store, FakeLinearClient([issue]))
+    runner = ImplementationRunner(
+        GitWorktreeManager(repo, data_dir / "worktrees"),
+        AttemptRecorder(store),
+        data_dir,
+        test_runner=lambda worktree, tests: tests == ("focused-test",),
+    )
+    engine = ExecutionEngine(
+        store,
+        repo,
+        runner,
+        {"opencode_subscription": SuccessfulProvider()},
+        provider_order=("opencode_subscription",),
+        owner="worker-external",
+    )
+
+    result = ControllerCycle(poller, Reconciler(store), engine).run(
+        now=datetime(2026, 9, 17, 10, tzinfo=timezone.utc)
+    ).engine
+
+    assert result.awaiting_approval == 0
+    assert result.external_blocked == 1
+    with store.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
+
+
 def test_stale_job_is_completed_without_running_provider(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     data_dir = tmp_path / "runtime"

@@ -11,6 +11,7 @@
 subsystems:
   - id: http-api-cli
     workstream: WS-1
+    linear_project: WS-01 HTTP API and CLI
     purpose: >
       HTTP API surface (routes, auth wiring, pagination, error handling) and the
       workspace_runner.py operator CLI that fronts it.
@@ -32,6 +33,7 @@ subsystems:
 
   - id: workers-orchestration
     workstream: WS-2
+    linear_project: WS-02 Workers and Orchestration
     purpose: Worker/orchestration engine, stage adapters, bootstrap, and worker roles (customer, acquisition).
     owned_paths:
       - backend/worker/**
@@ -55,6 +57,7 @@ subsystems:
 
   - id: acquisition
     workstream: WS-3
+    linear_project: WS-03 Acquisition and Collectors
     purpose: >
       Acquisition, collectors, publication, company identity/enrichment. Owns the VPS-side
       producers, the publisher, and the catalog write path (not the catalog's schema, which is WS-5).
@@ -104,6 +107,7 @@ subsystems:
 
   - id: application-services
     workstream: WS-4
+    linear_project: WS-04 Application Services
     purpose: >
       Customer-facing application services: personalized jobs, tailored documents, career
       profiles/evidence, Assisted Apply preparation (not the extension itself), quotas, tracker sync.
@@ -139,6 +143,7 @@ subsystems:
 
   - id: data-domain-model
     workstream: WS-5
+    linear_project: WS-05 Data and Domain Model
     purpose: Database connection/migrations, repositories, object storage, config/env schema, domain model.
     owned_paths:
       - backend/database/**
@@ -167,6 +172,7 @@ subsystems:
 
   - id: integrations-security
     workstream: WS-6
+    linear_project: WS-06 Integrations and Security
     purpose: Third-party integrations (Creem billing, ScrapeOps) and security primitives (auth, secrets).
     owned_paths:
       - backend/integrations/**
@@ -188,6 +194,7 @@ subsystems:
 
   - id: deployment-release-ci
     workstream: WS-7
+    linear_project: WS-07 Deployment Release and CI
     purpose: Render/VPS deployment config, Docker images, CI, and the release-process/production-record trail.
     owned_paths:
       - deploy/**
@@ -231,6 +238,7 @@ subsystems:
 
   - id: frontend
     workstream: WS-8
+    linear_project: WS-08 Frontend
     purpose: Customer-facing React web application.
     owned_paths:
       - frontend/**
@@ -251,6 +259,7 @@ subsystems:
 
   - id: assisted-apply-extension
     workstream: WS-9
+    linear_project: WS-09 Assisted Apply Extension
     purpose: Browser extension and shared TypeScript packages for Assisted Apply, enforcing the never-submit boundary.
     owned_paths:
       - apps/**
@@ -275,6 +284,7 @@ subsystems:
 
   - id: backend-test-suite
     workstream: WS-10
+    linear_project: WS-10 Backend Test Suite
     purpose: The backend pytest suite and shared test scaffolding.
     owned_paths:
       - tests/**
@@ -295,6 +305,7 @@ subsystems:
 
   - id: docs-and-repository-artifacts
     workstream: WS-11
+    linear_project: WS-11 Docs and Repository Artifacts
     purpose: Documentation corpus and non-code repository artifact classification (evidence-only; not a product subsystem).
     owned_paths:
       - docs/** # except docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md (WS-7)
@@ -330,6 +341,7 @@ subsystems:
 
   - id: synthesis
     workstream: WS-12
+    linear_project: WS-12 Cross-subsystem Synthesis
     purpose: Read-only cross-subsystem synthesis (this file, docs/INDEX.md, and the 00-overview/data-flow/branch-divergence docs). Owns no source paths.
     owned_paths: []
     exclusions: []
