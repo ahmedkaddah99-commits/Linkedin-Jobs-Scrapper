@@ -251,3 +251,125 @@ def test_request_metrics_do_not_use_job_or_target_counts(tmp_path: Path, monkeyp
 
     assert metrics["requests"] == 0
     assert metrics["request_accounting"]["total_attempts"] == 0
+
+
+class _SharedFakePage:
+    active_lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def __init__(self, navigation_seconds: float = 0.02) -> None:
+        self._navigation_seconds = navigation_seconds
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event: str, callback: object) -> None:
+        self.handlers[event] = callback
+
+    def route(self, _pattern: object, callback: object) -> None:
+        self.route_callback = callback
+
+    def goto(self, *_args: object, **_kwargs: object) -> None:
+        with _SharedFakePage.active_lock:
+            _SharedFakePage.active += 1
+            _SharedFakePage.peak = max(_SharedFakePage.peak, _SharedFakePage.active)
+        threading.Event().wait(self._navigation_seconds)
+        with _SharedFakePage.active_lock:
+            _SharedFakePage.active -= 1
+        self.route_callback(
+            SimpleNamespace(
+                request=SimpleNamespace(url="https://acme.example/careers", resource_type="document"),
+                continue_=lambda: None,
+                abort=lambda: None,
+            )
+        )
+
+    def content(self) -> str:
+        return '<html><h1>Engineer</h1><script type="application/json">{"jobs":[]}</script></html>'
+
+    def wait_for_timeout(self, *_args: object) -> None:
+        return None
+
+
+class _SharedFakeContext:
+    def new_page(self) -> _SharedFakePage:
+        return _SharedFakePage()
+
+
+class _SharedFakeBrowser:
+    def new_context(self) -> _SharedFakeContext:
+        return _SharedFakeContext()
+
+    def close(self) -> None:
+        return None
+
+
+def _shared_playwright_factory(launches: list[int]):
+    class _SharedFakeChromium:
+        def launch(self, **_kwargs: object):
+            launches.append(1)
+            return _SharedFakeBrowser()
+
+    class _SharedFakePlaywright:
+        def __init__(self) -> None:
+            self.chromium = _SharedFakeChromium()
+
+        def __enter__(self) -> "_SharedFakePlaywright":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    return lambda: _SharedFakePlaywright()
+
+
+def test_reusable_browser_launches_one_process_for_many_fetches(monkeypatch) -> None:
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    launches: list[int] = []
+    monkeypatch.setattr(fallbacks, "sync_playwright", _shared_playwright_factory(launches))
+
+    session = fallbacks.ReusableBrowser()
+    try:
+        for _ in range(4):
+            result = session.fetch("https://acme.example/careers", timeout_seconds=5, max_requests=5)
+            assert result["status"] == "completed"
+    finally:
+        session.close()
+
+    assert session.launch_count == 1
+    assert launches == [1]
+    assert not session.is_running()
+
+
+def test_reusable_browser_serializes_concurrent_host_navigations(monkeypatch) -> None:
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    launches: list[int] = []
+    monkeypatch.setattr(fallbacks, "sync_playwright", _shared_playwright_factory(launches))
+
+    session = fallbacks.ReusableBrowser()
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            results.append(
+                session.fetch("https://acme.example/careers", timeout_seconds=5, max_requests=5)
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced via assertions
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+    finally:
+        session.close()
+
+    assert not errors
+    assert len(results) == 4
+    assert all(result["status"] == "completed" for result in results)
+    assert _SharedFakePage.peak == 1
+    assert session.launch_count == 1

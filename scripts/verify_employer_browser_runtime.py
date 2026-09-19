@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.connectors.employer_site_fallbacks import fetch_browser_snapshot
+from backend.connectors.employer_site_fallbacks import ReusableBrowser
 from scripts.master_employer_jobs_catalog import RequestAccounting, TransportGate
 
 
@@ -36,28 +36,43 @@ def main() -> int:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{server.server_port}/careers"
-    accounting = RequestAccounting(max_attempts=4)
+    accounting = RequestAccounting(max_attempts=8)
     gate = TransportGate(accounting=accounting)
     try:
-        result = fetch_browser_snapshot(
-            url, timeout_seconds=10, max_requests=4,
-            request_guard=gate.browser_request,
-            browser_process_guard=gate.browser_process,
-        )
+        session = ReusableBrowser()
+        try:
+            result = session.fetch(
+                url, timeout_seconds=10, max_requests=4,
+                request_guard=gate.browser_request,
+                browser_process_guard=gate.browser_process,
+            )
+            reused_result = session.fetch(
+                url, timeout_seconds=10, max_requests=4,
+                request_guard=gate.browser_request,
+                browser_process_guard=gate.browser_process,
+            )
+        finally:
+            launch_count = session.launch_count
+            session.close()
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+    reused_status = reused_result.get("status")
     jobs = result.get("jobs", [])
     passed = (
         result["status"] == "completed"
+        and reused_status == "completed"
         and any(job.get("job_detail_url") == url.replace("/careers", "/jobs/fixture-1") for job in jobs)
-        and 1 <= accounting.snapshot()["total_attempts"] <= 4
+        and 2 <= accounting.snapshot()["total_attempts"] <= 8
         and result.get("complete_snapshot") is False
+        and launch_count == 1
+        and not session.is_running()
     )
     print(json.dumps({
         "passed": passed, "fixture": "loopback_only", "status": result["status"],
-        "error": result.get("error"), "jobs": len(jobs),
+        "reused_status": reused_status, "error": result.get("error"), "jobs": len(jobs),
+        "browser_launches": launch_count,
         "accounting": accounting.snapshot(), "complete_snapshot": result.get("complete_snapshot"),
     }, sort_keys=True))
     return 0 if passed else 1
