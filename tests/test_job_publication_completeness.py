@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from scripts.audit_job_publication_completeness import run_audit
 from backend.acquisition.job_publication_completeness import (
     REASON_BLOCKED_OR_ERROR_BODY,
     REASON_CLOSED_BEFORE_POSTED_AT,
@@ -68,6 +69,11 @@ def _complete_record(**overrides) -> dict:
             "classification": "employer_application",
             "resolved_url": "https://acme.example-careers.com/jobs/123/apply",
         },
+        "company_logo": "https://acme.example-careers.com/logo.png",
+        "company_enrichment": {"website": "https://acme.example-careers.com", "industry": "software"},
+        "seniority": "mid_level",
+        "employment_type": "full_time",
+        "workplace_arrangement": "on_site",
         "source_timestamps": {"fields": {"source_posted_at": {"value": "2026-09-01T00:00:00+00:00"}}},
     }
     record.update(overrides)
@@ -172,6 +178,31 @@ def test_missing_location_is_missing_required():
 def test_remote_classification_satisfies_location_requirement():
     record = _complete_record(location_raw="", workplace_arrangement="Remote")
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("company_logo", "missing_company_logo"),
+        ("company_enrichment", "missing_company_enrichment"),
+        ("seniority", "missing_seniority"),
+        ("employment_type", "missing_employment_type"),
+        ("workplace_arrangement", "missing_workplace_arrangement"),
+    ],
+)
+def test_required_company_and_job_enrichment_fields_block_publication(field, reason):
+    record = _complete_record()
+    record.pop(field)
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_MISSING_REQUIRED
+    assert reason in _codes(result)
+
+
+def test_salary_and_benefits_are_non_blocking_when_absent():
+    result = validate_job_for_publication(
+        _complete_record(salary=None, benefits=None), now=NOW, company_registry=REGISTRY
+    )
     assert result.status == STATUS_PUBLISHABLE_COMPLETE
 
 
@@ -316,9 +347,13 @@ def test_slash_sentinel_canonical_company_id_is_missing():
     assert REASON_MISSING_CANONICAL_COMPANY_ID in _codes(result)
 
 
-def test_job_detail_url_is_not_an_application_url():
-    # A LinkedIn view URL is useful provenance but does not let a customer apply.
+def test_trusted_linkedin_job_detail_url_is_publishable_when_not_easy_apply_only():
+    # LinkedIn's view URL is the source's trusted job-detail destination. It is
+    # publishable when the record is not marked Easy Apply-only.
     record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="false",
         apply_url="https://www.linkedin.com/jobs/view/4313287713",
         application_url="https://www.linkedin.com/jobs/view/4313287713",
         application_destination={
@@ -328,35 +363,38 @@ def test_job_detail_url_is_not_an_application_url():
         },
     )
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
-    assert result.status == STATUS_INVALID
-    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
+    assert result.publishable
 
 
-def test_linkedin_view_url_is_rejected_even_when_legacy_apply_field_is_used():
+def test_linkedin_view_url_is_trusted_even_when_legacy_apply_field_is_used():
     record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="false",
         apply_url="https://www.linkedin.com/jobs/view/4313287713",
         application_url="https://www.linkedin.com/jobs/view/4313287713",
         application_destination=None,
     )
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
-    assert result.status == STATUS_INVALID
-    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
 
 
-def test_linkedin_subdomain_view_url_is_rejected_as_an_application_destination():
+def test_linkedin_subdomain_view_url_is_trusted_as_a_job_detail_destination():
     record = _complete_record(
         source="linkedin",
         source_ats="linkedin",
+        easy_apply_status="false",
         apply_url="https://jobs.linkedin.com/jobs/view/4313287713",
         application_url="https://jobs.linkedin.com/jobs/view/4313287713",
         application_destination={
-            "destination_type": "dedicated_apply",
-            "resolved_url": "https://jobs.linkedin.com/jobs/view/4313287713",
+            "destination_type": "job_detail_only",
+            "resolved_url": "",
+            "user_facing_url": "https://jobs.linkedin.com/jobs/view/4313287713",
         },
     )
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
-    assert result.status == STATUS_INVALID
-    assert REASON_LISTING_FALLBACK_APPLICATION_URL in _codes(result)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
 
 
 def test_linkedin_easy_apply_true_is_rejected_even_with_an_external_url():
@@ -372,7 +410,7 @@ def test_linkedin_easy_apply_true_is_rejected_even_with_an_external_url():
     assert "easy_apply_not_supported" in _codes(result)
 
 
-def test_linkedin_easy_apply_unknown_is_rejected_as_unresolved_method():
+def test_linkedin_easy_apply_unknown_does_not_block_a_trusted_url():
     record = _complete_record(
         source="linkedin",
         source_ats="linkedin",
@@ -381,8 +419,25 @@ def test_linkedin_easy_apply_unknown_is_rejected_as_unresolved_method():
         application_url="https://jobs.acme.example/4313287713/apply",
     )
     result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
+    assert result.status == STATUS_PUBLISHABLE_COMPLETE
+
+
+def test_linkedin_easy_apply_only_detail_url_is_rejected():
+    record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="true",
+        apply_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_destination={
+            "destination_type": "job_detail_only",
+            "resolved_url": "",
+            "user_facing_url": "https://www.linkedin.com/jobs/view/4313287713",
+        },
+    )
+    result = validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
     assert result.status == STATUS_INVALID
-    assert "unresolved_application_method" in _codes(result)
+    assert "easy_apply_not_supported" in _codes(result)
 
 
 def test_employer_application_method_remains_valid_when_easy_apply_field_is_absent():
@@ -468,6 +523,35 @@ def test_validation_never_mutates_input_record():
     before = dict(record)
     validate_job_for_publication(record, now=NOW, company_registry=REGISTRY)
     assert record == before
+
+
+def test_audit_separates_required_job_and_company_field_coverage():
+    report = run_audit(
+        [_complete_record(company_logo="")],
+        company_registry=REGISTRY,
+        now=NOW,
+    )
+    assert report["required_field_coverage"]["company"]["company_logo"]["missing"] == 1
+    assert report["required_field_coverage"]["job"]["seniority"]["present"] == 1
+
+
+def test_audit_reports_trusted_linkedin_url_relaxation_impact():
+    record = _complete_record(
+        source="linkedin",
+        source_ats="linkedin",
+        easy_apply_status="false",
+        apply_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_url="https://www.linkedin.com/jobs/view/4313287713",
+        application_destination={
+            "destination_type": "job_detail_only",
+            "resolved_url": "",
+            "user_facing_url": "https://www.linkedin.com/jobs/view/4313287713",
+        },
+    )
+    report = run_audit([record], company_registry=REGISTRY, now=NOW)
+    impact = report["policy_impact"]["trusted_linkedin_job_detail_url"]
+    assert impact["additional_publishable_records"] == 1
+    assert impact["additional_publishable_by_source"] == {"linkedin": 1}
 
 
 if __name__ == "__main__":
