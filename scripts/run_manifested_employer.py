@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
@@ -145,6 +147,40 @@ def build_dry_run_receipt(
     return receipt
 
 
+TELEMETRY_SCHEMA_VERSION = "runr.producer.telemetry.v1"
+TELEMETRY_KEYS = frozenset(
+    {"schema_version", "source", "emitted_at", "source_version", "resource_peaks", "reason_code"}
+)
+RESOURCE_PEAK_KEYS = frozenset({"max_rss_bytes", "cpu_seconds"})
+
+
+def _resource_peaks() -> dict[str, float | int | None]:
+    peaks: dict[str, float | int | None] = {"max_rss_bytes": None, "cpu_seconds": None}
+    try:
+        import resource
+    except ImportError:
+        return peaks
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    if usage.ru_maxrss:
+        peaks["max_rss_bytes"] = int(usage.ru_maxrss) * 1024
+    peaks["cpu_seconds"] = round(float(usage.ru_utime) + float(usage.ru_stime), 3)
+    return peaks
+
+
+def _telemetry(source: str) -> dict[str, object]:
+    return {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "source": source,
+        "emitted_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "source_version": os.environ.get("RUNR_SOURCE_VERSION", ""),
+        "resource_peaks": _resource_peaks(),
+        "reason_code": "ok",
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -256,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
                 "pilot_only": pilot_only,
             }
         )
+    metrics["telemetry"] = _telemetry(SOURCE_EMPLOYER)
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

@@ -15,8 +15,22 @@ lock_root="${RUNR_ACQUISITION_LOCK_ROOT:-$state_root/locks}"
 
 mkdir -p "$receipt_root" "$lock_root"
 exec 9>"$lock_root/publisher.lock"
+
+emit_telemetry() {
+  reason="$1"
+  code="$2"
+  started="${3:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  finished="${4:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  commit="$(printf %s "${RUNR_SOURCE_VERSION:-${RUNR_RELEASE_COMMIT:-}}" | tr -d '"\\')"
+  printf '{"schema_version":"runr.producer.telemetry.v1","source":"publisher","reason_code":"%s","exit_code":%s,"started_at":"%s","finished_at":"%s","release_commit":"%s"}\n' \
+    "$reason" "$code" "$started" "$finished" "$commit" \
+    > "$receipt_root/publisher-latest-telemetry.json"
+  cat "$receipt_root/publisher-latest-telemetry.json"
+}
+
 if ! flock -n 9; then
   echo "producer-state publisher is already running" >&2
+  emit_telemetry lock_overlap 75
   exit 75
 fi
 # Read the two producer databases under the same locks used by their
@@ -25,11 +39,13 @@ fi
 exec 7>"$lock_root/linkedin.lock"
 if ! flock -n 7; then
   echo "linkedin acquisition is running; publisher will retry" >&2
+  emit_telemetry lock_overlap 75
   exit 75
 fi
 exec 8>"$lock_root/employer.lock"
 if ! flock -n 8; then
   echo "employer acquisition is running; publisher will retry" >&2
+  emit_telemetry lock_overlap 75
   exit 75
 fi
 
@@ -60,6 +76,8 @@ set +e
 exit_code=$?
 set -e
 if [ "$exit_code" -eq 0 ]; then status="succeeded"; fi
+if [ "$exit_code" -eq 0 ]; then reason="ok"; else reason="failed"; fi
+emit_telemetry "$reason" "$exit_code" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat "$metrics_path"
 "$python_bin" scripts/write_acquisition_receipt.py \
   --source publisher \

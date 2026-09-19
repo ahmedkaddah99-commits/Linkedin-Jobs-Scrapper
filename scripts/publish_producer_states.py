@@ -47,6 +47,85 @@ COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRME
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
 RUNTIME_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
 
+TELEMETRY_SCHEMA_VERSION = "runr.producer.telemetry.v1"
+TELEMETRY_SOURCE_KEYS = frozenset(
+    {
+        "checkpoint_age_seconds",
+        "stale_checkpoint",
+        "publish_lag_seconds",
+        "last_cycle_id",
+        "last_publication_id",
+    }
+)
+DEFAULT_STALE_CHECKPOINT_SECONDS = 86400
+
+
+def _resource_peaks() -> dict[str, float | int | None]:
+    peaks: dict[str, float | int | None] = {"max_rss_bytes": None, "cpu_seconds": None}
+    try:
+        import resource
+    except ImportError:
+        return peaks
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    if usage.ru_maxrss:
+        peaks["max_rss_bytes"] = int(usage.ru_maxrss) * 1024
+    peaks["cpu_seconds"] = round(float(usage.ru_utime) + float(usage.ru_stime), 3)
+    return peaks
+
+
+def _stale_checkpoint_seconds() -> int:
+    raw = os.getenv("RUNR_TELEMETRY_STALE_CHECKPOINT_SECONDS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return DEFAULT_STALE_CHECKPOINT_SECONDS
+        if value > 0:
+            return value
+    return DEFAULT_STALE_CHECKPOINT_SECONDS
+
+
+def _checkpoint_age_seconds(checkpoint: Mapping[str, object], now: str) -> float | None:
+    stamp = _text(checkpoint.get("updated_at"))
+    if not stamp:
+        return None
+    try:
+        updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        reference = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return max(0.0, (reference - updated).total_seconds())
+
+
+def _publisher_telemetry(
+    checkpoints: Mapping[str, Mapping[str, object]], now: str
+) -> dict[str, object]:
+    threshold = _stale_checkpoint_seconds()
+    sources: dict[str, object] = {}
+    for source, checkpoint in sorted(checkpoints.items()):
+        age = _checkpoint_age_seconds(checkpoint, now)
+        sources[source] = {
+            "checkpoint_age_seconds": round(age, 3) if age is not None else None,
+            "stale_checkpoint": age is None or age > threshold,
+            "publish_lag_seconds": (
+                round(age, 3)
+                if age is not None and bool(checkpoint.get("bootstrap_complete"))
+                else None
+            ),
+            "last_cycle_id": _text(checkpoint.get("last_cycle_id")),
+            "last_publication_id": _text(checkpoint.get("last_publication_id")),
+        }
+    return {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "stale_checkpoint_seconds": threshold,
+        "sources": sources,
+        "resource_peaks": _resource_peaks(),
+    }
+
 
 def _text(value: object) -> str:
     return str(value or "").strip()
@@ -893,6 +972,9 @@ def run_delivery(
     employer_checkpoint = _publisher_checkpoint(store, SOURCE_EMPLOYER)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     batch_size = max(25, min(1000, int(os.getenv("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", "250"))))
+    telemetry = _publisher_telemetry(
+        {SOURCE_LINKEDIN: linkedin_checkpoint, SOURCE_EMPLOYER: employer_checkpoint}, now
+    )
     li_connection = _read_only_connection(linkedin_state)
     employer_connection = _read_only_connection(employer_state)
     try:
@@ -958,6 +1040,7 @@ def run_delivery(
             "source_version": source_version,
             "sources": source_metrics,
             "identity_crosswalk": crosswalk_result,
+            "telemetry": telemetry,
         }
 
     changed_by_source = {
@@ -982,6 +1065,7 @@ def run_delivery(
             "source_version": source_version,
             "sources": source_metrics,
             "identity_crosswalk": crosswalk_result,
+            "telemetry": telemetry,
         }
     store.ensure_targets(targets)
     marker = "|".join(
@@ -1006,7 +1090,7 @@ def run_delivery(
         scope_key="producer_state",
     )
     if cycle is None:
-        return {"status": "already_running", "cycle_key": cycle_key}
+        return {"status": "already_running", "cycle_key": cycle_key, "telemetry": telemetry}
     cycle_id = _text(cycle.get("cycle_id"))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)
@@ -1021,6 +1105,7 @@ def run_delivery(
         "unresolved_observations": 0,
         "identity_crosswalk": crosswalk_result,
         "source_row_batch_size": batch_size,
+        "telemetry": telemetry,
     }
     partial = False
     valid_target_ids: list[str] = []

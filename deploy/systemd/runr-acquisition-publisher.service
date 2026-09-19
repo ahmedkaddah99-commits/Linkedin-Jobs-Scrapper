@@ -13,6 +13,7 @@ UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=RUNR_TELEMETRY_STALE_CHECKPOINT_SECONDS=86400
 ExecStart=/opt/runr/deploy/run-acquisition-publisher.sh
 CPUAccounting=true
 CPUQuota=200%

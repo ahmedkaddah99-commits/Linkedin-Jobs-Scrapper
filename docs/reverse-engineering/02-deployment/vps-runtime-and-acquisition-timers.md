@@ -175,6 +175,17 @@ runr-acquisition-worker.service → deploy/start.sh acquisition → workspace_ru
 - It remaps server roots through `RUNR_ACQUISITION_{INPUT,STATE,EXPORT,BACKUP}_ROOT` (L22–27).
 - Roles: `linkedin`, `employer`, `enrichment`, `all` (L157).
 
+## 5a. Producer health telemetry (T39)
+
+Bounded telemetry rides on the existing receipt pipeline; no payload capture, no secrets, no unbounded cardinality.
+
+- `runr.producer.telemetry.v1` — `scripts/run_manifested_linkedin.py`, `scripts/run_manifested_employer.py` and `scripts/publish_producer_states.py` emit a `telemetry` object inside their JSON metrics: fixed allowlisted keys only (`schema_version`, `source`, `emitted_at`, `source_version`, `resource_peaks`, `reason_code`; publisher adds per-source `checkpoint_age_seconds`, `stale_checkpoint`, `publish_lag_seconds`, `last_cycle_id`, `last_publication_id`). `resource_peaks` uses `getrusage` (`max_rss_bytes`, `cpu_seconds`) when `resource` is available, else `null`. The wrappers embed the whole metrics object into the receipt, so telemetry reaches `receipts/<name>-latest.json` without touching `write_acquisition_receipt.py`.
+- `deploy/run-acquisition-source.sh` and `deploy/run-acquisition-publisher.sh` additionally write `receipts/<name>-latest-telemetry.json` with a classified `reason_code`: `ok`, `lock_overlap` (exit 75), `stall_timeout` (124/137), `validation_failed`, `failed`. Values are sanitized (`tr -d '"\'`); the file is overwritten per run.
+- Retention: one latest receipt, metrics and telemetry file per source (`-latest` naming); journald caps remain `SystemMaxUse=1G`, `MaxRetentionSec=14day` (`runr-journald.conf`). Older receipts are not appended.
+- Redaction: telemetry carries counts, IDs, timestamps and resource peaks only — no job payloads, no env values, no provider credentials; `release_commit` comes from `RUNR_SOURCE_VERSION`/`RUNR_RELEASE_COMMIT`.
+- Staleness threshold: `RUNR_TELEMETRY_STALE_CHECKPOINT_SECONDS` (publisher default `86400`, set in `runr-acquisition-publisher.service`); a missing/never-written checkpoint is always `stale_checkpoint: true`.
+- Fixture/VPS dry-run: `scripts/run_manifested_linkedin.py --dry-run` (and the employer variant) emits telemetry without provider credentials; the WSL wrapper tests prove receipts and telemetry survive validation failure and lock overlap.
+
 ## 6. Invariants, contradictions and failure handling
 
 **Invariants (SOURCE):**
