@@ -49,6 +49,11 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
             "job_title": "LinkedIn Backend Engineer",
             "description": "Build resilient backend services with a collaborative engineering team and clear ownership across the product.",
             "location": "Berlin, Germany",
+            "employment_type": "full_time",
+            "workplace_type": "hybrid",
+            "seniority": "mid",
+"company_logo": "https://alpha.example/logo.png",
+                "company_enrichment": "verified",
             "last_seen_at": "2026-09-10T00:00:00Z",
             "lifecycle_status": "active",
             "source": "linkedin",
@@ -88,6 +93,11 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
                     "job_title": "Employer Platform Engineer",
                     "description_text": "Build resilient platform services with a collaborative engineering team and clear ownership across the product.",
                     "location_raw": "Berlin, Germany",
+                    "employment_type": "full_time",
+                    "workplace_type": "hybrid",
+                    "seniority": "mid",
+                    "company_logo": "https://alpha.example/logo.png",
+                    "company_enrichment": "{}",
                     "last_seen_at": "2026-09-10T00:00:00Z",
                 }
             ],
@@ -126,9 +136,10 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
             ).fetchone()[0]
         assert "master-alpha" in companies
         assert {"linkedin", "greenhouse"}.issubset(sources)
-        assert rejection_count == 0
+        # The listing-only LinkedIn row has no apply URL; runtime policy v2 blocks it.
+        assert rejection_count == 1
         first_publication = store.get_public_catalog(limit=20, offset=0)
-        assert first_publication["total"] == 3
+        assert first_publication["total"] == 2
     finally:
         store.close() if hasattr(store, "close") else None
 

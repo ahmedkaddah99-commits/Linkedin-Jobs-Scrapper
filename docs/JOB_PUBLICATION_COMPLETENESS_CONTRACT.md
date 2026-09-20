@@ -311,14 +311,31 @@ explicitly marks both exact metrics as requiring labels.
 .venv\Scripts\python.exe -m pytest tests/test_job_publication_completeness.py -q
 ```
 
-The focused T32 contract suite currently reports **53 passed**. It covers the
-blocking owner-marked fields, non-blocking salary/benefits, trusted LinkedIn
-detail URLs, Easy Apply-only rejection, separate audit field coverage, URL
-policy impact, input immutability, and the runtime publisher policy constant.
-The older broad audit fixtures in `tests/test_job_completeness_audit.py` and
-`tests/test_real_job_data_audit.py` intentionally omit these newly blocking
-fields; they therefore remain compatibility failures until those fixtures are
-migrated in their owning ticket scope.
+The focused T32 contract suite reports **53 passed**. The broader
+completeness-and-publication suite now reports **85 passed**, including the
+fixtures in `tests/test_job_completeness_audit.py` and
+`tests/test_real_job_data_audit.py` that were migrated to supply the newly
+blocking fields.
+
+```
+.venv\Scripts\python.exe -m pytest tests/test_job_publication_completeness.py tests/test_job_completeness_audit.py tests/test_real_job_data_audit.py tests/test_job_source_merging.py tests/test_producer_state_delivery.py tests/test_publish_existing_catalog.py tests/test_production_completion_regressions.py tests/test_rc009_normalization_publication.py tests/test_phase_a_persistence.py -q
+```
+
+The migration touched three wiring points so the blocking fields survive from
+producer state through the publication gates:
+
+- `scripts/master_linkedin_jobs_catalog.py` — `CATALOG_FIELDS` now includes
+  `seniority`, `company_logo`, and `company_enrichment` so LinkedIn rows keep
+  those values in `row_json`.
+- `scripts/audit_real_job_data.py` — the LinkedIn and employer record builders
+  extract `seniority`, `employment_type`, `company_logo`, and `company_enrichment`
+  (with their common aliases) before passing records to the validator.
+- `backend/repositories/sqlite_acquisition.py` —
+  `_PUBLICATION_PAYLOAD_FIELDS` and the `publish_existing_catalog_snapshot`
+  candidate query now read `seniority`, `employment_type`, `company_logo`, and
+  `company_enrichment` from `job_posting_versions.payload_json` so the
+  recovery/republish path applies the same contract as scheduled delivery.
+
 
 ## 13. Runtime wiring and audit evidence
 
