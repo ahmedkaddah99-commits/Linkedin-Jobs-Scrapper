@@ -1416,7 +1416,48 @@ class EmployerState:
             tuple(keys),
         ).fetchall()
         checkpoints = {str(row["company_key"]): str(row["next_scan_at"] or "") for row in rows}
-        return {key for key in keys if not checkpoints.get(key) or checkpoints[key] <= timestamp}
+        due = {key for key in keys if not checkpoints.get(key) or checkpoints[key] <= timestamp}
+        scheduled = [key for key in keys if key not in due]
+        if scheduled:
+            due.update(self._recheck_required_negative_keys(scheduled))
+        return due
+
+    def _recheck_required_negative_keys(self, scheduled_keys: list[str]) -> set[str]:
+        """Return scheduled no_jobs keys whose coverage evidence is unverified.
+
+        A persisted ``no_jobs`` row is only authoritative when its coverage
+        receipt is ``confirmed_complete``. Legacy negative rows with absent or
+        unverified evidence must be rechecked on resume even when their scan
+        schedule points to a later slot; state databases without a receipts
+        table have no evidence at all.
+        """
+
+        if not scheduled_keys:
+            return set()
+        placeholders = ",".join("?" for _ in scheduled_keys)
+        try:
+            rows = self.connection.execute(
+                f"SELECT company_key FROM companies WHERE status='no_jobs' AND company_key IN ({placeholders})",
+                tuple(scheduled_keys),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        negative_keys = {str(row["company_key"]) for row in rows}
+        if not negative_keys:
+            return set()
+        try:
+            receipt_rows = self.connection.execute(
+                f"SELECT company_key,classification FROM coverage_receipts WHERE company_key IN ({placeholders})",
+                tuple(scheduled_keys),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return negative_keys
+        confirmed = {
+            str(row["company_key"])
+            for row in receipt_rows
+            if str(row["classification"] or "unknown") == "confirmed_complete"
+        }
+        return negative_keys - confirmed
 
     def record_company_checkpoint(
         self,
