@@ -582,6 +582,26 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(provider.calls, 0)
         self.assertEqual(storage.put_calls, [])
 
+    def test_company_enrichment_dry_run_reports_without_mutating_profile_or_attempts(self):
+        app, storage = self.backend()
+        provider = FixtureProvider()
+        app._company_enrichment_service.provider = provider
+
+        result = app._company_enrichment_service.run_sync(
+            request_budget=3,
+            cycle_key="dry-run",
+            force=True,
+            dry_run=True,
+        )
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["companies_succeeded"], 1)
+        self.assertEqual(result["contract_passing_companies"][0]["company_id"], "company-a")
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(storage.put_calls, [])
+        self.assertEqual(app.list_company_enrichment_attempts(company_id="company-a"), [])
+        self.assertIsNone(app.repositories.personalized_jobs_store.get_company_profile("company-a"))
+
     def test_explicit_environment_enable_overrides_durable_disabled_config(self):
         app, _ = self.backend()
         provider = FixtureProvider()

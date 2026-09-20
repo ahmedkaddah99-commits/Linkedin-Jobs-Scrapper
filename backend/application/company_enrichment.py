@@ -1156,6 +1156,7 @@ class CompanyEnrichmentService:
         cycle_key: str = "",
         force: bool = False,
         force_all: bool = False,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         store = self.store
         if store is None:
@@ -1171,7 +1172,7 @@ class CompanyEnrichmentService:
         semaphore = asyncio.Semaphore(max(1, int(concurrency)))
         budget = max(0, int(request_budget))
         budget_lock = asyncio.Lock()
-        totals = {"status": "completed", "cycle_key": cycle_key, "companies_considered": len(candidates), "companies_processed": 0, "companies_succeeded": 0, "requests": 0, "cost_units": 0.0, "fields_available": 0, "fields_written": 0, "logos_cached": 0, "failures": 0}
+        totals = {"status": "completed", "cycle_key": cycle_key, "dry_run": bool(dry_run), "companies_considered": len(candidates), "companies_processed": 0, "companies_succeeded": 0, "requests": 0, "cost_units": 0.0, "fields_available": 0, "fields_written": 0, "logos_cached": 0, "failures": 0, "contract_passing_companies": [], "contract_failures": []}
         batch_results: Mapping[str, Any] = {}
         batch_error: Exception | None = None
         batch_enricher = getattr(self.provider, "enrich_batch", None)
@@ -1188,13 +1189,13 @@ class CompanyEnrichmentService:
             nonlocal budget
             async with semaphore:
                 current = _now()
-                claimed = store.claim_company_enrichment_target(
+                claimed = dict(candidate) if dry_run else store.claim_company_enrichment_target(
                     str(candidate.get("company_id") or ""), cycle_key=cycle_key, lease_owner=self.lease_owner,
                     lease_expires_at=(current + timedelta(minutes=10)).isoformat(), now=current.isoformat(),
                 )
                 if claimed is None:
                     return
-                attempt_id = str(claimed["attempt_id"])
+                attempt_id = str(claimed.get("attempt_id") or "")
                 try:
                     async with budget_lock:
                         if budget <= 0:
@@ -1280,6 +1281,18 @@ class CompanyEnrichmentService:
                             "observed_at": str(raw_extra.get("observed_at") if typed_extra else observed_at),
                             "verified_at": str(raw_extra.get("verified_at") if typed_extra else verified_at),
                         }
+                    if dry_run:
+                        totals["companies_processed"] += 1
+                        totals["companies_succeeded"] += 1
+                        totals["requests"] += result.request_count
+                        totals["cost_units"] += result.cost_units
+                        totals["fields_available"] += fields_available
+                        totals["fields_written"] += fields_available
+                        totals["contract_passing_companies"].append({
+                            "company_id": str(claimed.get("company_id") or ""),
+                            "fields": [field for field in COMPANY_ENRICHMENT_FIELDS if fields[field]["state"] == "known"],
+                        })
+                        return
                     logo_key = ""
                     logo_cached = False
                     if result.logo_bytes is not None:
@@ -1296,10 +1309,13 @@ class CompanyEnrichmentService:
                     )
                     totals["companies_processed"] += 1; totals["companies_succeeded"] += 1; totals["requests"] += int(finish.get("request_count") or 0); totals["cost_units"] += float(finish.get("cost_units") or 0); totals["fields_available"] += fields_available; totals["fields_written"] += fields_available; totals["logos_cached"] += int(logo_cached)
                 except Exception as exc:
-                    store.finish_company_enrichment_attempt(
-                        attempt_id, status="failed", request_count=0, cost_units=0, fields_available=0, fields_written=0, logo_cached=False,
-                        error_code=type(exc).__name__, error_message=str(exc), next_attempt_at=(_now() + timedelta(hours=6)).isoformat(), now=_now().isoformat(),
-                    )
+                    if not dry_run:
+                        store.finish_company_enrichment_attempt(
+                            attempt_id, status="failed", request_count=0, cost_units=0, fields_available=0, fields_written=0, logo_cached=False,
+                            error_code=type(exc).__name__, error_message=str(exc), next_attempt_at=(_now() + timedelta(hours=6)).isoformat(), now=_now().isoformat(),
+                        )
+                    else:
+                        totals["contract_failures"].append({"company_id": str(candidate.get("company_id") or ""), "error_code": type(exc).__name__})
                     totals["companies_processed"] += 1; totals["failures"] += 1
 
         await asyncio.gather(*(process(candidate) for candidate in candidates))
