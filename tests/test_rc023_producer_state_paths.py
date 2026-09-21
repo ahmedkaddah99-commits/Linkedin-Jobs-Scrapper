@@ -665,3 +665,64 @@ def test_publisher_creates_checkpoint_table_with_expected_columns(tmp_path: Path
     assert checkpoint["source"] == "linkedin"
     assert checkpoint["source_rowid"] == 0
     assert checkpoint["bootstrap_complete"] is False
+
+
+def test_restore_script_rollback_switches_active_to_previous_release(tmp_path: Path) -> None:
+    bash = _bash_launcher()
+    if bash is None:
+        pytest.skip("no usable POSIX shell harness")
+    worktree = _wsl_path(Path(__file__).resolve().parents[1])
+    script = "\n".join(
+        [
+            "set -u",
+            f"wt={worktree}",
+            "root=$(mktemp -d /tmp/t45-rollback-XXXXXX)",
+            'mkdir -p "$root/state/versions/gen-1" "$root/state/versions/gen-2" "$root/state/locks"',
+            'ln -s "$root/state/versions/gen-2" "$root/state/active"',
+            "export RUNR_ACQUISITION_STATE_ROOT_PHYSICAL=$root/state",
+            "export RUNR_ACQUISITION_LOCK_ROOT=$root/state/locks",
+            'sh -n "$wt/deploy/restore-acquisition-states.sh" || { echo SYNTAX_FAIL; exit 9; }',
+            "rc=0",
+            'sh "$wt/deploy/restore-acquisition-states.sh" rollback > "$root/stdout.txt" 2>&1 || rc=$?',
+            "target=$(readlink \"$root/state/active\" 2>/dev/null || echo MISSING)",
+            'printf "RC=%s\\nTARGET=%s\\n" "$rc" "$target"',
+            "cat \"$root/stdout.txt\"",
+            'rm -rf "$root"',
+        ]
+    )
+    result = _run_bash_script(bash, script, tmp_path)
+    out = result.stdout
+    assert "SYNTAX_FAIL" not in out
+    assert "RC=0" in out
+    assert "rollback_from=" in out
+    assert "TARGET=" in out and out.split("TARGET=")[1].splitlines()[0].endswith("gen-1")
+    assert "rollback_to=" in out and "gen-1" in out.split("rollback_to=")[1].splitlines()[0]
+
+
+def test_restore_script_rollback_fails_without_previous_release(tmp_path: Path) -> None:
+    bash = _bash_launcher()
+    if bash is None:
+        pytest.skip("no usable POSIX shell harness")
+    worktree = _wsl_path(Path(__file__).resolve().parents[1])
+    script = "\n".join(
+        [
+            "set -u",
+            f"wt={worktree}",
+            "root=$(mktemp -d /tmp/t45-rollback-only-XXXXXX)",
+            'mkdir -p "$root/state/versions/gen-1" "$root/state/locks"',
+            'ln -s "$root/state/versions/gen-1" "$root/state/active"',
+            "export RUNR_ACQUISITION_STATE_ROOT_PHYSICAL=$root/state",
+            "export RUNR_ACQUISITION_LOCK_ROOT=$root/state/locks",
+            "rc=0",
+            'sh "$wt/deploy/restore-acquisition-states.sh" rollback > "$root/stdout.txt" 2>&1 || rc=$?',
+            "target=$(readlink \"$root/state/active\" 2>/dev/null || echo MISSING)",
+            'printf "RC=%s\\nTARGET=%s\\n" "$rc" "$target"',
+            "cat \"$root/stdout.txt\"",
+            'rm -rf "$root"',
+        ]
+    )
+    result = _run_bash_script(bash, script, tmp_path)
+    out = result.stdout
+    assert "RC=1" in out
+    assert out.split("TARGET=")[1].splitlines()[0].endswith("gen-1")
+    assert "No previous state release is available for rollback" in out
