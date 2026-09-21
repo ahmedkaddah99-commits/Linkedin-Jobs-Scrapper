@@ -24,7 +24,7 @@ The authoritative lifecycle marker is exactly one child label of the Issue Statu
 The label assignment is mandatory even when the native status update succeeds.
 ## Required state
 
-Every selected issue must have the Ready for Production Issue Status label. Keep every selected issue labeled Ready for Production while the batch runs. Resolve each issue's tested revision, predeployment evidence, branch, worktree, dependencies, parent, and exact scope. Exclude any issue without that label and report it; do not silently include it.
+Every selected issue must have the Ready for Production Issue Status label. Keep every selected issue labeled Ready for Production while the batch runs. Resolve each issue's tested revision, predeployment evidence, branch, worktree, dependencies, parent, and exact scope. `Predeployment Integrated` is an implementation-unblock state, not a deployment approval; exclude it and report it rather than silently promoting it. Exclude any issue without Ready for Production; do not silently include it.
 
 ## Batch safety and integration
 
@@ -45,7 +45,7 @@ For each issue independently:
 
 For each passed issue, only after its exact commits are confirmed merged:
 
-- remove its dedicated worktree;
+- remove its dedicated worktree with `runr_automation/scripts/remove-worktree-safely.ps1 -RepositoryPath <shared-checkout> -WorktreePath <exact-issue-worktree>` so any `.venv` junction is detached before Git cleanup;
 - delete its local ticket branch safely;
 - delete its exact remote ticket branch if it still exists;
 - preserve the protected deployment and predeployment branches.

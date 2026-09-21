@@ -8,7 +8,7 @@ from runr_automation.providers.base import ProviderResult
 from runr_automation.queue import JobQueue
 from runr_automation.scope_router import ScopeManifest
 from runr_automation.state import StateStore
-from runr_automation.worktrees import GitWorktreeManager
+from runr_automation.worktrees import GitWorktreeManager, PERMANENT_PREDEPLOYMENT_REF
 
 
 class WritingProvider:
@@ -43,6 +43,9 @@ def _repo(tmp_path: Path) -> Path:
     (repo / "README.md").write_text("base\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "branch", "predeployment/render-turso-r2"], cwd=repo, check=True, capture_output=True
+    )
     return repo
 
 
@@ -65,6 +68,10 @@ def _request(job_id: str) -> TicketExecutionRequest:
         ),
         skill="runr-ticket-start",
     )
+
+
+def test_ticket_execution_defaults_to_permanent_predeployment_base() -> None:
+    assert _request("job-1").base_ref == PERMANENT_PREDEPLOYMENT_REF
 
 
 def test_runner_commits_only_scope_valid_tested_changes(tmp_path: Path) -> None:

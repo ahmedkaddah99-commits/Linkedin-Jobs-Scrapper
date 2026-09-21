@@ -9,11 +9,11 @@ Internal research may inspect only the supplied scope manifest. Cite exact repos
 
 External research runs only when requested or when internal evidence identifies an unstable unknown. Use primary sources for technical claims. Record URL, access date, supported claim, and implementation impact; do not copy substantial copyrighted text.
 
-Write a bounded evidence artifact and return one Research State. Freshness follows the input fingerprint and cited premise, not merely elapsed time. Missing access becomes `Research Blocked`; ambiguity requiring product choice becomes `Needs Decision`.
+Write the bounded evidence artifact directly into the Linear issue or as a Linear attachment and return one Research State. Do not create a committed local ticket Markdown file. If a temporary Markdown payload is needed for upload, delete it after Linear confirms the attachment. Freshness follows the input fingerprint and cited premise, not merely elapsed time. Missing access becomes `Research Blocked`; ambiguity requiring product choice becomes `Needs Decision`.
 
 ## Implementation handoff
 
-`Current` means the evidence artifact is complete, its input fingerprint and cited premise are current, and the research result explicitly states whether implementation can start. When implementation can start, this skill hands the exact Linear issue to the implementation skill by moving its lifecycle marker to `Ready`:
+`Current` means the evidence artifact is complete, its input fingerprint and cited premise are current, and the research result explicitly states whether implementation can start. Before handoff, classify each predecessor relation. An `implementation dependency` is satisfied by an exact predecessor revision in `Predeployment Integrated` or `Ready for Production`; a `release dependency` remains a later promotion gate and does not prevent implementation. When the issue's implementation gate is satisfied, this skill hands the exact Linear issue to the implementation skill by moving its lifecycle marker to `Ready`:
 
 1. Resolve the exact issue and the exact `Ready` Issue Status label under the `Issue Status` group using the registry in `docs/tickets/TEMPLATE.md`. If the exact unarchived child is missing, create it with `linear_save_issue_label`; never create a duplicate.
 2. Call `linear_save_issue` with the `Ready` label in `addLabels` and remove every other `Issue Status` child through `removeLabels`. Preserve unrelated labels.

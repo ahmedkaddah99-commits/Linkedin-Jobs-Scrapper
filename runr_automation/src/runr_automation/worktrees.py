@@ -6,6 +6,9 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 
+PERMANENT_PREDEPLOYMENT_REF = "predeployment/render-turso-r2"
+
+
 def _normalized(path: str) -> str:
     raw = path.replace("\\", "/")
     directory = raw.endswith("/")
@@ -32,7 +35,14 @@ class GitWorktreeManager:
         self.repo_root = repo_root.resolve()
         self.worktree_root = worktree_root.resolve()
 
-    def create(self, issue_identifier: str, base_ref: str = "HEAD") -> tuple[Path, str]:
+    def create(
+        self, issue_identifier: str, base_ref: str = PERMANENT_PREDEPLOYMENT_REF
+    ) -> tuple[Path, str]:
+        if base_ref != PERMANENT_PREDEPLOYMENT_REF:
+            raise ValueError(
+                "issue worktrees must be created from the permanent predeployment ref "
+                f"{PERMANENT_PREDEPLOYMENT_REF}"
+            )
         slug = issue_identifier.casefold().replace("_", "-")
         branch = f"runr-auto/{slug}"
         path = self.worktree_root / slug

@@ -9,7 +9,7 @@ This skill is explicit-only: do not create, normalize, label, or regroup an issu
 
 ## Read before writing
 
-Read `docs/INDEX.md`, `docs/tickets/TEMPLATE.md`, and `docs/subsystems.yaml`. Then read the owning subsystem document's architecture and `Agent context and remaining work` sections. Use the Linear issue/project tools to inspect existing issues and avoid duplicates. After migration, create new work directly in Linear; do not append to `linear-ticket-candidates.md`.
+Read `docs/INDEX.md`, `docs/tickets/TEMPLATE.md`, and `docs/subsystems.yaml`. Then read the owning subsystem document's architecture and `Agent context and remaining work` sections. Use the Linear issue/project tools to inspect existing issues and avoid duplicates. After migration, create new work directly in Linear; do not append to `linear-ticket-candidates.md` or create a local ticket Markdown file. If a temporary Markdown payload is needed for an attachment, delete it after Linear confirms the upload.
 
 ## Issue shape
 
@@ -57,7 +57,7 @@ Use these fields in this order, preserving the existing template:
 5. Baseline SHA, source branch/archive, and exact allowed paths.
 6. Minimal required reading.
 7. Allowed changes and prohibited changes.
-8. Dependencies, parent/sub-issue relationship, conflict resources, and parallel-work restrictions.
+8. Dependencies, parent/sub-issue relationship, conflict resources, and parallel-work restrictions. Every blocking relation must declare `dependency-kind` (`implementation`, `release`, or `external`), the required artifact or decision, and the exact `unblocks-when` condition. An implementation dependency may be satisfied by a predecessor's `Predeployment Integrated` revision; a release dependency requires `Ready for Production`.
 9. Checkable acceptance criteria.
 10. Safe local verification commands.
 11. Worktree contract: the start skill will create the branch/worktree; creation must record the intended branch slug and worktree path pattern, but must not create either one.

@@ -11,7 +11,7 @@ from typing import Callable, Protocol
 from .attempts import AttemptRecorder
 from .providers.base import ProviderErrorKind, ProviderResult, classify_provider_error
 from .scope_router import ScopeManifest
-from .worktrees import GitWorktreeManager, validate_changed_paths
+from .worktrees import GitWorktreeManager, PERMANENT_PREDEPLOYMENT_REF, validate_changed_paths
 
 
 _TEST_EXECUTABLES = {"python", "python.exe", "node", "node.exe", "npm", "npm.cmd", "npx", "npx.cmd"}
@@ -68,7 +68,7 @@ class TicketExecutionRequest:
     fingerprint: str
     scope: ScopeManifest
     skill: str
-    base_ref: str = "HEAD"
+    base_ref: str = PERMANENT_PREDEPLOYMENT_REF
 
 
 @dataclass(frozen=True)

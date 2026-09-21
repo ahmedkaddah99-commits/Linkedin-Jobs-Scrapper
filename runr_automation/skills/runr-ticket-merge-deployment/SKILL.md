@@ -24,7 +24,7 @@ The authoritative lifecycle marker is exactly one child label of the Issue Statu
 The label assignment is mandatory even when the native status update succeeds.
 ## Required state
 
-The issue must have the Ready for Production Issue Status label. Keep that label while deployment integration and verification run. Resolve the exact issue, tested revision, PR, branch, worktree, parent, dependencies, and latest predeployment evidence. Never deploy an issue that is merely In Review.
+The issue must have the Ready for Production Issue Status label. Keep that label while deployment integration and verification run. Resolve the exact issue, tested revision, PR, branch, worktree, parent, dependencies, and latest predeployment evidence. `Predeployment Integrated` proves code availability only and is not deployable; never deploy an issue that is merely In Review or Predeployment Integrated.
 
 If evidence, branch identity, or the tested revision is missing, stop without deleting anything and assign the Missing Requirement label or another appropriate blocked label.
 
@@ -44,7 +44,7 @@ Keep the Ready for Production label while these steps run. If the change itself 
 
 Only after the deployment branch and Render checks succeed:
 
-- remove the issue worktree after verifying its exact absolute path;
+- remove the issue worktree after verifying its exact absolute path, using `runr_automation/scripts/remove-worktree-safely.ps1 -RepositoryPath <shared-checkout> -WorktreePath <exact-issue-worktree>` so any `.venv` junction is detached before Git cleanup;
 - delete the local ticket branch only after confirming its commits are merged;
 - delete the exact remote ticket branch if it still exists;
 - leave the protected deployment and predeployment branches untouched;

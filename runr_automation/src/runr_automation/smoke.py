@@ -62,6 +62,9 @@ def _initialize_fixture(repo: Path, provider_name: str) -> None:
     )
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "test: initialize provider verification fixture")
+    # Keep the verification fixture aligned with production worktree semantics:
+    # every implementation worktree is based on the permanent predeployment ref.
+    _git(repo, "switch", "-c", "predeployment/render-turso-r2")
 
 
 def run_provider_verification(

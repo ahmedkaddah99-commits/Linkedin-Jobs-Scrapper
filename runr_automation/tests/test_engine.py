@@ -47,6 +47,9 @@ def _repo(tmp_path: Path) -> Path:
     )
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "branch", "predeployment/render-turso-r2"], cwd=repo, check=True, capture_output=True
+    )
     return repo
 
 

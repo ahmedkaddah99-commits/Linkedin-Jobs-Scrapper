@@ -9,7 +9,7 @@ This skill is explicit-only and is the controller-managed implementation entrypo
 
 ## Controller eligibility gate
 
-Require a valid hashed scope manifest and current plan before creating a worktree. The manifest must identify exactly one primary subsystem, co-owners, allowed reads, Allowed paths for writes, denied roots, tests, issue ID, and content hashes. Deduplication must be Clear, research Current or Not Required, dependencies ready, and the issue must belong to an explicitly compatible current wave. Validate every checkpoint and final diff against Allowed paths. All implementation runs in the dedicated issue worktree; the shared checkout is never a fallback.
+Require a valid hashed scope manifest and current plan before creating a worktree. The manifest must identify exactly one primary subsystem, co-owners, allowed reads, Allowed paths for writes, denied roots, tests, issue ID, and content hashes. Deduplication must be Clear, research Current or Not Required, dependencies ready, and the issue must belong to an explicitly compatible current wave. Dependency readiness is evidence-based: an `implementation dependency` is ready when its predecessor has an exact tested revision in `Predeployment Integrated` or `Ready for Production`; a `release dependency` may remain blocked until `Ready for Production` without blocking implementation. Validate every checkpoint and final diff against Allowed paths. All implementation runs in the dedicated issue worktree; the shared checkout is never a fallback.
 
 ## Deterministic Issue Status label
 
@@ -34,14 +34,16 @@ The required starting Issue Status label is exactly one of:
 
 If the issue has any other Issue Status label, do not start it. If the requested target label is absent, create it under Issue Status through the deterministic label procedure before changing the issue; absence of a native custom workflow status is not a reason to stop.
 
+For every blocking relation, classify the dependency as `implementation`, `release`, or `external` and record the predecessor's exact `integration_revision` when implementation can start. An `implementation dependency` may start from that permanent predeployment revision even while the predecessor's native Linear state remains In Review. A `release dependency` does not prevent implementation, but it does prevent release promotion. Never infer readiness from the `In Review` label alone.
+
 ## Isolate before editing
 
 1. Read the issue and the relevant files listed by the ticket.
-2. Fetch the named deployment baseline and verify the baseline revision.
+2. Fetch and verify the permanent predeployment branch `predeployment/render-turso-r2`; this is the canonical worktree creation base because reviewed tickets are integrated there before live verification. Record its exact revision as the worktree base. The ticket's named deployment baseline remains evidence, but must not replace the predeployment base without an explicit dependency-plan decision.
 3. Verify the shared checkout is not the implementation directory. Do not edit, stash, reset, clean, or commit the shared checkout, and never use it as a fallback.
 4. Create one dedicated branch using the Linear native branch name when available; otherwise use runr/<RUN-ID>-<short-slug>.
 5. Create one worktree outside the shared checkout, using a stable path such as ../runr-worktrees/<RUN-ID>.
-6. Verify the new directory is a worktree on the expected branch and that its starting SHA is the recorded baseline.
+6. Verify the new directory is a worktree on the expected branch and that its starting SHA is the recorded permanent predeployment revision.
 7. Record the branch and absolute worktree path in the issue attachment or implementation note.
 
 If the intended worktree already exists, verify its branch and path before use. Never silently reuse a worktree belonging to another issue. If the baseline or worktree cannot be verified, assign the appropriate blocked Issue Status label and stop.

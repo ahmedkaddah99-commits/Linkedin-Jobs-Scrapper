@@ -24,7 +24,7 @@ The authoritative lifecycle marker is exactly one child label of the Issue Statu
 The label assignment is mandatory even when the native status update succeeds.
 ## Eligible state and resolution
 
-The issue must have an appropriate non-final Issue Status label. Do not discard Done, Canceled, or otherwise finalized work. Resolve each exact issue and verify its dedicated branch, worktree, parent, and current label before deleting anything. A vague title, shared worktree, protected branch, deployment branch, or predeployment branch is never a safe target.
+The issue must have an appropriate non-final Issue Status label. Do not discard production-final work. Native Linear `Done` paired with the custom `Predeployment Integrated` label is an administrative implementation closure, not production completion; retain it for live verification and deployment handling. Resolve each exact issue and verify its dedicated branch, worktree, parent, and current label before deleting anything. A vague title, shared worktree, protected branch, deployment branch, or predeployment branch is never a safe target.
 
 If the exact Git artifacts cannot be identified, do not delete anything and leave the issue state unchanged. If the issue is already merged or its changes are needed by another issue, stop and use a deliberate revert or dependency workflow instead.
 
@@ -33,7 +33,7 @@ If the exact Git artifacts cannot be identified, do not delete anything and leav
 For each issue, and only after exact-target checks:
 
 1. Do not edit the shared checkout.
-2. Remove the dedicated issue worktree using its verified absolute path.
+2. Remove the dedicated issue worktree using its verified absolute path through `runr_automation/scripts/remove-worktree-safely.ps1 -RepositoryPath <shared-checkout> -WorktreePath <exact-issue-worktree>`. This detaches any `.venv` junction before Git removes the worktree. Never call `git worktree remove --force` or recursively delete a worktree containing a junction to the shared environment.
 3. Delete the exact local ticket branch.
 4. Delete the exact remote ticket branch if it still exists.
 5. Remove an issue PR only when the connected tool explicitly supports that exact operation and the PR is unmerged; otherwise leave the PR and report it.

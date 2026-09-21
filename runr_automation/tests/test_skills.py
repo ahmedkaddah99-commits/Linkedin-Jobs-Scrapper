@@ -72,3 +72,53 @@ def test_independent_implementation_skill_is_single_issue_and_stops_at_review() 
         "shared checkout",
     ):
         assert phrase in text, f"runr-ticket-implementation is missing {phrase}"
+
+
+def test_predeployment_integration_is_distinct_from_live_release_readiness() -> None:
+    for name in ("runr-ticket-merge-predeployment", "runr-ticket-batch-merge-predeployment"):
+        text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Predeployment Integrated",
+            "integration_revision",
+            "implementation-dependent",
+            "Ready for Production",
+            "live verification",
+            "verification retry",
+        ):
+            assert phrase.casefold() in text.casefold(), f"{name} is missing {phrase}"
+
+
+def test_dependency_gate_distinguishes_implementation_and_release_dependencies() -> None:
+    for name in ("runr-ticket-start", "runr-ticket-implementation", "runr-parallelization-plan"):
+        text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in ("implementation dependency", "release dependency", "Predeployment Integrated"):
+            assert phrase.casefold() in text.casefold(), f"{name} is missing {phrase}"
+
+
+def test_ticket_template_registers_predeployment_integrated_contract() -> None:
+    text = (ROOT.parent / "docs" / "tickets" / "TEMPLATE.md").read_text(encoding="utf-8")
+    for phrase in (
+        "Predeployment Integrated",
+        "dependency-kind",
+        "integration_revision",
+        "implementation dependency",
+        "release dependency",
+    ):
+        assert phrase.casefold() in text.casefold(), f"ticket template is missing {phrase}"
+
+
+def test_predeployment_worktrees_and_native_done_are_explicit() -> None:
+    for name in (
+        "runr-ticket-start",
+        "runr-ticket-implementation",
+        "runr-ticket-merge-predeployment",
+        "runr-ticket-batch-merge-predeployment",
+    ):
+        text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "predeployment/render-turso-r2" in text
+    for name in ("runr-ticket-merge-predeployment", "runr-ticket-batch-merge-predeployment"):
+        text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in ("native Linear workflow state to Done", "administrative", "Predeployment Integrated"):
+            assert phrase.casefold() in text.casefold(), f"{name} is missing {phrase}"
+    discard = (ROOT / "skills" / "runr-discard-issue" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Native Linear `Done` paired with the custom `Predeployment Integrated`" in discard
