@@ -44,6 +44,10 @@ from backend.connectors.company_career_discovery import (
     extract_career_links_from_html,
     requests_fetcher,
 )
+from backend.connectors.company_enrich_autocomplete import (
+    CompanyEnrichAutocompleteAdapter,
+    should_attempt_autocomplete,
+)
 from backend.config.job_seeker import load_project_dotenv
 from backend.connectors.generic_jsonld import fetch_generic_snapshot
 from backend.connectors.employer_site_fallbacks import extract_embedded_jobs, fetch_browser_snapshot
@@ -99,6 +103,7 @@ EMPLOYER_FIELDS = [
     "canonical_company_id",
     "source_company_name",
     "source_company_url",
+    "company_domain_provenance",
     "source_type",
     "source_provider",
     "career_target_url",
@@ -280,6 +285,7 @@ class EmployerCompany:
     website_url: str
     linkedin_company_url: str = ""
     source_row_number: int = 0
+    website_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 class RequestAccounting:
@@ -434,17 +440,70 @@ class EmployerCollectionResult:
         return OUTCOME_BY_LEGACY_STATUS.get(self.status, "failed")
 
 
-def load_employer_companies(path: Path) -> tuple[list[EmployerCompany], dict[str, int]]:
+def load_employer_companies(
+    path: Path,
+    *,
+    autocomplete: Any | None = None,
+) -> tuple[list[EmployerCompany], dict[str, int]]:
     """Load website-bearing company rows with flexible cleaned-CSV columns."""
 
     companies: list[EmployerCompany] = []
-    stats = {"rows_read": 0, "rows_accepted": 0, "rows_rejected": 0}
+    stats = {
+        "rows_read": 0,
+        "rows_accepted": 0,
+        "rows_rejected": 0,
+    }
     seen_keys: set[tuple[str, str]] = set()
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for row_number, row in enumerate(reader, start=2):
             stats["rows_read"] += 1
             website = _source_url(_first_value(row, ("website_url", "company_website", "website", "url")))
+            website_provenance: dict[str, Any] = {}
+            needs_autocomplete = should_attempt_autocomplete(row)
+            if needs_autocomplete:
+                for key in (
+                    "rows_autocomplete_attempted",
+                    "rows_autocomplete_accepted",
+                    "rows_autocomplete_rejected",
+                    "rows_autocomplete_provider_errors",
+                ):
+                    stats.setdefault(key, 0)
+                # An ambiguous seed is never trusted just because the
+                # autocomplete provider is unavailable; fail closed until a
+                # validated replacement is selected.
+                website = ""
+            if needs_autocomplete and autocomplete is not None:
+                stats["rows_autocomplete_attempted"] += 1
+                try:
+                    decision = autocomplete.resolve_row(row)
+                except Exception:
+                    decision = None
+                decision_status = str(getattr(decision, "status", "provider_error") or "provider_error")
+                decision_domain = _text(getattr(decision, "domain", ""))
+                if decision_status.casefold() == "accepted" and decision_domain:
+                    website = _source_url(f"https://{decision_domain}")
+                    if website:
+                        stats["rows_autocomplete_accepted"] += 1
+                        website_provenance = dict(getattr(decision, "provenance", {}) or {})
+                        website_provenance.update(
+                            {
+                                "status": decision_status,
+                                "confidence": float(getattr(decision, "confidence", 0.0) or 0.0),
+                                "reason": _text(getattr(decision, "reason", "")),
+                            }
+                        )
+                    else:
+                        decision_status = "rejected"
+                if not website:
+                    stats["rows_autocomplete_rejected"] += 1
+                    if decision_status.casefold() == "provider_error":
+                        stats["rows_autocomplete_provider_errors"] += 1
+                    stats["rows_rejected"] += 1
+                    continue
+            elif needs_autocomplete:
+                stats["rows_rejected"] += 1
+                continue
             if not website:
                 stats["rows_rejected"] += 1
                 continue
@@ -456,6 +515,7 @@ def load_employer_companies(path: Path) -> tuple[list[EmployerCompany], dict[str
                 website_url=website,
                 linkedin_company_url=_source_url(_first_value(row, ("linkedin_company_url", "linkedin_url"))),
                 source_row_number=row_number,
+                website_provenance=website_provenance,
             )
             identity_key = (company.canonical_company_id, company.website_url)
             if identity_key in seen_keys:
@@ -611,6 +671,11 @@ def _annotate_job(
             "canonical_company_id": company.canonical_company_id,
             "source_company_name": company.company_name,
             "source_company_url": company.website_url,
+            "company_domain_provenance": json.dumps(
+                company.website_provenance, ensure_ascii=False, sort_keys=True
+            )
+            if company.website_provenance
+            else "",
             "source_type": "employer_site",
             "source_provider": provider or "generic_employer_site",
             "career_target_url": target_url,
@@ -985,6 +1050,7 @@ def _finalize_coverage(result: EmployerCollectionResult, target_outcomes: list[s
             }
         ),
         "discovered_targets": [target.get("url", "") for target in result.targets],
+        "company_domain_provenance": dict(result.company.website_provenance),
         "extraction_methods": sorted(
             {
                 method
@@ -1052,6 +1118,7 @@ def collect_company(
 
     discovery = discover_career_url(
         homepage_url=company.website_url,
+        homepage_provenance=company.website_provenance,
         company_name=company.company_name,
         fetch=fetcher,
         request_timeout_seconds=limits.timeout_seconds,
@@ -2006,9 +2073,16 @@ def run_collection(
     browser_concurrency: int = 1,
     account_concurrency: int = 4,
     per_origin_concurrency: int = 1,
+    autocomplete: Any | None = None,
 ) -> dict[str, Any]:
     load_project_dotenv()
-    companies, input_stats = load_employer_companies(input_csv)
+    autocomplete_adapter = autocomplete
+    if autocomplete_adapter is None and not dry_run:
+        autocomplete_adapter = CompanyEnrichAutocompleteAdapter.from_environment()
+    companies, input_stats = load_employer_companies(
+        input_csv,
+        autocomplete=autocomplete_adapter,
+    )
     if company_id:
         companies = [company for company in companies if company.canonical_company_id == company_id]
     selected = companies if limit <= 0 else companies[:limit]
@@ -2045,6 +2119,15 @@ def run_collection(
         "extraction_methods": {},
         "source_providers": {},
         "config": _redacted_config(),
+        "company_enrich_autocomplete": (
+            autocomplete_adapter.metrics
+            if autocomplete_adapter is not None and hasattr(autocomplete_adapter, "metrics")
+            else {
+                "requests": 0,
+                "zero_credit_intent": True,
+                "status": "disabled_for_dry_run" if dry_run else "not_configured",
+            }
+        ),
         "output_dir": str(output_dir),
         "dry_run": dry_run,
     }

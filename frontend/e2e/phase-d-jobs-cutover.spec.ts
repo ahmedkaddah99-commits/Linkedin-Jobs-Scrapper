@@ -40,9 +40,18 @@ test.beforeEach(async ({ page }) => {
   });
   await page.route("**/v1/personalized-jobs/saved-search", (route) => route.fulfill({ json: { filters: {} } }));
   await page.route("**/v1/personalized-jobs?**", (route) => route.fulfill({ json: { jobs: [{ ...job, match_intelligence: { state: "pending" } }], total: 1, evaluation: { state: "partial" }, filter_capabilities: {} } }));
-  await page.route("**/v1/personalized-jobs/job-a", (route) => route.fulfill({ json: job }));
+  const userState = { value: "none" };
+  await page.route("**/v1/personalized-jobs/job-a", (route) => route.fulfill({ json: { ...job, user_state: userState.value } }));
   await page.route("**/v1/personalized-jobs/companies/company-a", (route) => route.fulfill({ json: { name: "Acme Labs", job_count: 1, profile: { fields: {} } } }));
-  await page.route("**/v1/personalized-jobs/job-a/*", (route) => route.fulfill({ json: { state: "ok" } }));
+  await page.route("**/v1/personalized-jobs/job-a/*", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/hide")) userState.value = "hidden";
+    if (path.endsWith("/restore")) userState.value = "none";
+    if (path.endsWith("/applied")) userState.value = "applied";
+    if (path.endsWith("/save") && route.request().method() === "POST") userState.value = "saved";
+    if (path.endsWith("/save") && route.request().method() === "DELETE") userState.value = "none";
+    return route.fulfill({ json: { state: "ok" } });
+  });
 });
 
 function percentile(runs: number[], fraction: number): number | null {
@@ -122,7 +131,7 @@ test("Jobs production cutover is responsive, keyboard-accessible, truthful, and 
   await page.getByRole("button", { name: "Company" }).click();
   await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
   await page.getByRole("button", { name: "Overview" }).click();
-  await page.getByRole("button", { name: "Full job posting" }).click();
+  await page.getByRole("button", { name: "Employer job description" }).click();
   await expect(page.getByText("Original Posting")).toBeVisible();
 
   const performance = await page.evaluate(() => {

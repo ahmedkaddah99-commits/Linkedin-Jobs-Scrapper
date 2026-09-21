@@ -23,6 +23,8 @@ MemoryMax=6G
 TasksMax=256
 TimeoutStartSec=12h
 TimeoutStopSec=300
+# The wrapper's watchdog is the normal bound; this is the outer systemd bound.
+SuccessExitStatus=75
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

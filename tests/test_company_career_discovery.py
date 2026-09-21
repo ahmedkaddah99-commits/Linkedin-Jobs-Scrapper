@@ -51,6 +51,29 @@ class FakeFetcher:
 
 
 class CompanyCareerDiscoveryTests(unittest.TestCase):
+    def test_discovery_preserves_validated_domain_seed_provenance(self):
+        provenance = {
+            "provider": "companyenrich_autocomplete",
+            "credit_intent": "free",
+            "credit_cost": 0,
+            "selected_domain": "example.com",
+        }
+
+        result = discover_career_url(
+            homepage_url="https://example.com",
+            fetch=lambda url: FetchResult(
+                requested_url=url,
+                final_url=url,
+                status_code=200,
+                text='<a href="/careers">Careers</a>',
+            ),
+            prefer_homepage_candidates=True,
+            homepage_provenance=provenance,
+        )
+
+        self.assertEqual(result.primary_career_url, "https://example.com/careers")
+        self.assertEqual(result.provenance["homepage_seed"], provenance)
+
     def test_collector_can_try_homepage_career_target_before_speculative_probes(self):
         calls = []
 

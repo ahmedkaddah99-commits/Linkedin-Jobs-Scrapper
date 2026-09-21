@@ -168,7 +168,7 @@ The frontend also ships **backend CV-render code**. `frontend/scripts/render-cv-
 - `frontend/src/pages/CareerUrlDiscoveryPage.jsx`
 - `frontend/src/pages/DocumentAICanvasGuidePage.jsx`
 
-**Navigation:** `frontend/src/components/AppShell.jsx` defines the legacy sidebar (L14-121: Workspaces, Quick Apply, Runs, Tracker, Career Assets, Referrals, Account, Pricing) and a reduced nav (L140-144: Home, Jobs, Job tracker, Documents, Refer). The reduced nav is intended for `retireLegacyJobsNavigation` (`VITE_REPLACE_LEGACY_JOBS_NAV` plus real mode), but since commit `4dcdda39` AppShell no longer imports `retireLegacyJobsNavigation`; the flag is currently computed in `frontend/src/lib/personalizedJobsConfig.js` and used by no component, so the legacy nav renders regardless. `frontend/src/lib/routeParents.js` maps child routes to parents.
+**Navigation:** `frontend/src/components/AppShell.jsx` defines the sidebar nav: when the personalized Jobs experience is on, `personalizedNavItems` is the legacy sidebar with a Jobs entry (Workspaces, Jobs, Quick Apply, Runs, Tracker, Career Assets, Referrals, Account, Pricing); otherwise it is the legacy sidebar unchanged. When `retireLegacyJobsNavigation` (`VITE_REPLACE_LEGACY_JOBS_NAV` plus real Jobs data mode, set for production/e2e builds) is on, `userNavItems` filters the legacy `Workspaces` and `Runs` entries out of the rendered sidebar; the admin/administrator distinction was removed from this map by commit `4dcdda39`, so the filtered list is what every authenticated user sees. `frontend/src/lib/routeParents.js` maps child routes to parents.
 
 ### 3.4 Module summary (lib 66, components 61, hooks 10)
 

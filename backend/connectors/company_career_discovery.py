@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from html import unescape
 from ipaddress import ip_address
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
@@ -748,9 +748,11 @@ def discover_career_url(
     use_rendered_fallback: bool = False,
     allow_domain_guessing: bool = False,
     prefer_homepage_candidates: bool = False,
+    homepage_provenance: Mapping[str, Any] | None = None,
     usage_callback=None,
 ) -> CareerDiscoveryResult:
     direct_fetch = fetch or requests_fetcher(request_timeout_seconds)
+    homepage_seed_provenance = dict(homepage_provenance or {})
     raw_homepage = homepage_url or company_domain
     homepage = normalize_url(raw_homepage)
     if not homepage and allow_domain_guessing and company_name:
@@ -765,6 +767,7 @@ def discover_career_url(
             discovered_at=discovered_at,
             crawl_status="missing_homepage_or_domain",
             reason_code="invalid_homepage_or_domain" if raw_homepage else "missing_homepage_or_domain",
+            provenance={"homepage_seed": homepage_seed_provenance},
             freshness={"state": "not_observed", "observed_at": discovered_at},
             validation_evidence=["No homepage URL or domain was available."],
         )
@@ -778,6 +781,7 @@ def discover_career_url(
             discovered_at=discovered_at,
             crawl_status="unsafe_homepage",
             reason_code=homepage_reason,
+            provenance={"homepage_seed": homepage_seed_provenance},
             freshness={"state": "not_observed", "observed_at": discovered_at},
             host_policy={
                 "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
@@ -804,6 +808,7 @@ def discover_career_url(
                 "resolved_url": effective_homepage,
                 "transport": homepage_result.transport,
                 "error": homepage_result.error,
+                "homepage_seed": homepage_seed_provenance,
             },
             freshness={"state": "observed", "observed_at": discovered_at},
             host_policy={
@@ -891,6 +896,7 @@ def discover_career_url(
                 "requested_url": homepage,
                 "resolved_url": effective_homepage,
                 "transport": homepage_result.transport,
+                "homepage_seed": homepage_seed_provenance,
                 "discovery_steps": [
                     "homepage_links",
                     "json_ld",
@@ -935,6 +941,7 @@ def discover_career_url(
             "selected_candidate_source": primary.source,
             "selected_candidate": primary.provenance,
             "transport": homepage_result.transport,
+            "homepage_seed": homepage_seed_provenance,
         },
         freshness={
             "state": "fresh",
@@ -970,6 +977,11 @@ def discover_many(
             shallow_crawl_pages=shallow_crawl_pages,
             use_rendered_fallback=use_rendered_fallback,
             allow_domain_guessing=allow_domain_guessing,
+            homepage_provenance=(
+                target.get("homepage_provenance")
+                if isinstance(target.get("homepage_provenance"), Mapping)
+                else None
+            ),
             usage_callback=usage_callback,
         )
         results.append(result)
@@ -991,6 +1003,7 @@ def build_discovery_receipt(result: CareerDiscoveryResult) -> dict[str, Any]:
         "reason_code": result.reason_code or result.crawl_status,
         "ats_type": result.ats_type,
         "confidence_score": result.confidence_score,
+        "homepage_seed_provenance": result.provenance.get("homepage_seed", {}),
         "provenance": result.provenance,
         "freshness": result.freshness,
         "host_policy": result.host_policy,
@@ -1042,6 +1055,11 @@ def collect_discovery_receipts(
             shallow_crawl_pages=shallow_crawl_pages,
             use_rendered_fallback=use_rendered_fallback,
             allow_domain_guessing=allow_domain_guessing,
+            homepage_provenance=(
+                target.get("homepage_provenance")
+                if isinstance(target.get("homepage_provenance"), Mapping)
+                else None
+            ),
             usage_callback=usage_callback,
         )
         receipt = build_discovery_receipt(result)

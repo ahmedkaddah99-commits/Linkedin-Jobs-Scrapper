@@ -16,6 +16,9 @@ from backend.application.source_eligibility_manifest import (
 from deploy.validate_acquisition_runtime import validate_manifest
 
 
+SYSTEMD = Path(__file__).resolve().parents[1] / "deploy" / "systemd"
+
+
 LINKEDIN_TABLES = (
     "runs",
     "source_company_groups",
@@ -117,3 +120,22 @@ def test_historical_absolute_sidecar_path_can_be_restored_next_to_manifest(tmp_p
     loaded = load_manifest(manifest)
 
     assert loaded["raw_sidecar"]["resolved_path"] == str(sidecar.resolve())
+
+
+def test_schedule_manifest_is_machine_readable_and_has_no_duplicate_owner() -> None:
+    target = (SYSTEMD / "runr.target").read_text(encoding="utf-8")
+    start = "# RUNR_ACQUISITION_SCHEDULE_MANIFEST_BEGIN\n# "
+    end = "\n# RUNR_ACQUISITION_SCHEDULE_MANIFEST_END"
+    assert start in target and end in target
+    payload = target.split(start, 1)[1].split(end, 1)[0]
+    manifest = json.loads(payload)
+
+    schedules = manifest["schedules"]
+    assert set(schedules) == {"linkedin", "employer", "publisher"}
+    assert len({item["owner_timer"] for item in schedules.values()}) == len(schedules)
+    assert len({item["owner_service"] for item in schedules.values()}) == len(schedules)
+    assert set(manifest["disabled_units"]) >= {
+        "runr-acquisition-cycle.timer",
+        "runr-acquisition-export.timer",
+        "runr-acquisition-worker.service",
+    }
