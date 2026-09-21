@@ -472,6 +472,9 @@ def _bash_launcher() -> str | None:
 
 def _wsl_path(path: Path) -> str:
     posix = path.resolve().as_posix()
+    if ":" not in posix:
+        # Already a POSIX path (Linux/CI): use it verbatim.
+        return posix
     drive, rest = posix.split(":", 1)
     return f"/mnt/{drive.casefold()}{rest}"
 
