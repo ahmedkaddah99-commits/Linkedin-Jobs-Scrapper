@@ -17,6 +17,7 @@ Indirectly user-facing: company identity decides which producer rows belong to w
 | Registry reconciliation (RC-003) | Read-only master-list vs identity-state diff; reviewable crosswalk proposal; never allocates IDs | `backend/application/company_registry_reconciliation.py` (schema `company_registry_reconciliation_v1`, docstring "stops before RC-004") |
 | Canonical-ID backfill (RC-004) | Deterministic, non-destructive master-namespace ID backfill; dry-run manifest then approved CSV write; never targets the input file | `backend/application/company_id_backfill.py` (schema `rc004_company_id_backfill_v1`); CLI `scripts/backfill_company_ids.py` |
 | Identity canonicalization / crosswalk construction | Pure registry rows → old-identity → surviving-canonical-ID map; LinkedIn org URL primary, org ID/CompanyEnrich ID corroborate, website evidence-only, name never an identity seed | `backend/application/company_identity_canonicalization.py` (schema `runr.company_identity_crosswalk.v1`, rules in docstring L9–21) |
+| Guarded CompanyEnrich domain autocomplete | Free, bounded missing/ambiguous website seed resolution; sanitized domain candidates are ranked against employer identity evidence and retained with confidence/status/provenance; never paid enrichment and never a career URL | `backend/connectors/company_enrich_autocomplete.py`, `scripts/master_employer_jobs_catalog.py` |
 | Canonicalized producer states | Immutable versioned copies of the producer DBs with canonical IDs + `company_identity_crosswalk.json` | `scripts/canonicalize_producer_states.py` (default registry `data/acquisition/inputs/company_registry_canonical.csv`, L38) |
 | Worker company enrichment | Bounded, config/env-gated (`acquisition.phase_f.company_enrichment_enabled`, default off) enrichment of employer companies with verified-field semantics; ScrapeOps providers, Webshare LinkedIn provider | `backend/application/company_enrichment.py` (`CompanyEnrichmentService` L1110, `OfficialWebsiteProvider` L87, `ScrapeOpsCompanyProvider` L366, `ScrapeOpsLinkedInCompanyProvider` L577, `WebshareLinkedInCompanyProvider` L968); entry `backend/application/services.py:940` (`run_due_company_enrichment`) |
 | Resolution safety (RC-006) | Offline-safe policies, durable resolver gate around provider calls, evidence ranks (`user_confirmed > verified > discovered > provisional`) | `backend/application/company_enrichment_resolution.py` (ranks L30–36) |
@@ -78,6 +79,7 @@ Governing docs: RC-003/004/006 decisions survive only in module docstrings, test
 |---|---|
 | Identity modules are pure/non-destructive; the caller persists and applies in separate transactions | `company_identity_canonicalization.py` docstring L3–6; `company_id_backfill.py` docstring |
 | Website/domain is evidence only; never merges companies alone; name never an identity seed | `company_identity_canonicalization.py` docstring L13–18 |
+| A CompanyEnrich autocomplete suggestion is evidence for a validated homepage seed only; it cannot become a career URL or silently replace a verified website | `company_enrich_autocomplete.py`; `company_career_discovery.py`; `master_employer_jobs_catalog.py` |
 | Discovered evidence can never silently replace verified or user-confirmed values | `company_enrichment_resolution.py` evidence ranks L30–36 |
 | Backfill can never write the input CSV and needs an approved manifest | `company_id_backfill.py` docstring L5–8 |
 | Enrichment is disabled by default (env + config gate) and bounded | `services.py:952–959` |
@@ -137,6 +139,7 @@ Never run the NET-OPS scripts (`apply_known_company_websites.py`, `discover_webs
 | Logo validation/caching primitives | VERIFIED (scope: static read of `company_logo.py` + importer) |
 | LinkedIn logo importer | IMPLEMENTED-UNVERIFIED (static read; last recorded VPS release `4a1b1df5` claims runs — documentary only) |
 | Free CompanyEnrich logos / Bing discovery | IMPLEMENTED-UNVERIFIED (NET-OPS; historical runs recorded in untracked reports only) |
+| Guarded CompanyEnrich autocomplete fallback | IMPLEMENTED-LOCALLY-VERIFIED (fixture/provider-error/security tests and employer handoff are local; authorized VPS sample receipt is not available in this checkout) |
 | Admin enrichment operations UI + `backend/enrichment/operations.py` | RETIRED/HISTORICAL (`dd47acf9`) |
 | `Company-Urls/` dataset, enrichment scripts on `0d7f2b5c` | RETIRED/HISTORICAL / UNMERGED (`0d7f2b5c`, ticket T04; absent at baseline) |
 

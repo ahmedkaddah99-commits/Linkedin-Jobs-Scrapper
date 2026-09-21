@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -20,6 +21,7 @@ from scripts.master_employer_jobs_catalog import (
     main as employer_main,
     run_collection,
 )
+from backend.connectors.company_enrich_autocomplete import AutocompleteDecision
 from scripts.build_master_jobs_catalog import build_master_rows, main as combined_main, write_master_jobs_csv
 
 
@@ -88,6 +90,115 @@ def test_load_employer_companies_discards_placeholder_company_ids(tmp_path: Path
     companies, _ = load_employer_companies(source)
 
     assert companies[0].canonical_company_id == ""
+
+
+def test_load_employer_companies_uses_guarded_autocomplete_for_missing_website(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url,website_discovery_status\n"
+        "canonical-acme,Acme GmbH,,missing\n",
+        encoding="utf-8",
+    )
+
+    class FakeAutocomplete:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, str]] = []
+
+        def resolve_row(self, row: dict[str, str]) -> AutocompleteDecision:
+            self.rows.append(row)
+            return AutocompleteDecision(
+                query="acme",
+                status="accepted",
+                domain="acme.example",
+                name="Acme GmbH",
+                confidence=0.95,
+                reason="identity_evidence_match",
+                provenance={
+                    "provider": "companyenrich_autocomplete",
+                    "credit_intent": "free",
+                    "credit_cost": 0,
+                    "selected_domain": "acme.example",
+                },
+            )
+
+    autocomplete = FakeAutocomplete()
+    companies, stats = load_employer_companies(source, autocomplete=autocomplete)
+
+    assert len(autocomplete.rows) == 1
+    assert companies[0].website_url == "https://acme.example"
+    assert companies[0].website_provenance["provider"] == "companyenrich_autocomplete"
+    assert companies[0].website_provenance["credit_cost"] == 0
+    assert stats["rows_autocomplete_attempted"] == 1
+    assert stats["rows_autocomplete_accepted"] == 1
+
+
+def test_load_employer_companies_defers_ambiguous_autocomplete_without_a_website(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url\ncanonical-acme,Acme,\n",
+        encoding="utf-8",
+    )
+
+    class FakeAutocomplete:
+        def resolve_row(self, _row: dict[str, str]) -> AutocompleteDecision:
+            return AutocompleteDecision(
+                query="acme",
+                status="ambiguous",
+                reason="top_candidates_too_close",
+            )
+
+    companies, stats = load_employer_companies(source, autocomplete=FakeAutocomplete())
+
+    assert companies == []
+    assert stats["rows_autocomplete_attempted"] == 1
+    assert stats["rows_autocomplete_rejected"] == 1
+    assert stats["rows_rejected"] == 1
+
+
+def test_collect_company_passes_autocomplete_provenance_into_discovery_and_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    provenance = {
+        "provider": "companyenrich_autocomplete",
+        "credit_intent": "free",
+        "credit_cost": 0,
+        "selected_domain": "acme.example",
+    }
+    company = EmployerCompany(
+        canonical_company_id="canonical-acme",
+        company_name="Acme GmbH",
+        website_url="https://acme.example",
+        website_provenance=provenance,
+    )
+    seen: dict[str, Any] = {}
+
+    def fake_discovery(**kwargs: Any) -> SimpleNamespace:
+        seen["homepage_provenance"] = kwargs["homepage_provenance"]
+        return _discovery(url="https://acme.example/careers")
+
+    monkeypatch.setattr(catalog, "discover_career_url", fake_discovery)
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda *_, **__: {
+            "jobs": [],
+            "status": "completed",
+            "complete_snapshot": True,
+            "pagination_complete": True,
+            "request_url": "https://acme.example/careers",
+        },
+    )
+
+    result = collect_company(company, lambda _url: None, CollectorLimits(max_targets=1))
+
+    assert seen["homepage_provenance"] == provenance
+    assert result.coverage["company_domain_provenance"] == provenance
 
 
 def test_collect_company_records_ats_api_method(monkeypatch: pytest.MonkeyPatch) -> None:
