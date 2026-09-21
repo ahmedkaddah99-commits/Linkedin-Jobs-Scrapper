@@ -97,6 +97,23 @@ def normalize_throughput_counts(values: Mapping[str, object]) -> dict[str, int]:
     return counts
 
 
+def benchmark_failure_count(metrics: Mapping[str, object]) -> int:
+    """Collapse producer failure signals into the contract's error count."""
+
+    observed_failures = []
+    for name in ("detail_failures", "companies_partial", "companies_failed"):
+        try:
+            observed_failures.append(max(0, int(metrics.get(name, 0) or 0)))
+        except (TypeError, ValueError):
+            observed_failures.append(0)
+    failure_count = max(observed_failures, default=0)
+    run_outcome = str(metrics.get("run_outcome") or "").upper()
+    run_status = str(metrics.get("run_status") or "").upper()
+    if failure_count == 0 and (run_outcome in {"FAILURE", "FAILED"} or run_status == "FAILED"):
+        return 1
+    return failure_count
+
+
 def load_thresholds_override(path: Path) -> dict[str, int]:
     """Load operator-supplied ceiling overrides (parameterized threshold input)."""
 
@@ -179,6 +196,16 @@ def evaluate_benchmark_contract(
         ceiling = ceilings[name]
         if value is not None and value > ceiling:
             reasons.append(f"{name}_ceiling_exceeded")
+    for current, previous in (
+        ("parsed", "discovered"),
+        ("complete", "parsed"),
+        ("accepted", "complete"),
+        ("published", "accepted"),
+    ):
+        if normalized_counts[current] > normalized_counts[previous]:
+            reasons.append(f"{current}_exceeds_{previous}")
+    if rss_bytes is None:
+        reasons.append("rss_unavailable")
     if profile == "vps-authorized-live" and approval_status != "approved":
         reasons.append("approval_required")
     if zeroed_counts:
@@ -494,6 +521,7 @@ def run_benchmark(
             mode=mode,  # type: ignore[arg-type]
             workers=workers,
             detail_workers=detail_workers,
+            timeout=timeout_seconds,
             pipeline_enabled=pipeline_enabled,
         )
         runner = CatalogRunner(config, transport=transport)
@@ -539,7 +567,7 @@ def run_benchmark(
                     "accepted": 0,
                     "published": 0,
                     "duplicate": metrics.get("detail_cache_hits", 0),
-                    "failed": metrics.get("detail_failures", 0),
+                    "failed": benchmark_failure_count(metrics),
                 },
                 elapsed_seconds=wall_time,
                 cpu_seconds=cpu_time,
@@ -667,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
-    return 0
+    return 0 if all(result["benchmark_contract"]["passed"] for result in results) else 1
 
 
 if __name__ == "__main__":

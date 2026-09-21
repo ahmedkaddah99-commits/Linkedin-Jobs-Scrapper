@@ -26,9 +26,12 @@ from scripts.benchmark_linkedin_pipeline import (
     BENCHMARK_PROFILES,
     BENCHMARK_WINDOW_SECONDS,
     BenchmarkWorkload,
+    benchmark_failure_count,
     evaluate_benchmark_contract,
+    main as benchmark_main,
     run_benchmark,
 )
+import scripts.benchmark_linkedin_pipeline as benchmark_pipeline
 from scripts.run_manifested_linkedin import build_dry_run_receipt
 
 
@@ -458,6 +461,94 @@ def test_vps_profile_requires_explicit_approval() -> None:
         "cpu_seconds", "rss_bytes", "browser_requests", "requests",
         "concurrency", "timeout_seconds", "errors",
     }
+
+
+def test_missing_rss_fails_closed_against_memory_ceiling() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=None,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert "rss_unavailable" in result["reason_codes"]
+    assert "rss_unavailable" in result["info_codes"]
+
+
+def test_lifecycle_counts_cannot_move_backwards() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 1,
+            "parsed": 1,
+            "complete": 1,
+            "accepted": 2,
+            "published": 3,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_exceeds_complete" in result["reason_codes"]
+    assert "published_exceeds_accepted" in result["reason_codes"]
+
+
+def test_benchmark_failure_count_includes_partial_and_failed_runs() -> None:
+    assert benchmark_failure_count(
+        {"detail_failures": 0, "companies_partial": 1, "run_outcome": "PARTIAL"}
+    ) == 1
+    assert benchmark_failure_count(
+        {"detail_failures": 0, "companies_partial": 0, "run_outcome": "FAILURE"}
+    ) == 1
+
+
+def test_benchmark_applies_timeout_to_runner_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, float] = {}
+
+    class CapturingRunner:
+        def __init__(self, config, *, transport):
+            observed["timeout"] = config.timeout
+
+        def run(self) -> dict[str, object]:
+            return {"run_outcome": "COMPLETE"}
+
+    monkeypatch.setattr(benchmark_pipeline, "CatalogRunner", CapturingRunner)
+    result = run_benchmark(
+        BenchmarkWorkload(companies=1, pages_per_company=1, jobs_per_page=1),
+        timeout_seconds=7.5,
+    )
+
+    assert observed["timeout"] == 7.5
+    assert result["benchmark_contract"]["observed"]["timeout_seconds"] == 7.5
+
+
+def test_failed_contract_returns_nonzero_cli_status() -> None:
+    assert benchmark_main(
+        [
+            "--companies", "1",
+            "--pages-per-company", "1",
+            "--jobs-per-page", "1",
+            "--search-latency", "0",
+            "--detail-latency", "0",
+            "--profile", "vps-authorized-live",
+        ]
+    ) == 1
 
 
 def test_offline_pipeline_benchmark_emits_common_contract(tmp_path: Path) -> None:
