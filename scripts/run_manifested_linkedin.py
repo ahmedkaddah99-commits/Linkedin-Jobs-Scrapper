@@ -22,6 +22,12 @@ from backend.application.source_eligibility_manifest import (
     materialize_source_input,
     require_eligibility_manifest,
 )
+from scripts.benchmark_linkedin_pipeline import (
+    BENCHMARK_OWNER,
+    BENCHMARK_PROFILES,
+    BENCHMARK_REVISION,
+    BENCHMARK_WINDOW_SECONDS,
+)
 from scripts.master_linkedin_jobs_catalog import (
     LOCATION_GERMANY_CONFIRMED,
     LOCATION_MULTI_LOCATION_INCLUDES_GERMANY,
@@ -387,6 +393,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="fail instead of creating a missing restored state database",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--benchmark-profile",
+        choices=tuple(BENCHMARK_PROFILES),
+        help="attach the T36 five-minute benchmark profile to the machine-readable result",
+    )
+    parser.add_argument("--benchmark-owner", default=BENCHMARK_OWNER)
+    parser.add_argument("--benchmark-revision", default=BENCHMARK_REVISION)
+    parser.add_argument(
+        "--benchmark-approval",
+        choices=("not-required", "approved"),
+        default="not-required",
+    )
     return parser
 
 
@@ -581,6 +599,19 @@ def main(argv: list[str] | None = None) -> int:
             "telemetry": _telemetry(SOURCE_LINKEDIN),
         }
     )
+    if args.benchmark_profile:
+        metrics["benchmark_profile"] = {
+            "contract": "runr.producer-throughput.v1",
+            "window_seconds": BENCHMARK_WINDOW_SECONDS,
+            "profile": args.benchmark_profile,
+            "owner": args.benchmark_owner,
+            "revision": args.benchmark_revision,
+            "approval": {
+                "required": args.benchmark_profile == "vps-authorized-live",
+                "status": args.benchmark_approval,
+            },
+            "ceilings": BENCHMARK_PROFILES[args.benchmark_profile],
+        }
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
