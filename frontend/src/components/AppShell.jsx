@@ -4,7 +4,10 @@ import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
-import { personalizedJobsExperienceEnabled } from "../lib/personalizedJobsConfig";
+import {
+  personalizedJobsExperienceEnabled,
+  retireLegacyJobsNavigation,
+} from "../lib/personalizedJobsConfig";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
@@ -108,7 +111,9 @@ const personalizedNavItems = personalizedJobsExperienceEnabled
   ]
   : navItems;
 
-const userNavItems = personalizedNavItems;
+const userNavItems = retireLegacyJobsNavigation
+  ? personalizedNavItems.filter((item) => !["Workspaces", "Runs"].includes(item.label))
+  : personalizedNavItems;
 
 const secondaryTopRibbonItems = [
   {
