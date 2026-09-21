@@ -513,6 +513,8 @@ def test_benchmark_failure_count_includes_partial_and_failed_runs() -> None:
     assert benchmark_failure_count(
         {"detail_failures": 0, "companies_partial": 1, "run_outcome": "PARTIAL"}
     ) == 1
+    assert benchmark_failure_count({"run_outcome": "PARTIAL"}) == 1
+    assert benchmark_failure_count({"run_status": "PARTIAL"}) == 1
     assert benchmark_failure_count(
         {"detail_failures": 0, "companies_partial": 0, "run_outcome": "FAILURE"}
     ) == 1

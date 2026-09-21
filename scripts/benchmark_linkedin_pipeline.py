@@ -109,7 +109,10 @@ def benchmark_failure_count(metrics: Mapping[str, object]) -> int:
     failure_count = max(observed_failures, default=0)
     run_outcome = str(metrics.get("run_outcome") or "").upper()
     run_status = str(metrics.get("run_status") or "").upper()
-    if failure_count == 0 and (run_outcome in {"FAILURE", "FAILED"} or run_status == "FAILED"):
+    if failure_count == 0 and (
+        run_outcome in {"FAILURE", "FAILED", "PARTIAL"}
+        or run_status in {"FAILED", "PARTIAL"}
+    ):
         return 1
     return failure_count
 
