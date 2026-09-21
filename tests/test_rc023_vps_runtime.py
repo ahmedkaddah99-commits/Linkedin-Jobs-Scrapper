@@ -261,3 +261,64 @@ def test_render_customer_plane_intends_turso_and_release_branch() -> None:
     assert render.count('RUNR_ACQUISITION_LIVE_NETWORK_ENABLED\n        value: "false"') == 2
     assert render.count('RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY\n        value: "false"') == 2
     assert render.count('RUNR_COMPANY_ENRICHMENT_ENABLED\n        value: "0"') == 2
+
+
+def test_target_declares_one_owner_per_acquisition_schedule() -> None:
+    target = _read_unit("runr.target")
+    manifest = _schedule_manifest()
+
+    assert manifest["schema_version"] == "runr.acquisition.schedule-manifest.v1"
+    schedules = manifest["schedules"]
+    assert isinstance(schedules, dict)
+    assert set(schedules) == {"linkedin", "employer", "publisher"}
+    assert len({schedule["owner_timer"] for schedule in schedules.values()}) == 3
+    assert len({schedule["owner_service"] for schedule in schedules.values()}) == 3
+    assert manifest["runtime_contract"]["overlap"]["exit_code"] == 75
+    assert manifest["runtime_contract"]["timeout"]["source_seconds"] == 900
+
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    for schedule in schedules.values():
+        assert schedule["owner_timer"] in wants
+        timer = _read_unit(schedule["owner_timer"])
+        assert f"Unit={schedule['owner_service']}" in timer
+        assert f"OnCalendar={schedule['calendar']}" in timer
+
+
+def test_target_explicitly_disables_stale_acquisition_units() -> None:
+    target = _read_unit("runr.target")
+    manifest = _schedule_manifest()
+    expected = {
+        "runr-acquisition-cycle.service",
+        "runr-acquisition-cycle.timer",
+        "runr-acquisition-export.service",
+        "runr-acquisition-export.timer",
+        "runr-acquisition-worker.service",
+    }
+    assert set(manifest["disabled_units"]) == expected
+    conflicts = next(line for line in target.splitlines() if line.startswith("Conflicts="))
+    assert set(conflicts.removeprefix("Conflicts=").split()) == expected
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    assert not expected.intersection(wants.split())
+
+
+def test_acquisition_units_encode_overlap_and_failure_contract() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "SuccessExitStatus=75" in unit
+        assert "TimeoutStartSec=" in unit
+
+    source = (ROOT / "deploy" / "run-acquisition-source.sh").read_text(encoding="utf-8")
+    publisher = (ROOT / "deploy" / "run-acquisition-publisher.sh").read_text(encoding="utf-8")
+    assert 'lock_file="$lock_root/$source_name.lock"' in source
+    assert 'timeout --foreground "$run_timeout"' in source
+    assert "exit 75" in source
+    assert 'exec 7>"$lock_root/linkedin.lock"' in publisher
+    assert 'exec 8>"$lock_root/employer.lock"' in publisher
+    assert 'timeout --foreground "$run_timeout" "$python_bin" scripts/publish_producer_states.py' in publisher
+    assert "exit 75" in publisher
+    assert 'run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"' in source
+    assert 'run_timeout="${RUNR_PUBLISHER_RUN_TIMEOUT_SECONDS:-900}"' in publisher
