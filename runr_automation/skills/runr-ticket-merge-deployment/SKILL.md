@@ -24,6 +24,8 @@ The authoritative lifecycle marker is exactly one child label of the Issue Statu
 The label assignment is mandatory even when the native status update succeeds.
 ## Required state
 
+For a VPS acceptance ticket, require the sanitized exact-revision host receipt and verified rollback specified in `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md` before promotion. `Ready for Production` without that evidence is stale and must be corrected before deployment.
+
 The issue must have the Ready for Production Issue Status label. Keep that label while deployment integration and verification run. Resolve the exact issue, tested revision, PR, branch, worktree, parent, dependencies, and latest predeployment evidence. `Predeployment Integrated` proves code availability only and is not deployable; never deploy an issue that is merely In Review or Predeployment Integrated.
 
 If evidence, branch identity, or the tested revision is missing, stop without deleting anything and assign the Missing Requirement label or another appropriate blocked label.

@@ -5,6 +5,8 @@ description: Use when explicitly starting a Runr Linear issue or sub-issue for i
 
 # Runr ticket start
 
+For VPS acceptance tickets, read `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md`. Do not make local implementation contingent on a host run when the ticket can be implemented and tested locally. Reserve the exact-revision VPS operation for the acceptance gate and never count a Render branch switch as a VPS test.
+
 This skill is explicit-only and is the controller-managed implementation entrypoint. It creates the issue's isolated branch and worktree, moves the issue through implementation, and leaves a complete attempt record whether the attempt passes or fails. For one-ticket execution without the full local automation queue, use `runr-ticket-implementation`; do not invoke both paths for the same issue.
 
 ## Controller eligibility gate

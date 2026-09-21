@@ -39,7 +39,11 @@ Do not call a batch parallel-safe merely because the issues have different title
 
 Use a dedicated batch integration worktree and branch from the verified permanent predeployment revision. Integrate one issue's tested commit at a time. Keep each ticket branch, remote branch, and issue worktree intact. If one issue fails, do not hide it by rolling its status into the batch result: exclude its changes when feasible, continue only with independently verifiable issues, and mark the responsible issue Integration Fix Required or the appropriate blocked status.
 
+For each ticket, verify its tested implementation commit is an ancestor of permanent predeployment, or prove the equivalent integrated tree if the protected flow squashed it. Compare its changed files with that tree. Do not infer implementation integration from an attempt-log commit, batch SHA, or successful combined test. If only documentation landed, that ticket is `Integration Fix Required`.
+
 ## Render verification
+
+VPS acceptance tickets additionally follow `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md`. Run their host checks serially at an exact integrated SHA after code integration; shared `/opt/runr`, units, state, and provider budgets prohibit parallel VPS runs. A Render predeployment deploy is not a VPS receipt. Record live-pending per issue and keep `Predeployment Integrated` until its own host acceptance passes.
 
 After the selected passing changes are present, merge the batch through the protected predeployment flow, point the frontend, API, and worker Render services to the permanent predeployment branch, wait for deployment, and run the combined checks plus each issue's acceptance path. Record the exact batch revision and deployment evidence.
 

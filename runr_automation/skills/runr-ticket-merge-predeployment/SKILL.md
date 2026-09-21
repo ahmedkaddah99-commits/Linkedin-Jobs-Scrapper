@@ -37,9 +37,13 @@ If the issue branch/worktree or a successful implementation attempt cannot be id
 5. Merge the ticket branch into the permanent predeployment branch through the repository's normal protected-branch/PR flow. Preserve the ticket branch, remote branch, and issue worktree after the merge.
 6. Verify the resulting predeployment revision and collect the commit/PR link.
 
+Before assigning `Predeployment Integrated`, verify the tested implementation commit is an ancestor of the permanent predeployment revision, or prove an equivalent integrated tree when the protected flow creates a squash commit. Verify at least the ticket's changed files against that tree. An attempt-log commit or batch merge comment alone is insufficient. If this check fails, assign `Integration Fix Required` and keep the ticket branch/worktree.
+
 Do not silently resolve conflicts by dropping ticket changes or overwriting another issue. A conflict or defective change is an integration failure, not an implementation success.
 
 ## Render predeployment verification
+
+For any ticket requiring VPS acceptance, also follow `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md`. Render branch switching does not change `/opt/runr`. Pin the exact integrated predeployment SHA on the VPS during a serialized maintenance window, prove the live systemd entrypoint and receipt, and verify rollback. If the VPS check is pending, keep `Predeployment Integrated` with the exact integration revision and explicit live-pending evidence. Never assign `Ready for Production` from Render checks alone for such a ticket.
 
 As part of this explicitly invoked skill, point the Runr frontend, API, and worker Render services to the permanent predeployment branch and retain the deployment-branch binding as the rollback target. Wait for the Render deploy to finish, then verify the application health and the ticket's acceptance path using the approved production-like checks. Record deployment IDs, revision, URLs, timestamps, and check results in the issue evidence.
 

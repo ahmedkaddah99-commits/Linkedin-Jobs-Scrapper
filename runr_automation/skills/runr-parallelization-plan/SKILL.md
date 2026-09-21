@@ -13,4 +13,6 @@ Classify each blocking edge as an `implementation dependency`, `release dependen
 
 Persist plan version, validity fingerprint, edge/conflict evidence, and compatibility membership. Linear labels are projections only. `Parallel` is valid only with a current plan version and wave. Replan only the affected connected component.
 
+Treat `/opt/runr`, acquisition systemd units/timers, active producer state, and provider budgets as exclusive VPS verification resources. Repository implementation may overlap when paths and dependencies permit, but host acceptance runs using `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md` are serial. A predecessor's `Predeployment Integrated` label satisfies an implementation edge only after exact tested code content is verified on the permanent branch.
+
 Do not use a permanent boolean parallel flag, delete user edges, or schedule from labels without authoritative plan data.
