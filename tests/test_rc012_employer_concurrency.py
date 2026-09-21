@@ -13,6 +13,7 @@ from scripts.master_employer_jobs_catalog import (
     TransportGate,
     run_collection,
 )
+from scripts.benchmark_linkedin_pipeline import evaluate_benchmark_contract
 
 
 def _company(identifier: str) -> EmployerCompany:
@@ -251,6 +252,61 @@ def test_request_metrics_do_not_use_job_or_target_counts(tmp_path: Path, monkeyp
 
     assert metrics["requests"] == 0
     assert metrics["request_accounting"]["total_attempts"] == 0
+
+
+def test_common_contract_can_classify_employer_lifecycle_counts() -> None:
+    result = evaluate_benchmark_contract(
+        profile="local-dry-run",
+        counts={
+            "discovered": 3,
+            "parsed": 3,
+            "complete": 2,
+            "accepted": 2,
+            "published": 2,
+            "duplicate": 1,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=32 * 1024 * 1024,
+        browser_requests=0,
+        requests=3,
+        concurrency=1,
+        timeout_seconds=30,
+        accepted_source="approved-employer-source",
+        approval_status="approved",
+    )
+
+    assert result["status"] == "PASS"
+    assert result["window_seconds"] == 300
+    assert result["counts"]["duplicate"] == 1
+
+
+def test_employer_producer_rows_are_not_accepted_counts_without_a_declared_source() -> None:
+    result = evaluate_benchmark_contract(
+        profile="local-dry-run",
+        counts={
+            "discovered": 3,
+            "parsed": 3,
+            "complete": 2,
+            "accepted": 2,
+            "published": 2,
+            "duplicate": 1,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=32 * 1024 * 1024,
+        browser_requests=0,
+        requests=3,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in result["reason_codes"]
+    assert result["counts"]["accepted"] == 0
+    assert result["counts"]["published"] == 0
 
 
 class _SharedFakePage:

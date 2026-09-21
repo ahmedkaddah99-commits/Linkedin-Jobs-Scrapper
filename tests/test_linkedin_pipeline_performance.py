@@ -22,6 +22,16 @@ from scripts.master_linkedin_jobs_catalog import (
     RunnerConfig,
     StateStore,
 )
+from scripts.benchmark_linkedin_pipeline import (
+    BENCHMARK_PROFILES,
+    BENCHMARK_WINDOW_SECONDS,
+    BenchmarkWorkload,
+    benchmark_failure_count,
+    evaluate_benchmark_contract,
+    main as benchmark_main,
+    run_benchmark,
+)
+import scripts.benchmark_linkedin_pipeline as benchmark_pipeline
 from scripts.run_manifested_linkedin import build_dry_run_receipt
 
 
@@ -250,6 +260,314 @@ def test_pipeline_respects_request_accounting(tmp_path: Path) -> None:
     assert metrics["requests"] == 4
     assert metrics["detail_requests"] == 2
     assert metrics["jobs_written"] == 2
+
+
+def test_five_minute_contract_has_lifecycle_counts_and_machine_reason_codes() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 10,
+            "parsed": 10,
+            "complete": 9,
+            "accepted": 7,
+            "published": 6,
+            "duplicate": 1,
+            "failed": 0,
+        },
+        elapsed_seconds=2.0,
+        cpu_seconds=1.0,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=20,
+        concurrency=4,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+    )
+
+    assert result["window_seconds"] == BENCHMARK_WINDOW_SECONDS == 300
+    assert set(result["counts"]) == {
+        "discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed"
+    }
+    assert result["counts"]["accepted"] == 7
+    assert result["counts"]["published"] == 6
+    assert result["status"] == "PASS"
+    assert result["passed"] is True
+    assert result["reason_codes"] == ["within_profile_ceilings"]
+    assert result["owner"] == "acquisition"
+    assert result["revision"] == "T36"
+    assert result["approval"]["status"] == "approved"
+    assert result["accepted_source"] == "approved-offline-source"
+    assert result["info_codes"] == ["accepted_throughput_threshold_unconfigured"]
+
+
+def test_unsourced_accepted_counts_are_zeroed_and_failed() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 10,
+            "parsed": 9,
+            "complete": 8,
+            "accepted": 7,
+            "published": 6,
+            "duplicate": 1,
+            "failed": 1,
+        },
+        elapsed_seconds=2.0,
+        cpu_seconds=1.0,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=20,
+        concurrency=4,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in result["reason_codes"]
+    assert result["counts_zeroed_by_source_guard"] == ["accepted", "published"]
+    assert result["counts"]["accepted"] == 0
+    assert result["counts"]["published"] == 0
+
+
+def test_accepted_source_requires_explicit_approval() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 5,
+            "parsed": 5,
+            "complete": 5,
+            "accepted": 4,
+            "published": 4,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=5,
+        concurrency=2,
+        timeout_seconds=30,
+        accepted_source="undeclared-approval",
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in result["reason_codes"]
+    assert result["counts"]["accepted"] == 0
+
+
+def test_minimum_accepted_throughput_threshold_is_parameterized() -> None:
+    base_counts = {
+        "discovered": 6,
+        "parsed": 6,
+        "complete": 6,
+        "accepted": 6,
+        "published": 6,
+        "duplicate": 0,
+        "failed": 0,
+    }
+    passing = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts=base_counts,
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=6,
+        concurrency=2,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+        minimum_accepted_per_window=300,
+    )
+    failing = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts=dict(base_counts, accepted=0),
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=6,
+        concurrency=2,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+        minimum_accepted_per_window=300,
+    )
+
+    assert passing["status"] == "PASS"
+    assert failing["status"] == "FAIL"
+    assert "accepted_throughput_below_minimum" in failing["reason_codes"]
+
+
+def test_profile_ceilings_are_parameterizable_threshold_inputs() -> None:
+    defaults = [tuple(sorted(profile.items())) for profile in BENCHMARK_PROFILES.values()]
+    assert len(set(defaults)) == len(defaults)
+
+    overridden = evaluate_benchmark_contract(
+        profile="local-dry-run",
+        counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+        elapsed_seconds=1.0,
+        cpu_seconds=0.1,
+        rss_bytes=2_048,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=1,
+        thresholds_override={"rss_bytes": 1_024},
+    )
+
+    assert overridden["status"] == "FAIL"
+    assert "rss_bytes_ceiling_exceeded" in overridden["reason_codes"]
+    assert overridden["thresholds"]["overrides"] == {"rss_bytes": 1_024}
+    assert overridden["thresholds"]["profile_defaults"]["rss_bytes"] > 1_024
+
+    try:
+        evaluate_benchmark_contract(
+            profile="local-dry-run",
+            counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+            elapsed_seconds=1.0,
+            cpu_seconds=0.1,
+            rss_bytes=None,
+            browser_requests=0,
+            requests=0,
+            concurrency=1,
+            timeout_seconds=1,
+            thresholds_override={"unknown_key": 5},
+        )
+    except ValueError as exc:
+        assert "unknown threshold keys" in str(exc)
+    else:
+        raise AssertionError("unknown threshold override keys must be rejected")
+
+
+def test_vps_profile_requires_explicit_approval() -> None:
+    result = evaluate_benchmark_contract(
+        profile="vps-authorized-live",
+        counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert result["passed"] is False
+    assert result["reason_codes"] == ["approval_required"]
+    assert set(BENCHMARK_PROFILES["vps-authorized-live"]) == {
+        "cpu_seconds", "rss_bytes", "browser_requests", "requests",
+        "concurrency", "timeout_seconds", "errors",
+    }
+
+
+def test_missing_rss_fails_closed_against_memory_ceiling() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=None,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert "rss_unavailable" in result["reason_codes"]
+    assert "rss_unavailable" in result["info_codes"]
+
+
+def test_lifecycle_counts_cannot_move_backwards() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 1,
+            "parsed": 1,
+            "complete": 1,
+            "accepted": 2,
+            "published": 3,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_exceeds_complete" in result["reason_codes"]
+    assert "published_exceeds_accepted" in result["reason_codes"]
+
+
+def test_benchmark_failure_count_includes_partial_and_failed_runs() -> None:
+    assert benchmark_failure_count(
+        {"detail_failures": 0, "companies_partial": 1, "run_outcome": "PARTIAL"}
+    ) == 1
+    assert benchmark_failure_count({"run_outcome": "PARTIAL"}) == 1
+    assert benchmark_failure_count({"run_status": "PARTIAL"}) == 1
+    assert benchmark_failure_count(
+        {"detail_failures": 0, "companies_partial": 0, "run_outcome": "FAILURE"}
+    ) == 1
+
+
+def test_benchmark_applies_timeout_to_runner_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, float] = {}
+
+    class CapturingRunner:
+        def __init__(self, config, *, transport):
+            observed["timeout"] = config.timeout
+
+        def run(self) -> dict[str, object]:
+            return {"run_outcome": "COMPLETE"}
+
+    monkeypatch.setattr(benchmark_pipeline, "CatalogRunner", CapturingRunner)
+    result = run_benchmark(
+        BenchmarkWorkload(companies=1, pages_per_company=1, jobs_per_page=1),
+        timeout_seconds=7.5,
+    )
+
+    assert observed["timeout"] == 7.5
+    assert result["benchmark_contract"]["observed"]["timeout_seconds"] == 7.5
+
+
+def test_failed_contract_returns_nonzero_cli_status() -> None:
+    assert benchmark_main(
+        [
+            "--companies", "1",
+            "--pages-per-company", "1",
+            "--jobs-per-page", "1",
+            "--search-latency", "0",
+            "--detail-latency", "0",
+            "--profile", "vps-authorized-live",
+        ]
+    ) == 1
+
+
+def test_offline_pipeline_benchmark_emits_common_contract(tmp_path: Path) -> None:
+    result = run_benchmark(
+        BenchmarkWorkload(companies=1, pages_per_company=1, jobs_per_page=1)
+    )
+
+    contract = result["benchmark_contract"]
+    assert contract["window_seconds"] == 300
+    assert set(contract["counts"]) == {
+        "discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed"
+    }
+    # Producer rows are never counted as accepted/published without T32.
+    assert contract["counts"]["accepted"] == 0
+    assert contract["counts"]["published"] == 0
+    assert contract["accepted_source"] is None
+    assert contract["info_codes"] == ["accepted_throughput_threshold_unconfigured"]
 
 
 def _duplicate_card_page(job_id: str) -> str:
