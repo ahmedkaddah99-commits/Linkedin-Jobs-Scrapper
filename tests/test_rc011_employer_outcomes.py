@@ -119,9 +119,12 @@ def test_complete_empty_ats_snapshot_confirms_zero_without_browser_fallback(monk
     assert result.targets[0]["stop_reason"] == "pagination_complete"
 
 
-def test_complete_authoritative_target_stops_candidate_fanout(monkeypatch) -> None:
+def test_complete_authoritative_target_still_traverses_independent_source(monkeypatch) -> None:
     import scripts.master_employer_jobs_catalog as catalog
 
+    # T56 source-union contract: a complete authoritative ATS snapshot no longer
+    # stops candidate fan-out; the independent main career site is still
+    # traversed and its jobs are unioned with the ATS jobs.
     first_url = "https://boards.greenhouse.io/company"
     second_url = "https://company.example/careers"
     monkeypatch.setattr(
@@ -161,14 +164,34 @@ def test_complete_authoritative_target_stops_candidate_fanout(monkeypatch) -> No
     monkeypatch.setattr(
         catalog,
         "fetch_generic_snapshot",
-        lambda url, **_: (_ for _ in ()).throw(AssertionError(f"unexpected candidate: {url}")),
+        lambda url, **_: {
+            "jobs": [
+                {
+                    "job_id": "careers-1",
+                    "title": "Office Manager",
+                    "job_detail_url": "https://company.example/jobs/office-manager",
+                    "description": "Join our team in Hamburg, Germany.",
+                    "location": "Hamburg, Germany",
+                    "source_raw_payload": {"format": "html"},
+                }
+            ],
+            "status": "completed",
+            "complete_snapshot": True,
+            "pagination_complete": True,
+            "request_url": url,
+            "resolved_url": url,
+        },
     )
 
-    result = collect_company(_company(), lambda _: (_ for _ in ()).throw(AssertionError()), CollectorLimits(max_targets=2))
+    result = collect_company(_company(), lambda _: None, CollectorLimits(max_targets=2))
 
     assert ats_calls == [first_url]
+    assert {target["url"] for target in result.targets} == {first_url, second_url}
     assert result.outcome == "complete_with_jobs"
-    assert len(result.jobs) == 1
+    assert len(result.jobs) == 2
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory[first_url]["traversal_status"] == "traversed"
+    assert inventory[second_url]["traversal_status"] == "traversed"
 
 
 def test_request_budget_is_a_partial_outcome_and_is_checkpointed(tmp_path: Path, monkeypatch) -> None:

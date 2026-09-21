@@ -990,6 +990,43 @@ def discover_many(
     return results
 
 
+def build_source_inventory(result: CareerDiscoveryResult) -> list[dict[str, Any]]:
+    """Deterministic, bounded inventory of every career source found for one employer.
+
+    The inventory preserves every discovered candidate — including sources that
+    were not selected as the preferred traversal route — with kind, host/policy
+    validation, provenance, and ranking. ``traversal_status`` starts as
+    ``discovered``; the collector assigns ``traversed`` or ``deferred`` plus an
+    explicit ``deferred_reason`` once it disposes of each source.
+    """
+
+    entries: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for candidate in result.candidates:
+        url = str(getattr(candidate, "url", "") or "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        provenance = getattr(candidate, "provenance", None)
+        entries.append(
+            {
+                "url": url,
+                "source_kind": str(getattr(candidate, "source", "") or "career_discovery"),
+                "ats_type": str(getattr(candidate, "ats_type", "") or ""),
+                "host_policy": str(getattr(candidate, "host_policy", "") or ""),
+                "validation_status": str(getattr(candidate, "validation_status", "") or ""),
+                "confidence_score": float(getattr(candidate, "confidence_score", 0.0) or 0.0),
+                "provenance": dict(provenance) if isinstance(provenance, Mapping) else {},
+                "traversal_status": "discovered",
+                "deferred_reason": "",
+                "job_count": 0,
+                "duplicate_count": 0,
+                "target_status": "",
+            }
+        )
+    return entries
+
+
 def build_discovery_receipt(result: CareerDiscoveryResult) -> dict[str, Any]:
     """One bounded, cacheable receipt per employer discovery outcome."""
 
@@ -1105,6 +1142,7 @@ __all__ = [
     "FetchResult",
     "build_career_coverage_benchmark",
     "build_discovery_receipt",
+    "build_source_inventory",
     "collect_discovery_receipts",
     "discover_career_url",
     "discover_many",

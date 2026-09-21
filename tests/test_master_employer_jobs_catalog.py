@@ -1361,3 +1361,299 @@ def test_production_projection_main_uses_incremental_csv_path(tmp_path: Path, mo
     assert len(rows) == 5001
     assert rows[0]["source_job_id"] == "linkedin-0"
     assert rows[-1]["source_job_id"] == "employer-1"
+
+
+def _multi_source_discovery(*candidates: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        homepage_url="https://acme.example",
+        primary_career_url=candidates[0].url if candidates else "",
+        candidates=list(candidates),
+        crawl_status="found",
+        validation_evidence=[],
+    )
+
+
+def _generic_candidate(url: str, confidence: float = 0.6) -> SimpleNamespace:
+    return SimpleNamespace(url=url, ats_type="", source="homepage_link", confidence_score=confidence, evidence=[])
+
+
+def _ats_candidate(url: str, ats_type: str = "greenhouse", confidence: float = 0.9) -> SimpleNamespace:
+    return SimpleNamespace(url=url, ats_type=ats_type, source="homepage_link", confidence_score=confidence, evidence=[])
+
+
+def _generic_job_snapshot(url: str, job_id: str) -> dict[str, Any]:
+    return {
+        "jobs": [
+            {
+                "job_id": job_id,
+                "title": "Engineer",
+                "job_detail_url": f"{url.rstrip('/')}/jobs/{job_id}",
+                "description": "Build things in Berlin, Germany.",
+                "location": "Berlin, Germany",
+                "source_raw_payload": {"format": "html"},
+            }
+        ],
+        "status": "completed",
+        "complete_snapshot": True,
+        "pagination_complete": True,
+        "request_url": url,
+        "resolved_url": url,
+    }
+
+
+def _ats_job_snapshot(url: str) -> dict[str, Any]:
+    return {
+        "jobs": [
+            {
+                "id": 42,
+                "title": "Senior Analyst",
+                "absolute_url": f"{url}/jobs/42",
+                "content": "Work in Berlin, Germany.",
+                "location": {"name": "Berlin, Germany"},
+                "application_url": f"{url}/jobs/42/apply",
+            }
+        ],
+        "status": "completed",
+        "complete_snapshot": True,
+        "pagination_complete": True,
+        "request_url": url,
+        "resolved_url": url,
+    }
+
+
+def test_collect_company_traverses_ats_and_career_site_and_unions_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://acme.example/careers"),
+        _ats_candidate("https://boards.greenhouse.io/acme"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+    generic_urls: list[str] = []
+
+    def fake_generic(url: str, **_: Any) -> dict[str, Any]:
+        generic_urls.append(url)
+        return _generic_job_snapshot(url, "careers-1")
+
+    monkeypatch.setattr(catalog, "fetch_generic_snapshot", fake_generic)
+    ats_urls: list[str] = []
+
+    def fake_ats(url: str, *_: Any, **__: Any) -> dict[str, Any]:
+        ats_urls.append(url)
+        return _ats_job_snapshot(url)
+
+    monkeypatch.setattr(catalog, "fetch_ats_snapshot", fake_ats)
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=5))
+
+    assert generic_urls == ["https://acme.example/careers"]
+    assert ats_urls == ["https://boards.greenhouse.io/acme"]
+    assert {target["url"] for target in result.targets} == {
+        "https://acme.example/careers",
+        "https://boards.greenhouse.io/acme",
+    }
+    assert all(target["status"] == "complete_with_jobs" for target in result.targets)
+    assert len(result.jobs) == 2
+    assert result.outcome == "complete_with_jobs"
+
+    inventory = result.coverage["source_inventory"]
+    assert {entry["url"] for entry in inventory} == {
+        "https://acme.example/careers",
+        "https://boards.greenhouse.io/acme",
+    }
+    assert all(entry["traversal_status"] == "traversed" for entry in inventory)
+    assert {entry["job_count"] for entry in inventory} == {1}
+    counts = result.coverage["counts"]
+    assert counts["union_jobs"] == 2
+    assert counts["sources_traversed"] == 2
+    assert counts["sources_deferred"] == 0
+
+
+def test_collect_company_defers_redundant_same_host_source_with_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://acme.example/careers", confidence=0.6),
+        _generic_candidate("https://acme.example/jobs", confidence=0.55),
+        _ats_candidate("https://jobs.lever.co/acme", ats_type="lever"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+    generic_urls: list[str] = []
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda url, **_: generic_urls.append(url) or _generic_job_snapshot(url, "careers-1"),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "fetch_ats_snapshot",
+        lambda url, *_, **__: _ats_job_snapshot(url),
+    )
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=5))
+
+    assert generic_urls == ["https://acme.example/careers"]
+    assert {target["url"] for target in result.targets} == {
+        "https://acme.example/careers",
+        "https://jobs.lever.co/acme",
+    }
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory["https://acme.example/careers"]["traversal_status"] == "traversed"
+    assert inventory["https://jobs.lever.co/acme"]["traversal_status"] == "traversed"
+    assert inventory["https://acme.example/jobs"]["traversal_status"] == "deferred"
+    assert (
+        inventory["https://acme.example/jobs"]["deferred_reason"]
+        == "redundant_with_traversed_source"
+    )
+    assert result.coverage["counts"]["sources_deferred"] == 1
+
+
+def test_collect_company_deduplicates_jobs_across_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    shared_job = {
+        "job_id": "shared-1",
+        "title": "Engineer",
+        "job_detail_url": "https://acme.example/jobs/engineer",
+        "description": "Build things in Berlin, Germany.",
+        "location": "Berlin, Germany",
+        "source_raw_payload": {"format": "html"},
+    }
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://careers.acme.example/jobs"),
+        _generic_candidate("https://jobs.acme.example/listings"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+
+    def fake_generic(url: str, **_: Any) -> dict[str, Any]:
+        snapshot = _generic_job_snapshot(url, "unique-1" if "careers" in url else "unique-2")
+        snapshot["jobs"].append(dict(shared_job))
+        return snapshot
+
+    monkeypatch.setattr(catalog, "fetch_generic_snapshot", fake_generic)
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=5))
+
+    assert len(result.jobs) == 3
+    counts = result.coverage["counts"]
+    assert counts["union_jobs"] == 3
+    assert counts["duplicates_skipped"] == 1
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory["https://careers.acme.example/jobs"]["duplicate_count"] == 0
+    assert inventory["https://jobs.acme.example/listings"]["duplicate_count"] == 1
+
+
+def test_collect_company_preserves_partial_union_when_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://acme.example/careers"),
+        _ats_candidate("https://boards.greenhouse.io/acme"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda url, **_: _generic_job_snapshot(url, "careers-1"),
+    )
+
+    def failing_ats(url: str, *_: Any, **__: Any) -> dict[str, Any]:
+        raise catalog.RequestBudgetExceeded(3)
+
+    monkeypatch.setattr(catalog, "fetch_ats_snapshot", failing_ats)
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=5))
+
+    assert [job["source_job_id"] for job in result.jobs] == ["careers-1"]
+    assert [target["url"] for target in result.targets] == ["https://acme.example/careers"]
+    assert any(
+        failure.get("stage") == "source_traversal"
+        and failure.get("reason") == "request_budget_exhausted"
+        for failure in result.failures
+    )
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory["https://acme.example/careers"]["traversal_status"] == "traversed"
+    assert inventory["https://boards.greenhouse.io/acme"]["traversal_status"] == "deferred"
+    assert (
+        inventory["https://boards.greenhouse.io/acme"]["deferred_reason"]
+        == "request_budget_exhausted"
+    )
+    assert result.outcome == "partial"
+
+
+def test_collect_company_marks_sources_below_target_rank_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://acme.example/careers"),
+        _ats_candidate("https://boards.greenhouse.io/acme"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda url, **_: _generic_job_snapshot(url, "careers-1"),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "fetch_ats_snapshot",
+        lambda url, *_, **__: _ats_job_snapshot(url),
+    )
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=1))
+
+    assert [target["url"] for target in result.targets] == ["https://acme.example/careers"]
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory["https://boards.greenhouse.io/acme"]["traversal_status"] == "deferred"
+    assert inventory["https://boards.greenhouse.io/acme"]["deferred_reason"] == "below_rank_cutoff"
+
+
+def test_collect_company_isolates_first_source_failure_and_still_unions_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    discovery = _multi_source_discovery(
+        _generic_candidate("https://acme.example/careers"),
+        _ats_candidate("https://boards.greenhouse.io/acme"),
+    )
+    monkeypatch.setattr(catalog, "discover_career_url", lambda **_: discovery)
+
+    def failed_generic(url: str, **_: Any) -> dict[str, Any]:
+        return {
+            "jobs": [],
+            "status": "failed",
+            "error": "boom",
+            "request_url": url,
+            "resolved_url": url,
+        }
+
+    monkeypatch.setattr(catalog, "fetch_generic_snapshot", failed_generic)
+    monkeypatch.setattr(
+        catalog,
+        "fetch_ats_snapshot",
+        lambda url, *_, **__: _ats_job_snapshot(url),
+    )
+
+    result = collect_company(_company(), lambda _url: None, CollectorLimits(max_targets=5))
+
+    assert [job["source_provider"] for job in result.jobs] == ["greenhouse"]
+    statuses = {target["url"]: target["status"] for target in result.targets}
+    assert statuses == {
+        "https://acme.example/careers": "failed",
+        "https://boards.greenhouse.io/acme": "complete_with_jobs",
+    }
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory["https://acme.example/careers"]["target_status"] == "failed"
+    assert inventory["https://boards.greenhouse.io/acme"]["target_status"] == "complete_with_jobs"
+    assert result.outcome == "partial"

@@ -104,6 +104,7 @@ subsystems:
       - No NET-OPS script runs against a live provider outside an authorized host or without --dry-run/--help in review.
       - RUNR_ACQUISITION_LIVE_NETWORK_ENABLED is never set true in tests.
       - CompanyEnrich autocomplete is a distinct free, bounded, fail-closed domain-seed path; it never calls paid enrichment and never creates a career URL.
+      - Employer collection unions every independent validated career source (distinct host or ATS tenant) within the target/request budget; every discovered source persists in coverage.source_inventory with per-source counts and an explicit deferral reason.
       - Migrations, deploy/**, and admin acquisition surfaces are never edited or restored from this subsystem.
 
   - id: application-services
