@@ -5,6 +5,8 @@ description: Use when explicitly promoting a selected set of Runr Linear issues 
 
 # Runr batch merge deployment
 
+Before promoting any VPS acceptance ticket, verify its own exact-revision host receipt and rollback evidence against `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md`. A passing Render batch is insufficient for VPS tickets; exclude a ticket with missing host evidence from the deployment batch.
+
 This skill is explicit-only. The user supplies Linear IDs, URLs, or unambiguous issue details. It promotes selected Ready for Production issues as one controlled deployment and finalizes each issue independently.
 
 ## Mandatory release approval
