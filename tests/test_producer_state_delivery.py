@@ -6,7 +6,9 @@ from backend.application.source_eligibility_manifest import (
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState
 from scripts.master_linkedin_jobs_catalog import CATALOG_FIELDS, StateStore
-from scripts.publish_producer_states import run_delivery
+from scripts.publish_producer_states import SOURCE_EMPLOYER, SOURCE_LINKEDIN, run_delivery
+
+import pytest
 
 
 def _manifest(tmp_path):
@@ -26,13 +28,7 @@ def _manifest(tmp_path):
     return path
 
 
-def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, monkeypatch):
-    monkeypatch.setenv("RUNR_ENV", "test")
-    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
-    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
-    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
-    manifest = _manifest(tmp_path)
-
+def _seed_producer_states(tmp_path):
     linkedin_path = tmp_path / "linkedin" / "master_linkedin_jobs_state.db"
     linkedin = StateStore(linkedin_path)
     linkedin.start_run("li-run-1", mode="daily", input_sha256="fixture")
@@ -52,8 +48,8 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
             "employment_type": "full_time",
             "workplace_type": "hybrid",
             "seniority": "mid",
-"company_logo": "https://alpha.example/logo.png",
-                "company_enrichment": "verified",
+            "company_logo": "https://alpha.example/logo.png",
+            "company_enrichment": "verified",
             "last_seen_at": "2026-09-10T00:00:00Z",
             "lifecycle_status": "active",
             "source": "linkedin",
@@ -107,6 +103,16 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
         source_version="fixture",
     )
     employer.close()
+    return linkedin_path, employer_path
+
+
+def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
 
     result = run_delivery(
         manifest_path=manifest,
@@ -152,3 +158,106 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
     )
     assert replay["cycle_id"] == first_cycle
     assert replay["publication_id"] == result["publication_id"]
+
+
+def test_crash_before_checkpoint_save_reruns_the_same_window_idempotently(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
+
+    store_path = tmp_path / "backend" / "backend.sqlite3"
+    store = SqliteAcquisitionStore(store_path)
+    try:
+        assert store.publisher_checkpoint(SOURCE_LINKEDIN)["bootstrap_complete"] is False
+        assert store.publisher_checkpoint(SOURCE_EMPLOYER)["source_rowid"] == 0
+    finally:
+        if hasattr(store, "close"):
+            store.close()
+
+    original_publish = SqliteAcquisitionStore.publish_valid_snapshot
+
+    def crash(self, *args, **kwargs):
+        raise RuntimeError("simulated crash after delivery")
+
+    monkeypatch.setattr(SqliteAcquisitionStore, "publish_valid_snapshot", crash)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        run_delivery(
+            manifest_path=manifest,
+            linkedin_state=linkedin_path,
+            employer_state=employer_path,
+            data_dir=tmp_path / "backend",
+            source_version="fixture-release",
+        )
+    monkeypatch.setattr(SqliteAcquisitionStore, "publish_valid_snapshot", original_publish)
+
+    store = SqliteAcquisitionStore(store_path)
+    try:
+        with store._connect() as connection:
+            cycle = connection.execute(
+                "SELECT status, error_code FROM acquisition_cycles"
+            ).fetchall()
+            checkpoint_rows = connection.execute(
+                "SELECT source, source_rowid, bootstrap_complete FROM acquisition_publisher_checkpoints"
+            ).fetchall()
+        assert any(row["status"] == "recovery_required" for row in cycle)
+        assert checkpoint_rows == [], "a crashed run must never advance checkpoints"
+    finally:
+        if hasattr(store, "close"):
+            store.close()
+
+    retry = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=tmp_path / "backend",
+        source_version="fixture-release",
+    )
+    assert retry["status"] in {"completed", "degraded"}
+    assert retry["publication_id"]
+
+    store = SqliteAcquisitionStore(store_path)
+    try:
+        linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN)
+        employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER)
+        assert linkedin_checkpoint["bootstrap_complete"] is True
+        assert linkedin_checkpoint["last_publication_id"] == retry["publication_id"]
+        assert employer_checkpoint["bootstrap_complete"] is True
+
+        with store._connect() as connection:
+            published = connection.execute(
+                "SELECT COUNT(*) FROM acquisition_publication_jobs WHERE publication_id=?",
+                (retry["publication_id"],),
+            ).fetchone()[0]
+            duplicated_pairs = connection.execute(
+                "SELECT target_id, external_job_id, COUNT(*) AS occurrences "
+                "FROM job_source_observations GROUP BY target_id, external_job_id HAVING occurrences > 1"
+            ).fetchall()
+            observation_total = connection.execute(
+                "SELECT COUNT(*) FROM job_source_observations"
+            ).fetchone()[0]
+        assert published == 2
+        assert duplicated_pairs == [], "replayed delivery must not duplicate catalog jobs"
+        assert observation_total == 3
+    finally:
+        if hasattr(store, "close"):
+            store.close()
+
+
+def test_publisher_checkpoint_preflight_requires_registry_table(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+
+    store = SqliteAcquisitionStore(tmp_path / "backend" / "backend.sqlite3")
+    try:
+        with store._connect() as connection:
+            connection.execute("DROP TABLE acquisition_publisher_checkpoints")
+        with pytest.raises(RuntimeError, match="061_acquisition_publisher_checkpoints"):
+            store.require_publisher_checkpoint_table()
+    finally:
+        if hasattr(store, "close"):
+            store.close()
