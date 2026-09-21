@@ -161,9 +161,20 @@ runr-acquisition-backup.service (T44)
 
 deploy/restore-acquisition-states.sh (operator)
  ├─ refuse non-symlink active path or existing release dir (L21–32); flock canonicalize.lock (L34–39)
- ├─ validate_acquisition_runtime.py --role all --allow-state-drift (L44–49)
+ ├─ validate_acquisition_runtime.py --role all --allow-state-drift --require-table-counts (L44–49)
  ├─ scripts/canonicalize_producer_states.py --registry inputs/company_registry_canonical.csv … --output-dir versions/<id> (L52–56)
- └─ symlink linkedin/employer DBs; atomic `mv -Tf` of state/active (L58–67)
+ ├─ symlink linkedin/employer DBs; atomic `mv -Tf` of state/active (L58–67)
+ └─ `rollback` subcommand: atomically re-points `active` at the most recent other
+    `versions/<release>` dir (newest by mtime, excluding the current target) under the same
+    canonicalize.lock; never deletes any generation; exits 1 when no previous release exists
+
+Pre-mutation evidence: `deploy/validate_acquisition_runtime.py --role all --evidence-report <path>`
+writes a read-only report (`runr.acquisition.pre-mutation-evidence.v1`) with the declared release
+SHA, exact unit `ExecStart` commands, environment names only (values dropped), state-override
+variable names, active symlink target, database size/SHA-256/schema/row counts, and the rollback
+target. The T45 activation contract also enforces per-table row counts at restore time via
+`--require-table-counts` (e.g. LinkedIn `jobs`/`job_company_observations` = 188,206, employer
+`jobs` = 2,612, `companies` = 428 before any activation).
 
 runr-acquisition-worker.service → deploy/start.sh acquisition → workspace_runner.py run-worker --worker-role acquisition
    (legacy source scheduler disabled by env; see ../01-architecture/backend-workers-and-orchestration.md)
