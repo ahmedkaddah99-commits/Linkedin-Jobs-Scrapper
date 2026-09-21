@@ -46,6 +46,14 @@ def test_release_metadata_uses_render_commit_without_claiming_unknown_values(mon
     assert json.loads(metadata.to_json())["schema_version"] == "runr.release.v1"
 
 
+def test_release_metadata_defaults_to_the_code_derived_migration_head(monkeypatch) -> None:
+    monkeypatch.delenv("RUNR_MIGRATION_HEAD", raising=False)
+
+    metadata = ReleaseMetadata.from_environment(service="worker")
+
+    assert metadata.migration_head == current_migration_head()
+
+
 def test_previous_and_current_images_share_the_declared_contract() -> None:
     assert are_release_contracts_compatible("runr-contract-v1", "runr-contract-v1")
     assert not are_release_contracts_compatible("runr-contract-v0", "runr-contract-v1")
