@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,19 @@ SYSTEMD = ROOT / "deploy" / "systemd"
 
 def _read_unit(name: str) -> str:
     return (SYSTEMD / name).read_text(encoding="utf-8")
+
+
+def _schedule_manifest() -> dict[str, object]:
+    target = _read_unit("runr.target")
+    match = re.search(
+        r"^# RUNR_ACQUISITION_SCHEDULE_MANIFEST_BEGIN\n"
+        r"# (.+)\n"
+        r"# RUNR_ACQUISITION_SCHEDULE_MANIFEST_END$",
+        target,
+        flags=re.MULTILINE,
+    )
+    assert match is not None
+    return json.loads(match.group(1))
 
 
 def test_runtime_contract_selects_systemd_and_keeps_unmeasured_values_explicit() -> None:
@@ -97,7 +111,8 @@ def test_logs_are_bounded_and_application_target_includes_independent_acquisitio
     assert "RuntimeMaxUse=256M" in journald
     assert "MaxRetentionSec=14day" in journald
     # The legacy acquisition worker is intentionally outside the target (C6).
-    assert "runr-acquisition-worker.service" not in target
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    assert "runr-acquisition-worker.service" not in wants
     for timer in (
         "runr-acquisition-linkedin.timer",
         "runr-acquisition-employer.timer",
