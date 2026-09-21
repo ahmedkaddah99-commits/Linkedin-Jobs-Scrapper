@@ -77,6 +77,13 @@ def _customer_task_payload(row, *, include_lease: bool = True) -> dict[str, Any]
 class SqlitePersonalizedJobsStore(_SqliteStore):
     """Persistence boundary for user state and read-only catalog projections."""
 
+    # Bounded, publication-keyed cache for the filter-capability aggregate. A
+    # publication's catalog is immutable, so capabilities for one publication
+    # id are a pure function; the cache only bounds repeated full-catalog
+    # scans on the warm feed path and is capped to avoid unbounded growth.
+    _FILTER_CAPABILITIES_CACHE_LIMIT = 8
+    _filter_capabilities_cache: dict[str, dict[str, bool]] = {}
+
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -1314,11 +1321,21 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             publication_id = self._head_publication_id(connection)
             if not publication_id:
                 return {key: False for key in capability_exprs}
+            cache_key = str(publication_id)
+            cached = self._filter_capabilities_cache.get(cache_key)
+            if cached is not None:
+                return dict(cached)
             result = connection.execute(
                 "SELECT " + ", ".join(f"MAX(CASE WHEN {expr} THEN 1 ELSE 0 END) AS {key}" for key, expr in capability_exprs.items()) + f" FROM ({self._published_jobs_sql()}) AS catalog",
                 (publication_id,),
             ).fetchone()
-        return {key: bool(int(result[key] or 0)) for key in capability_exprs}
+        capabilities = {key: bool(int(result[key] or 0)) for key in capability_exprs}
+        cache = self._filter_capabilities_cache
+        while len(cache) >= self._FILTER_CAPABILITIES_CACHE_LIMIT:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+        cache[cache_key] = capabilities
+        return dict(capabilities)
 
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
