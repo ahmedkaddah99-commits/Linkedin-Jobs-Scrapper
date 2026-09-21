@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from backend.database.connection import DatabaseConfigurationError, validate_release_provenance
+from backend.repositories.sqlite_migrations import current_migration_head
 from backend.deployment.release_contract import (
     RELEASE_CONTRACT_VERSION,
     ReleaseMetadata,
@@ -73,3 +77,44 @@ def test_render_and_ci_select_distinct_api_and_worker_images() -> None:
     assert "buildFilter:" in render
     assert "Dockerfile.api" in ci
     assert "Dockerfile.worker" in ci
+
+
+def test_render_declares_the_code_derived_migration_head_for_api_and_worker() -> None:
+    render = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    expected_head = current_migration_head()
+
+    assert render.count(f"value: {expected_head}") == 2
+    assert "value: 058_customer_task_queue" not in render
+
+
+def test_startup_entrypoint_validates_release_provenance_before_emitting_metadata() -> None:
+    start = (ROOT / "deploy" / "start.sh").read_text(encoding="utf-8")
+
+    assert "validate_release_provenance" in start
+    assert "backend.database.connection" in start
+    assert "export RUNR_MIGRATION_HEAD=" in start
+
+
+def test_release_provenance_validator_rejects_an_incompatible_migration_head() -> None:
+    with pytest.raises(DatabaseConfigurationError, match="migration head"):
+        validate_release_provenance(configured_migration_head="058_customer_task_queue")
+
+
+def test_release_provenance_validator_rejects_conflicting_known_revisions() -> None:
+    with pytest.raises(DatabaseConfigurationError, match="commit"):
+        validate_release_provenance(release_commit="abc123", runtime_commit="def456")
+
+
+def test_release_provenance_validator_ignores_placeholder_revisions() -> None:
+    expected_head = current_migration_head()
+
+    assert (
+        validate_release_provenance(
+            release_branch="unknown",
+            runtime_branch="deployment/render-turso-r2",
+            release_commit="unset",
+            runtime_commit="abc123",
+            configured_migration_head=expected_head,
+        )
+        == expected_head
+    )

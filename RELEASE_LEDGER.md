@@ -262,3 +262,24 @@ were clean at inspection time.
   constraint. No repair or redeploy commit was created; the local source and
   release checks are green. This hold requires Render workspace authority or
   restored pipeline capacity.
+
+## T30 release provenance reconciliation (2026-09-21)
+
+This section is an append-only reconciliation of the recorded release
+provenance. It does not convert documentary records into live observations.
+
+| Surface | Recorded revision/head | Evidence and status |
+| --- | --- | --- |
+| Repository migration registry | `060_publication_latest_observation_index` | Code-derived from the final entry of `MIGRATIONS`; checksum-guarded and append-only. |
+| Render API and worker declaration | `060_publication_latest_observation_index` | `render.yaml` is now aligned with the registry; startup rejects a configured incompatible head. |
+| T30 implementation base | `abd670407a8389a57d95d67bc909baa67e6237b9` | The verified T26 implementation dependency on `predeployment/render-turso-r2`; this is implementation provenance, not a live deployment claim. |
+| Historical Render/VPS runtime record | `5dfdd1066d8bcba4a958f3d95e98dc6b7dbe8553` | Recorded in `docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md`; current live revision remains unverified. |
+| Historical Wave 1 repository records | `0068a5f740d379e896d8f6831c3fa5fc63d434b9` backend/API-worker and `95990b07b597723ceea826e9401d87b513158e9a` frontend | Historical pre-Wave-1 records; not evidence of the current deployed revision. |
+
+`deploy/start.sh` now validates known `RUNR_RELEASE_BRANCH`/`RENDER_GIT_BRANCH`
+and `RUNR_RELEASE_COMMIT`/`RENDER_GIT_COMMIT` pairs before emitting release
+metadata. Unset or explicit placeholder values remain non-claims for local
+builds; two known conflicting values fail closed. The observed customer
+checkpoint-table gap remains owned by T31 and requires its future append-only
+schema decision. No production migration, deploy, restart, or database write
+was performed by T30.

@@ -18,6 +18,14 @@ if [ ! -x "$python_bin" ]; then
   exit 1
 fi
 
+# Release metadata must agree with the code registry before any role starts.
+# The validator also rejects conflicting known Render/VPS revisions.
+migration_head="$("$python_bin" -c '
+from backend.database.connection import validate_release_provenance
+print(validate_release_provenance())
+')"
+export RUNR_MIGRATION_HEAD="$migration_head"
+
 emit_release_metadata() {
   service="$1"
   worker_role="${2:-}"
