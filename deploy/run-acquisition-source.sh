@@ -20,6 +20,10 @@ include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
 total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-110}"
 run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"
 
+# Ownership: this wrapper is invoked only by the LinkedIn or employer source
+# timer. A per-source flock skips overlap with exit 75; timeout 900 returns
+# 124 and the receipt records the failed run.
+
 if [ "$source_name" = "linkedin" ]; then
   state_dir="${RUNR_LINKEDIN_STATE_DIR:-$state_root/linkedin}"
   output_dir="$export_root/linkedin"
