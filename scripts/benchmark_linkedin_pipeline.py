@@ -19,7 +19,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -33,6 +33,195 @@ from scripts.master_linkedin_jobs_catalog import (
 )
 
 FIXTURES = ROOT / "tests" / "fixtures"
+
+BENCHMARK_CONTRACT = "runr.producer-throughput.v1"
+BENCHMARK_REVISION = "T36"
+BENCHMARK_OWNER = "acquisition"
+BENCHMARK_WINDOW_SECONDS = 300
+
+# These are admission ceilings, not claims about measured provider capacity.
+# The live profile is intentionally explicit about its approval requirement.
+BENCHMARK_PROFILES: dict[str, dict[str, int]] = {
+    "local-dry-run": {
+        "cpu_seconds": 300,
+        "rss_bytes": 1_073_741_824,
+        "browser_requests": 0,
+        "requests": 500,
+        "concurrency": 8,
+        "timeout_seconds": 30,
+        "errors": 0,
+    },
+    "ci-fixture": {
+        "cpu_seconds": 120,
+        "rss_bytes": 1_073_741_824,
+        "browser_requests": 0,
+        "requests": 2_000,
+        "concurrency": 16,
+        "timeout_seconds": 30,
+        "errors": 0,
+    },
+    "vps-authorized-live": {
+        "cpu_seconds": 270,
+        "rss_bytes": 2_147_483_648,
+        "browser_requests": 500,
+        "requests": 10_000,
+        "concurrency": 32,
+        "timeout_seconds": 45,
+        "errors": 100,
+    },
+}
+
+THROUGHPUT_COUNT_NAMES = (
+    "discovered",
+    "parsed",
+    "complete",
+    "accepted",
+    "published",
+    "duplicate",
+    "failed",
+)
+
+
+def normalize_throughput_counts(values: Mapping[str, object]) -> dict[str, int]:
+    """Return the common lifecycle counters with stable, non-negative values."""
+
+    counts: dict[str, int] = {}
+    for name in THROUGHPUT_COUNT_NAMES:
+        try:
+            value = int(values.get(name, 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"throughput count {name!r} must be an integer") from exc
+        if value < 0:
+            raise ValueError(f"throughput count {name!r} must not be negative")
+        counts[name] = value
+    return counts
+
+
+def load_thresholds_override(path: Path) -> dict[str, int]:
+    """Load operator-supplied ceiling overrides (parameterized threshold input)."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("threshold override file must be a JSON object")
+    return dict(payload)
+
+
+def evaluate_benchmark_contract(
+    *,
+    profile: str,
+    counts: Mapping[str, object],
+    elapsed_seconds: float,
+    cpu_seconds: float,
+    rss_bytes: int | None,
+    browser_requests: int,
+    requests: int,
+    concurrency: int,
+    timeout_seconds: float,
+    approval_status: str = "not-required",
+    owner: str = BENCHMARK_OWNER,
+    revision: str = BENCHMARK_REVISION,
+    accepted_source: str | None = None,
+    thresholds_override: Mapping[str, int] | None = None,
+    minimum_accepted_per_window: int | None = None,
+) -> dict[str, Any]:
+    """Evaluate one run against the shared five-minute producer contract.
+
+    The profile ceilings are admission ceilings and parameterized threshold
+    inputs: ``thresholds_override`` may replace any ceiling for one evaluation.
+    ``accepted``/``published`` counts are only honored when a declared
+    ``accepted_source`` exists (the T32 publishable contract) and the run is
+    explicitly approved; unsourced counts are zeroed and failed with a reason
+    code instead of being counted from producer rows.
+    """
+
+    if profile not in BENCHMARK_PROFILES:
+        raise ValueError(f"unknown benchmark profile: {profile}")
+    if elapsed_seconds < 0 or cpu_seconds < 0:
+        raise ValueError("elapsed and CPU seconds must not be negative")
+
+    ceilings = dict(BENCHMARK_PROFILES[profile])
+    thresholds: dict[str, Any] = {
+        "profile_defaults": dict(BENCHMARK_PROFILES[profile]),
+        "overrides": {},
+        "minimum_accepted_per_window": minimum_accepted_per_window,
+    }
+    if thresholds_override is not None:
+        unknown = set(thresholds_override) - set(ceilings)
+        if unknown:
+            raise ValueError(f"unknown threshold keys: {sorted(unknown)}")
+        for name, value in thresholds_override.items():
+            number = int(value)
+            if number < 0:
+                raise ValueError(f"threshold override {name!r} must not be negative")
+            ceilings[name] = number
+        thresholds["overrides"] = {name: int(value) for name, value in thresholds_override.items()}
+
+    normalized_counts = normalize_throughput_counts(counts)
+    source_declared = bool(accepted_source and accepted_source.strip())
+    source_approved = source_declared and approval_status == "approved"
+    zeroed_counts: list[str] = []
+    if not source_approved:
+        for name in ("accepted", "published"):
+            if normalized_counts[name]:
+                normalized_counts[name] = 0
+                zeroed_counts.append(name)
+    observed = {
+        "cpu_seconds": round(cpu_seconds, 4),
+        "rss_bytes": rss_bytes,
+        "browser_requests": int(browser_requests),
+        "requests": int(requests),
+        "concurrency": int(concurrency),
+        "timeout_seconds": float(timeout_seconds),
+        "errors": normalized_counts["failed"],
+    }
+    reasons: list[str] = []
+    for name, value in observed.items():
+        ceiling = ceilings[name]
+        if value is not None and value > ceiling:
+            reasons.append(f"{name}_ceiling_exceeded")
+    if profile == "vps-authorized-live" and approval_status != "approved":
+        reasons.append("approval_required")
+    if zeroed_counts:
+        reasons.append("accepted_counts_unsourced")
+    if minimum_accepted_per_window is not None:
+        throughput = normalized_counts["accepted"] * BENCHMARK_WINDOW_SECONDS / max(elapsed_seconds, 0.001)
+        if throughput < minimum_accepted_per_window:
+            reasons.append("accepted_throughput_below_minimum")
+    info_codes: list[str] = []
+    if rss_bytes is None:
+        info_codes.append("rss_unavailable")
+    if minimum_accepted_per_window is None:
+        info_codes.append("accepted_throughput_threshold_unconfigured")
+    if not reasons:
+        reasons.append("within_profile_ceilings")
+
+    passed = reasons == ["within_profile_ceilings"]
+    return {
+        "contract": BENCHMARK_CONTRACT,
+        "window_seconds": BENCHMARK_WINDOW_SECONDS,
+        "elapsed_seconds": round(elapsed_seconds, 4),
+        "profile": profile,
+        "owner": owner,
+        "revision": revision,
+        "approval": {
+            "required": profile == "vps-authorized-live" or source_declared,
+            "status": approval_status,
+        },
+        "accepted_source": accepted_source,
+        "counts": normalized_counts,
+        "counts_zeroed_by_source_guard": zeroed_counts,
+        "thresholds": thresholds,
+        "throughput_per_300_seconds": {
+            name: round(value * BENCHMARK_WINDOW_SECONDS / max(elapsed_seconds, 0.001), 2)
+            for name, value in normalized_counts.items()
+        },
+        "ceilings": ceilings,
+        "observed": observed,
+        "passed": passed,
+        "status": "PASS" if passed else "FAIL",
+        "reason_codes": reasons,
+        "info_codes": info_codes,
+    }
 
 
 @dataclass
@@ -273,6 +462,14 @@ def run_benchmark(
     detail_workers: int = 5,
     warm_cache: bool = False,
     mode: str = "full",
+    profile: str = "ci-fixture",
+    owner: str = BENCHMARK_OWNER,
+    revision: str = BENCHMARK_REVISION,
+    approval_status: str = "not-required",
+    timeout_seconds: float = 30.0,
+    accepted_source: str | None = None,
+    thresholds_override: Mapping[str, int] | None = None,
+    minimum_accepted_per_window: int | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="runr-linkedin-bench-") as tmp:
         tmp_path = Path(tmp)
@@ -305,6 +502,7 @@ def run_benchmark(
         metrics = runner.run()
         wall_time = time.perf_counter() - started
         cpu_time = time.process_time() - started_cpu
+        peak_rss_bytes = _peak_rss_bytes()
         return {
             "pipeline_enabled": pipeline_enabled,
             "workload": {
@@ -317,7 +515,7 @@ def run_benchmark(
             },
             "wall_time_seconds": wall_time,
             "cpu_time_seconds": cpu_time,
-            "peak_rss_bytes": _peak_rss_bytes(),
+            "peak_rss_bytes": peak_rss_bytes,
             "requests": metrics.get("requests", 0),
             "detail_requests": metrics.get("detail_requests", 0),
             "detail_cache_hits": metrics.get("detail_cache_hits", 0),
@@ -327,6 +525,36 @@ def run_benchmark(
             "companies_partial": metrics.get("companies_partial", 0),
             "run_outcome": metrics.get("run_outcome"),
             "transport_peak_in_flight": transport.peak_in_flight,
+            "benchmark_contract": evaluate_benchmark_contract(
+                profile=profile,
+                counts={
+                    # The synthetic transport exposes every generated card;
+                    # producer detail success is the parsed/complete stage.
+                    # Without a T32-declared accepted source, accepted and
+                    # published stay zero: producer rows are not publishable
+                    # counts. Cache hits are repeat observations (duplicates).
+                    "discovered": workload.total_jobs,
+                    "parsed": metrics.get("detail_successes", 0),
+                    "complete": metrics.get("detail_successes", 0),
+                    "accepted": 0,
+                    "published": 0,
+                    "duplicate": metrics.get("detail_cache_hits", 0),
+                    "failed": metrics.get("detail_failures", 0),
+                },
+                elapsed_seconds=wall_time,
+                cpu_seconds=cpu_time,
+                rss_bytes=peak_rss_bytes,
+                browser_requests=0,
+                requests=int(metrics.get("requests", 0) or 0),
+                concurrency=max(transport.peak_in_flight, workers, detail_workers),
+                timeout_seconds=timeout_seconds,
+                approval_status=approval_status,
+                owner=owner,
+                revision=revision,
+                accepted_source=accepted_source,
+                thresholds_override=thresholds_override,
+                minimum_accepted_per_window=minimum_accepted_per_window,
+            ),
         }
 
 
@@ -341,8 +569,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--detail-workers", type=int, default=5)
     parser.add_argument("--compare", action="store_true", help="run sequential and pipelined back-to-back")
     parser.add_argument("--warm-cache", action="store_true", help="pre-seed state so the run exercises cache reuse")
+    parser.add_argument("--profile", choices=tuple(BENCHMARK_PROFILES), default="ci-fixture")
+    parser.add_argument("--owner", default=BENCHMARK_OWNER)
+    parser.add_argument("--revision", default=BENCHMARK_REVISION)
+    parser.add_argument(
+        "--approval",
+        dest="approval_status",
+        choices=("not-required", "approved"),
+        default="not-required",
+        help="required for the vps-authorized-live profile",
+    )
+    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--accepted-source",
+        default=None,
+        help="declared source for accepted/published counts (requires --approval approved)",
+    )
+    parser.add_argument(
+        "--minimum-accepted",
+        dest="minimum_accepted_per_window",
+        type=int,
+        default=None,
+        help="minimum accepted jobs per 300-second window; operator sign-off required",
+    )
+    parser.add_argument(
+        "--thresholds",
+        type=Path,
+        default=None,
+        help="JSON file overriding the profile ceiling keys for this evaluation",
+    )
     parser.add_argument("--output", type=Path, help="write JSON report to this path")
     args = parser.parse_args(argv)
+    thresholds_override = load_thresholds_override(args.thresholds) if args.thresholds else None
     workload = BenchmarkWorkload(
         companies=args.companies,
         pages_per_company=args.pages_per_company,
@@ -359,6 +617,14 @@ def main(argv: list[str] | None = None) -> int:
                 workers=args.workers,
                 detail_workers=args.detail_workers,
                 warm_cache=args.warm_cache,
+                profile=args.profile,
+                owner=args.owner,
+                revision=args.revision,
+                approval_status=args.approval_status,
+                timeout_seconds=args.timeout,
+                accepted_source=args.accepted_source,
+                thresholds_override=thresholds_override,
+                minimum_accepted_per_window=args.minimum_accepted_per_window,
             )
         )
     results.append(
@@ -368,12 +634,32 @@ def main(argv: list[str] | None = None) -> int:
             workers=args.workers,
             detail_workers=args.detail_workers,
             warm_cache=args.warm_cache,
+            profile=args.profile,
+            owner=args.owner,
+            revision=args.revision,
+            approval_status=args.approval_status,
+            timeout_seconds=args.timeout,
+            accepted_source=args.accepted_source,
+            thresholds_override=thresholds_override,
+            minimum_accepted_per_window=args.minimum_accepted_per_window,
         )
     )
     report = {
-        "version": "linkedin-pipeline-benchmark-v1",
+        "version": "linkedin-pipeline-benchmark-v2",
         "python": sys.version.split()[0],
         "platform": sys.platform,
+        "contract": {
+            "name": BENCHMARK_CONTRACT,
+            "window_seconds": BENCHMARK_WINDOW_SECONDS,
+            "profile": args.profile,
+            "owner": args.owner,
+            "revision": args.revision,
+            "approval": args.approval_status,
+            "accepted_source": args.accepted_source,
+            "minimum_accepted_per_window": args.minimum_accepted_per_window,
+            "ceilings": BENCHMARK_PROFILES[args.profile],
+            "threshold_overrides": thresholds_override or {},
+        },
         "results": results,
     }
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
