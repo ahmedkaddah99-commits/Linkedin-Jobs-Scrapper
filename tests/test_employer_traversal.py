@@ -163,11 +163,11 @@ def test_collect_company_browser_fallback_merges_jobs(monkeypatch):
     assert result.outcome == "partial"
 
 
-def test_collect_company_records_complementary_partition_skipped(monkeypatch):
+def test_collect_company_traverses_distinct_ats_tenants_and_unions_jobs(monkeypatch):
     import scripts.master_employer_jobs_catalog as catalog
 
-    # Discovery surfaces two Greenhouse tenants; only the first is traversed and
-    # completed, so the second is an unvisited complementary partition.
+    # T56 source-union contract: two distinct Greenhouse tenants are independent
+    # validated partitions, so both are traversed and their jobs are unioned.
     monkeypatch.setattr(
         catalog,
         "discover_career_url",
@@ -180,22 +180,29 @@ def test_collect_company_records_complementary_partition_skipped(monkeypatch):
             crawl_status="found",
         ),
     )
-    monkeypatch.setattr(
-        catalog,
-        "fetch_ats_snapshot",
-        lambda *_a, **_k: {
-            "jobs": [{"id": 1, "title": "Analyst", "absolute_url": "https://boards.greenhouse.io/co/jobs/1"}],
+
+    def fake_ats(url, *_a, **_k):
+        tenant = url.rstrip("/").rsplit("/", 1)[-1]
+        return {
+            "jobs": [
+                {
+                    "id": 1 if tenant == "co" else 2,
+                    "title": "Analyst",
+                    "absolute_url": f"https://boards.greenhouse.io/{tenant}/jobs/{1 if tenant == 'co' else 2}",
+                }
+            ],
             "status": "completed",
             "complete_snapshot": True,
             "pagination_complete": True,
             "credible_evidence": True,
-            "request_url": "https://boards-api.greenhouse.io/v1/boards/co/jobs?content=true",
+            "request_url": f"https://boards-api.greenhouse.io/v1/boards/{tenant}/jobs?content=true",
             "pages_fetched": 1,
             "requests_made": 1,
             "source_reported_total": 1,
             "stop_reason": "pagination_complete",
-        },
-    )
+        }
+
+    monkeypatch.setattr(catalog, "fetch_ats_snapshot", fake_ats)
 
     from scripts.master_employer_jobs_catalog import EmployerCompany
 
@@ -205,6 +212,13 @@ def test_collect_company_records_complementary_partition_skipped(monkeypatch):
     result = collect_company(company, lambda _: None, CollectorLimits(max_targets=5))
 
     assert result.outcome == "complete_with_jobs"
+    assert [target["url"] for target in result.targets] == [
+        "https://boards.greenhouse.io/co",
+        "https://boards.greenhouse.io/co-emea",
+    ]
+    assert len(result.jobs) == 2
     skipped = result.coverage["discovery"]["complementary_partitions_skipped"]
-    assert [item["ats_type"] for item in skipped] == ["greenhouse"]
-    assert "co-emea" in skipped[0]["url"]
+    assert skipped == []
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert all(entry["traversal_status"] == "traversed" for entry in inventory.values())
+    assert result.coverage["counts"]["union_jobs"] == 2
