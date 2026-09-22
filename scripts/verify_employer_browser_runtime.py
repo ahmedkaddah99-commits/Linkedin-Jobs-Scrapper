@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import threading
@@ -17,6 +18,8 @@ from scripts.master_employer_jobs_catalog import RequestAccounting, TransportGat
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.parse_args()
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             body = b'''<html><body><script type="application/json">

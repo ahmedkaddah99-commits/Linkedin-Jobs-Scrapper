@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from types import SimpleNamespace
 from pathlib import Path
@@ -721,3 +723,284 @@ def test_main_dry_run_receipt_flag_produces_bounded_receipt(tmp_path: Path, monk
     assert exit_code == 0
     receipt = (output_dir / "employer_dry_run_receipt.json").is_file()
     assert receipt is True
+
+
+def test_low_yield_attribution_maps_each_failure_class() -> None:
+    from scripts.run_manifested_employer import LOW_YIELD_CLASSES, attribute_low_yield
+
+    attribution = attribute_low_yield(
+        discovery_reason_codes={"no_career_target_found": 1, "career_url_found": 3},
+        target_stop_reasons={"challenge_page": 2, "request_budget_exhausted": 1},
+        company_status_counts={"collector_error": 1, "discovery_failed": 2, "source_failed": 1},
+        jobs_missing_title=1,
+        jobs_missing_location=2,
+        jobs_missing_target_url=1,
+    )
+
+    assert list(attribution["classes"].keys()) == list(LOW_YIELD_CLASSES)
+    assert attribution["classes"]["missing_url"] == 4
+    assert attribution["classes"]["provider_blocking"] == 3
+    assert attribution["classes"]["data_quality"] == 3
+    assert attribution["classes"]["code_failure"] == 2
+    assert attribution["reason_codes"]["missing_url"] == [
+        "company_status:discovery_failed",
+        "discovery:no_career_target_found",
+        "job:target_url_missing",
+    ]
+    assert attribution["reason_codes"]["provider_blocking"] == [
+        "company_status:source_failed",
+        "target:challenge_page",
+    ]
+    assert "discovery:career_url_found" not in attribution["reason_codes"].get("code_failure", [])
+    assert attribution["attributed"] is True
+
+
+def test_attribute_low_yield_reports_nothing_for_healthy_runs() -> None:
+    from scripts.run_manifested_employer import attribute_low_yield
+
+    attribution = attribute_low_yield(
+        discovery_reason_codes={"career_url_found": 4},
+        target_stop_reasons={"pagination_complete": 4},
+        company_status_counts={"completed": 4},
+    )
+
+    assert attribution["classes"] == {
+        "data_quality": 0,
+        "missing_url": 0,
+        "provider_blocking": 0,
+        "code_failure": 0,
+    }
+    assert attribution["reason_codes"] == {}
+    assert attribution["attributed"] is False
+
+
+def test_benchmark_receipt_evaluates_durable_cohort_and_attributes_low_yield(
+    tmp_path: Path,
+) -> None:
+    from scripts.run_manifested_employer import build_employer_benchmark_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+        encoding="utf-8",
+    )
+    first_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "job-1",
+        "source_job_url": "https://ok.example/jobs/1",
+        "title": "Engineer One",
+        "location": "Berlin, Germany",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    duplicate_job = {**first_job, "source_provider": "ats_api", "source_job_id": "dup-ats"}
+    second_job = {**first_job, "source_job_id": "job-2", "source_job_url": "https://ok.example/jobs/2", "title": "Engineer Two"}
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="ok-co",
+                    company_name="OK Co",
+                    website_url="https://ok.example",
+                ),
+                jobs=[first_job, duplicate_job, second_job],
+                status="completed",
+                outcome="complete_with_jobs",
+            )
+        )
+    finally:
+        state.close()
+
+    receipt = build_employer_benchmark_receipt(
+        mode="dry_run_benchmark",
+        metrics={},
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        profile="local-dry-run",
+        accepted_source="employer-durable-state",
+        approval_status="approved",
+        per_host_requests=10,
+        window_seconds=300,
+        elapsed_seconds=1.0,
+        timeout_seconds=30,
+    )
+
+    assert receipt["state_present"] is True
+    assert receipt["cohort_companies"] == 1
+    counts = receipt["counts"]
+    assert counts["discovered"] == 3
+    assert counts["parsed"] == 2
+    assert counts["complete"] == 2
+    assert counts["accepted"] == 2
+    assert counts["published"] == 0
+    assert counts["duplicate"] == 1
+    assert counts["failed"] == 0
+    assert receipt["per_host_observed"] == {}
+    assert receipt["per_host_limits"] == {"max_requests_per_host": 10, "enforced": False}
+    assert receipt["contract_evaluation"]["status"] == "PASS"
+    assert receipt["low_yield_attribution"]["attributed"] is False
+    assert Path(receipt["receipt_path"]).is_file()
+
+
+def test_benchmark_receipt_zeroes_unsourced_accepted_counts(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import build_employer_benchmark_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+        encoding="utf-8",
+    )
+    accepted_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "job-1",
+        "source_job_url": "https://ok.example/jobs/1",
+        "title": "Engineer",
+        "location": "Berlin, Germany",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="ok-co",
+                    company_name="OK Co",
+                    website_url="https://ok.example",
+                ),
+                jobs=[accepted_job],
+                status="completed",
+                outcome="complete_with_jobs",
+            )
+        )
+    finally:
+        state.close()
+
+    receipt = build_employer_benchmark_receipt(
+        mode="dry_run_benchmark",
+        metrics={},
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        profile="local-dry-run",
+        accepted_source="",
+        approval_status="not-required",
+        per_host_requests=10,
+        window_seconds=300,
+        elapsed_seconds=1.0,
+        timeout_seconds=30,
+    )
+
+    assert receipt["counts"]["accepted"] == 0
+    assert receipt["counts"]["published"] == 0
+    assert receipt["contract_evaluation"]["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in receipt["contract_evaluation"]["reason_codes"]
+
+
+def test_main_benchmark_receipt_flag_writes_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "fixture-manifest", "manifest_hash": "fixture-hash"}
+    output_dir = tmp_path / "exports" / "employer"
+    staged = output_dir / ".manifest_inputs" / "fixture-manifest-employer.csv"
+
+    def fake_materialize(_manifest, _source, path, **_kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+            encoding="utf-8",
+        )
+        return {"rows": 1}
+
+    monkeypatch.setattr(
+        wrapper,
+        "require_eligibility_manifest",
+        lambda *_args, **_kwargs: (manifest, [{"task_key": "fixture"}]),
+    )
+    monkeypatch.setattr(wrapper, "materialize_source_input", fake_materialize)
+
+    exit_code = wrapper.main(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--benchmark-receipt",
+            "--benchmark-accepted-source",
+            "employer-durable-state",
+        ]
+    )
+
+    assert exit_code == 0
+    receipt_path = output_dir / "employer_benchmark_receipt.json"
+    assert receipt_path.is_file()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["mode"] == "dry_run_benchmark"
+    assert receipt["benchmark_revision"] == "T38"
+    assert receipt["window_seconds"] == 300
+    assert receipt["state_present"] is False
+    assert receipt["counts"]["discovered"] == 0
+
+
+def test_main_benchmark_fixture_flag_runs_offline_benchmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "fixture-manifest", "manifest_hash": "fixture-hash"}
+    output_dir = tmp_path / "exports" / "employer"
+    staged = output_dir / ".manifest_inputs" / "fixture-manifest-employer.csv"
+
+    def fake_materialize(_manifest, _source, path, **_kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+            encoding="utf-8",
+        )
+        return {"rows": 1}
+
+    monkeypatch.setattr(
+        wrapper,
+        "require_eligibility_manifest",
+        lambda *_args, **_kwargs: (manifest, [{"task_key": "fixture"}]),
+    )
+    monkeypatch.setattr(wrapper, "materialize_source_input", fake_materialize)
+
+    exit_code = wrapper.main(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(output_dir),
+            "--benchmark-fixture",
+            "--benchmark-accepted-source",
+            "employer-durable-state",
+            "--benchmark-approval",
+            "approved",
+        ]
+    )
+
+    assert exit_code == 0
+    receipt_path = output_dir / "employer_fixture_benchmark_receipt.json"
+    assert receipt_path.is_file()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["mode"] == "fixture_benchmark"
+    assert receipt["contract_evaluation"]["status"] == "PASS"
+    assert sorted(receipt["stages"]) == sorted(
+        [
+            "career_discovery",
+            "ats_routing",
+            "parsing",
+            "identity",
+            "completeness",
+            "dedupe",
+            "delivery",
+        ]
+    )
