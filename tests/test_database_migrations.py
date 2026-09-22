@@ -387,5 +387,111 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(asset, ("users/user_legacy_cv/workspace_cv/asset_legacy_cv/cv.pdf",))
 
 
+    def test_publisher_checkpoint_table_exists_after_fresh_initialization(self):
+        db_path = self._db_path("publisher_checkpoint_fresh")
+
+        with self._local_environment():
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            columns = {
+                row[1]: row
+                for row in connection.execute(
+                    "PRAGMA table_info(acquisition_publisher_checkpoints)"
+                ).fetchall()
+            }
+            applied = connection.execute(
+                "SELECT checksum FROM schema_migrations WHERE migration_id = '061_acquisition_publisher_checkpoints'"
+            ).fetchone()
+
+        self.assertEqual(
+            set(columns),
+            {
+                "source",
+                "source_rowid",
+                "source_watermark",
+                "bootstrap_complete",
+                "last_cycle_id",
+                "last_publication_id",
+                "updated_at",
+            },
+        )
+        self.assertEqual(columns["source"][5], 1, "source must be the primary key")
+        self.assertIsNotNone(applied)
+        self.assertEqual(len(str(applied[0])), 64)
+
+    def test_publisher_checkpoint_upgrade_path_creates_missing_table(self):
+        db_path = self._db_path("publisher_checkpoint_upgrade_missing")
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.executescript(BASE_SCHEMA_SQL)
+            connection.executemany(
+                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
+                [
+                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
+                    for migration in MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")]
+                ],
+            )
+            connection.commit()
+
+        with self._local_environment():
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='acquisition_publisher_checkpoints'"
+            ).fetchone()
+            applied_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT migration_id FROM schema_migrations ORDER BY migration_id"
+                ).fetchall()
+            ]
+
+        self.assertIsNotNone(table)
+        self.assertEqual(applied_ids, [migration.migration_id for migration in MIGRATIONS])
+
+    def test_publisher_checkpoint_migration_preserves_preexisting_ad_hoc_table(self):
+        db_path = self._db_path("publisher_checkpoint_upgrade_existing")
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.executescript(BASE_SCHEMA_SQL)
+            connection.executemany(
+                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
+                [
+                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
+                    for migration in MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")]
+                ],
+            )
+            connection.execute(
+                """
+                CREATE TABLE acquisition_publisher_checkpoints (
+                    source TEXT PRIMARY KEY,
+                    source_rowid INTEGER NOT NULL DEFAULT 0,
+                    source_watermark TEXT NOT NULL DEFAULT '',
+                    bootstrap_complete INTEGER NOT NULL DEFAULT 0,
+                    last_cycle_id TEXT NOT NULL DEFAULT '',
+                    last_publication_id TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO acquisition_publisher_checkpoints "
+                "(source, source_rowid, source_watermark, bootstrap_complete, last_cycle_id, last_publication_id, updated_at) "
+                "VALUES ('linkedin', 42, '2026-09-10T00:00:00Z', 1, 'cycle-1', 'publication-1', '2026-09-10T00:00:00Z')"
+            )
+            connection.commit()
+
+        with self._local_environment():
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            rows = connection.execute(
+                "SELECT source, source_rowid, bootstrap_complete, last_cycle_id "
+                "FROM acquisition_publisher_checkpoints WHERE source='linkedin'"
+            ).fetchall()
+
+        self.assertEqual(rows, [("linkedin", 42, 1, "cycle-1")])
+
+
 if __name__ == "__main__":
     unittest.main()

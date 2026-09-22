@@ -3180,6 +3180,24 @@ def _apply_publication_latest_observation_index_migration(connection: DatabaseCo
     )
 
 
+def _apply_acquisition_publisher_checkpoints_migration(connection: DatabaseConnection) -> None:
+    """Own the durable producer-state publisher checkpoints schema."""
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_publisher_checkpoints (
+            source TEXT PRIMARY KEY,
+            source_rowid INTEGER NOT NULL DEFAULT 0,
+            source_watermark TEXT NOT NULL DEFAULT '',
+            bootstrap_complete INTEGER NOT NULL DEFAULT 0,
+            last_cycle_id TEXT NOT NULL DEFAULT '',
+            last_publication_id TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
 def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
     """Persist source-identity resolution and transactional company merges."""
 
@@ -3543,6 +3561,11 @@ MIGRATIONS = (
         "060_publication_latest_observation_index",
         "Accelerate latest-source-observation joins used by publication gates.",
         _apply_publication_latest_observation_index_migration,
+    ),
+    Migration.from_callable(
+        "061_acquisition_publisher_checkpoints",
+        "Create the durable producer-state publisher checkpoint table owned by the migration registry.",
+        _apply_acquisition_publisher_checkpoints_migration,
     ),
 )
 
