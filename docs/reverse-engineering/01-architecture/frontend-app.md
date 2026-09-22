@@ -298,6 +298,12 @@ Consumers:
 - Catalog origin is out of scope here: the WS-12 data-flow doc and WS-4 own it.
 - **U10:** no signed-in visual verification of real `/jobs` payloads exists (the handoff says so).
 
+**Jobs first-content performance contract (T54):**
+- The initial feed request fires immediately once the session connects (no debounce); subsequent filter edits are debounced 150 ms. It stays bounded to `limit=25` plus cursor pagination and carries a 20 s timeout (`JOBS_FEED_TIMEOUT_MS`), with `AbortController` cancellation on effect cleanup, so a hung request ends in a retryable failure state instead of an indefinite spinner (`JobsWorkspace.jsx`).
+- A refresh (filters, retry) no longer clears an already loaded feed: stale results stay visible under a `refreshing` catalog banner ("Updating results with the latest catalog…"), and a failed refresh keeps the last verified page with a retry control instead of blanking the list.
+- The selected-job detail request is deduplicated per job id per page load; a request aborted before settling stays retryable on the next trigger.
+- Privacy-safe phase marks are recorded on the Performance timeline by `markJobsPhase` (`frontend/src/lib/api.js`) as `runr-jobs:<phase>` entries with `{route:"/jobs", phase, deviceClass, mode, revision}` labels (no user data, query text, or payload content): `session-connected` (`SessionContext.jsx`, cold), `route-chunk` (`App.jsx`), `route-mounted`, `feed-request-start`, `feed-request-end` (with `durationMs` and the server `timings.total_ms`), `useful-render` (first verified card page / truthful empty state / retryable failure), and `interactive`. `useful-render` is the useful-readiness metric; document `load` is not readiness.
+
 ### 5.5 Telemetry (N-1, U7)
 
 - `logEvent(name, props)` (`frontend/src/lib/analytics.js:171-191`) has two outputs:
@@ -367,7 +373,7 @@ Extension and protocol details: [assisted-apply.md](../05-subsystems/assisted-ap
 | Spec | Targets | State |
 |---|---|---|
 | `frontend/e2e/career-evidence-production.spec.ts` | `/career-evidence` (mocked API) | current |
-| `frontend/e2e/phase-d-jobs-cutover.spec.ts` | `/jobs/job-a` | current |
+| `frontend/e2e/phase-d-jobs-cutover.spec.ts` | `/jobs/job-a` plus useful-readiness percentiles (`jobs-useful-readiness.json`: p50/p75/p95 of the first `runr-jobs:useful-render` mark over reloads, desktop and mobile projects) | current; **currently failing**: its `Workspaces`/`Runs` nav-absence assertions cannot pass because AppShell stopped honoring `retireLegacyJobsNavigation` in `4dcdda39` (pre-existing at the T54 baseline; outside the T54 allowed paths) |
 | `frontend/e2e/phase-e-job-intelligence.spec.ts` | `/jobs/job-a` | current |
 | `frontend/e2e/admin-operations-console.spec.ts` | `/admin`, `/admin/acquisition/*`, `/admin/job-import`, `/admin/scrapeops` (52 `/admin` refs) | **STALE**: those routes were deleted in `dd47acf9`, and `App.jsx:208` now redirects `/admin*`, so the spec would fail |
 
