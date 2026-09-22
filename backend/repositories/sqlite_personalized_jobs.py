@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -77,12 +78,14 @@ def _customer_task_payload(row, *, include_lease: bool = True) -> dict[str, Any]
 class SqlitePersonalizedJobsStore(_SqliteStore):
     """Persistence boundary for user state and read-only catalog projections."""
 
-    # Bounded, publication-keyed cache for the filter-capability aggregate. A
-    # publication's catalog is immutable, so capabilities for one publication
-    # id are a pure function; the cache only bounds repeated full-catalog
-    # scans on the warm feed path and is capped to avoid unbounded growth.
+    # Bounded, store-local cache for the filter-capability aggregate. A
+    # publication ID is only unique within one database, so sharing this cache
+    # across store instances can return another database's capabilities.
     _FILTER_CAPABILITIES_CACHE_LIMIT = 8
-    _filter_capabilities_cache: dict[str, dict[str, bool]] = {}
+
+    def __init__(self, db_path: Path, *, initialize: bool = True):
+        super().__init__(db_path, initialize=initialize)
+        self._filter_capabilities_cache: dict[str, dict[str, bool]] = {}
 
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
