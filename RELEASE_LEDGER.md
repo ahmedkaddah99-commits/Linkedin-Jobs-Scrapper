@@ -268,6 +268,11 @@ were clean at inspection time.
 This section is an append-only reconciliation of the recorded release
 provenance. It does not convert documentary records into live observations.
 
+Batch integration update (2026-09-22): T31 appended registry migration
+`061_acquisition_publisher_checkpoints`. The Render API and worker declarations
+now pin `061_acquisition_publisher_checkpoints` to match the current registry.
+The T30 table below records the head at the time of its original implementation.
+
 | Surface | Recorded revision/head | Evidence and status |
 | --- | --- | --- |
 | Repository migration registry | `060_publication_latest_observation_index` | Code-derived from the final entry of `MIGRATIONS`; checksum-guarded and append-only. |

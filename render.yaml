@@ -74,7 +74,7 @@ services:
       - key: RUNR_RELEASE_CONTRACT_VERSION
         value: runr-contract-v1
       - key: RUNR_MIGRATION_HEAD
-        value: 060_publication_latest_observation_index
+        value: 061_acquisition_publisher_checkpoints
       - key: RUNR_CUSTOMER_TASKS_ASYNC
         value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
@@ -191,7 +191,7 @@ services:
       - key: RUNR_RELEASE_CONTRACT_VERSION
         value: runr-contract-v1
       - key: RUNR_MIGRATION_HEAD
-        value: 060_publication_latest_observation_index
+        value: 061_acquisition_publisher_checkpoints
       - key: RUNR_CUSTOMER_TASKS_ASYNC
         value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT

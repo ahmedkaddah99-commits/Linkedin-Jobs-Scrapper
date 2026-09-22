@@ -97,7 +97,12 @@ An authorized bounded R2 write/read/delete readiness probe passed in 2,380.29 ms
 
 ## T30 release provenance reconciliation (2026-09-21)
 
-The migration registry currently ends at
+Batch integration update (2026-09-22): T31 appended migration
+`061_acquisition_publisher_checkpoints`; the Render API and worker declarations
+now match that registry head. The following T30 account records its earlier
+`060` implementation state and is not a current live deployment claim.
+
+At T30 implementation, the migration registry ended at
 `060_publication_latest_observation_index`. The Render API and worker
 declarations are aligned to that code-derived head, and `deploy/start.sh`
 fails before role startup when a configured head or known release branch/commit

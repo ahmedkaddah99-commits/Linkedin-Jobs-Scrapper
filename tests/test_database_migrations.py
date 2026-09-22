@@ -171,7 +171,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         migration_ids = [migration.migration_id for migration in MIGRATIONS]
         self.assertEqual(migration_ids, sorted(migration_ids))
         self.assertEqual(len(migration_ids), len(set(migration_ids)))
-        self.assertEqual(current_migration_head(), "060_publication_latest_observation_index")
+        self.assertEqual(current_migration_head(), "061_acquisition_publisher_checkpoints")
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
 
     def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
