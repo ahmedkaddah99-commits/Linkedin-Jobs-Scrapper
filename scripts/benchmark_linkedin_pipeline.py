@@ -4,6 +4,11 @@ This benchmark runs the actual ``scripts/master_linkedin_jobs_catalog.py``
 producer against synthetic fixtures with artificial network latency.  It is
 designed to compare the sequential baseline and the pipelined optimizer while
 consuming no paid provider credits.
+
+T37 extends every receipt with the evaluated contract revision, the LinkedIn
+input profile, the effective provider limits, per-class failure counts, the
+quality yield between lifecycle stages, and a non-waivable optimization
+follow-up for any missed threshold or missing accepted-source configuration.
 """
 
 from __future__ import annotations
@@ -38,6 +43,8 @@ BENCHMARK_CONTRACT = "runr.producer-throughput.v1"
 BENCHMARK_REVISION = "T36"
 BENCHMARK_OWNER = "acquisition"
 BENCHMARK_WINDOW_SECONDS = 300
+BENCHMARK_SOURCE = "linkedin"
+LINKEDIN_BENCHMARK_REVISION = "T37"
 
 # These are admission ceilings, not claims about measured provider capacity.
 # The live profile is intentionally explicit about its approval requirement.
@@ -126,6 +133,10 @@ def load_thresholds_override(path: Path) -> dict[str, int]:
     return dict(payload)
 
 
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 4) if denominator else None
+
+
 def evaluate_benchmark_contract(
     *,
     profile: str,
@@ -143,6 +154,8 @@ def evaluate_benchmark_contract(
     accepted_source: str | None = None,
     thresholds_override: Mapping[str, int] | None = None,
     minimum_accepted_per_window: int | None = None,
+    failure_classes: Mapping[str, int] | None = None,
+    input_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one run against the shared five-minute producer contract.
 
@@ -152,6 +165,12 @@ def evaluate_benchmark_contract(
     ``accepted_source`` exists (the T32 publishable contract) and the run is
     explicitly approved; unsourced counts are zeroed and failed with a reason
     code instead of being counted from producer rows.
+
+    The T37 receipt extensions identify the evaluated contract revision, the
+    LinkedIn input profile, the effective provider limits, per-class failure
+    counts, and the quality yield between lifecycle stages. A missed threshold
+    or a missing accepted-source/throughput configuration always creates an
+    optimization follow-up; it is never waived.
     """
 
     if profile not in BENCHMARK_PROFILES:
@@ -226,8 +245,20 @@ def evaluate_benchmark_contract(
         reasons.append("within_profile_ceilings")
 
     passed = reasons == ["within_profile_ceilings"]
+
+    follow_up_reasons = [] if passed else list(reasons)
+    follow_up_actions: list[str] = []
+    if not source_approved:
+        follow_up_reasons.append("accepted_source_not_declared")
+        follow_up_actions.append("declare-accepted-source")
+    if minimum_accepted_per_window is None:
+        follow_up_reasons.append("accepted_throughput_threshold_unconfigured")
+        follow_up_actions.append("configure-accepted-throughput-threshold")
+
     return {
         "contract": BENCHMARK_CONTRACT,
+        "contract_revision": BENCHMARK_REVISION,
+        "benchmark_revision": revision,
         "window_seconds": BENCHMARK_WINDOW_SECONDS,
         "elapsed_seconds": round(elapsed_seconds, 4),
         "profile": profile,
@@ -238,8 +269,33 @@ def evaluate_benchmark_contract(
             "status": approval_status,
         },
         "accepted_source": accepted_source,
+        "input_profile": dict(input_profile) if input_profile is not None else {},
+        "provider_limits": {
+            "max_requests": ceilings["requests"],
+            "max_browser_requests": ceilings["browser_requests"],
+            "max_concurrency": ceilings["concurrency"],
+            "timeout_seconds": ceilings["timeout_seconds"],
+            "max_errors": ceilings["errors"],
+            "approval_status": approval_status,
+        },
         "counts": normalized_counts,
         "counts_zeroed_by_source_guard": zeroed_counts,
+        "failure_classes": dict(failure_classes) if failure_classes is not None else {},
+        "quality_yield": {
+            "parsed_over_discovered": _ratio(normalized_counts["parsed"], normalized_counts["discovered"]),
+            "complete_over_discovered": _ratio(normalized_counts["complete"], normalized_counts["discovered"]),
+            "accepted_over_complete": (
+                _ratio(normalized_counts["accepted"], normalized_counts["complete"])
+                if source_approved
+                else None
+            ),
+            "published_over_accepted": (
+                _ratio(normalized_counts["published"], normalized_counts["accepted"])
+                if source_approved
+                else None
+            ),
+            "accepted_counts_sourced": source_approved,
+        },
         "thresholds": thresholds,
         "throughput_per_300_seconds": {
             name: round(value * BENCHMARK_WINDOW_SECONDS / max(elapsed_seconds, 0.001), 2)
@@ -251,6 +307,12 @@ def evaluate_benchmark_contract(
         "status": "PASS" if passed else "FAIL",
         "reason_codes": reasons,
         "info_codes": info_codes,
+        "optimization_follow_up": {
+            "required": bool(follow_up_reasons or follow_up_actions),
+            "reason_codes": follow_up_reasons,
+            "actions": follow_up_actions,
+            "waived": False,
+        },
     }
 
 
@@ -494,7 +556,7 @@ def run_benchmark(
     mode: str = "full",
     profile: str = "ci-fixture",
     owner: str = BENCHMARK_OWNER,
-    revision: str = BENCHMARK_REVISION,
+    revision: str = LINKEDIN_BENCHMARK_REVISION,
     approval_status: str = "not-required",
     timeout_seconds: float = 30.0,
     accepted_source: str | None = None,
@@ -585,6 +647,28 @@ def run_benchmark(
                 accepted_source=accepted_source,
                 thresholds_override=thresholds_override,
                 minimum_accepted_per_window=minimum_accepted_per_window,
+                failure_classes={
+                    "detail_failures": int(metrics.get("detail_failures", 0) or 0),
+                    "companies_partial": int(metrics.get("companies_partial", 0) or 0),
+                    "companies_failed": int(metrics.get("companies_failed", 0) or 0),
+                },
+                input_profile={
+                    "source": BENCHMARK_SOURCE,
+                    "fixture_transport": "synthetic-html",
+                    "mode": mode,
+                    "pipeline_enabled": pipeline_enabled,
+                    "warm_cache": warm_cache,
+                    "workers": workers,
+                    "detail_workers": detail_workers,
+                    "workload": {
+                        "companies": workload.companies,
+                        "pages_per_company": workload.pages_per_company,
+                        "jobs_per_page": workload.jobs_per_page,
+                        "total_jobs": workload.total_jobs,
+                        "search_latency_seconds": workload.search_latency_seconds,
+                        "detail_latency_seconds": workload.detail_latency_seconds,
+                    },
+                },
             ),
         }
 
@@ -602,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--warm-cache", action="store_true", help="pre-seed state so the run exercises cache reuse")
     parser.add_argument("--profile", choices=tuple(BENCHMARK_PROFILES), default="ci-fixture")
     parser.add_argument("--owner", default=BENCHMARK_OWNER)
-    parser.add_argument("--revision", default=BENCHMARK_REVISION)
+    parser.add_argument("--revision", default=LINKEDIN_BENCHMARK_REVISION)
     parser.add_argument(
         "--approval",
         dest="approval_status",
@@ -676,11 +760,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     report = {
-        "version": "linkedin-pipeline-benchmark-v2",
+        "version": "linkedin-pipeline-benchmark-v3",
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "contract": {
             "name": BENCHMARK_CONTRACT,
+            "contract_revision": BENCHMARK_REVISION,
+            "benchmark_revision": args.revision,
+            "source": BENCHMARK_SOURCE,
             "window_seconds": BENCHMARK_WINDOW_SECONDS,
             "profile": args.profile,
             "owner": args.owner,
