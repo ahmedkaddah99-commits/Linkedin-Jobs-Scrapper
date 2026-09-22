@@ -123,6 +123,9 @@ jobs:
       - name: Install extension dependencies
         run: npm ci --prefix apps/browser-extension
 
+      - name: Run the Assisted Apply never-submit boundary gate
+        run: npm --prefix apps/browser-extension run verify:assisted-apply-boundary
+
       - name: Install Playwright Chromium
         working-directory: apps/browser-extension
         run: npx playwright install --with-deps chromium
@@ -154,6 +157,9 @@ jobs:
 
       - name: Install extension dependencies
         run: npm ci --prefix apps/browser-extension
+
+      - name: Run the Assisted Apply never-submit boundary gate
+        run: npm --prefix apps/browser-extension run verify:assisted-apply-boundary
 
       - name: Install Playwright Edge (msedge)
         working-directory: apps/browser-extension
