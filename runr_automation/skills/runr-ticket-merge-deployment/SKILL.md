@@ -7,9 +7,9 @@ description: Use when explicitly promoting one Runr issue from predeployment app
 
 This skill is explicit-only and operates on one issue or sub-issue. It promotes a ticket already tested on predeployment to the deployment branch, restores Render to deployment, cleans the ticket Git artifacts, and closes the Linear issue.
 
-## Mandatory release approval
+## Execution independence
 
-Require a matching unexpired release approval bound to the target, tested commit SHA, current issue/scope fingerprints, and predeployment test result. Any material change invalidates approval. Deployment and later cleanup remain serialized controller actions.
+This skill is self-contained and does not require the local Runr controller, its state database, or a controller release approval. A matching local approval is optional evidence when the controller was used, never a prerequisite for a user-invoked skill run. Serialize deployment and later cleanup through the dedicated worktree and protected branch flow described below.
 
 ## Deterministic Issue Status label
 

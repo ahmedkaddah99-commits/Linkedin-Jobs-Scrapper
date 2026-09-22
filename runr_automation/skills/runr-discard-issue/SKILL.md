@@ -7,9 +7,9 @@ description: Use when explicitly discarding one or more Runr non-final issues an
 
 This skill is explicit-only and accepts one or more exact Linear issue IDs, URLs, or unambiguous issue details. It is the destructive cleanup path for abandoned issue work. It is not a merge, rollback, or generic repository cleanup.
 
-## Mandatory discard approval
+## Execution independence
 
-Require a matching unexpired discard approval before any deletion. Its action fingerprint must bind the exact issue IDs, verified absolute worktree paths, exact local/remote branch names, and current commit/scope state. Any mismatch invalidates approval and stops cleanup.
+This skill is self-contained and does not require the local Runr controller, its state database, or a controller discard approval. Exact-target checks and the safeguards below are the authority for cleanup. A controller approval is optional evidence when the controller was used, never a prerequisite for a user-invoked skill run.
 
 ## Deterministic Issue Status label
 

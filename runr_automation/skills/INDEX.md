@@ -1,6 +1,6 @@
 # Runr automation skills
 
-Canonical skills owned by the local controller:
+These canonical skills are the source of truth for user-invoked workflows. The local controller is an optional automation path; merge, deployment, and discard skills must never treat its state database or approvals as prerequisites.
 
 - `runr-ticket-creation`
 - `runr-ticket-deduplication`

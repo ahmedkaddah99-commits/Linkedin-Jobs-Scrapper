@@ -7,9 +7,9 @@ description: Use when explicitly promoting a selected set of Runr Linear issues 
 
 This skill is explicit-only. The user supplies Linear IDs, URLs, or unambiguous issue details. It integrates only the selected issues, keeps their individual branches and worktrees, temporarily points Render at predeployment, and updates every issue separately.
 
-## Mandatory controller approval
+## Execution independence
 
-Require one matching unexpired local approval whose targets exactly equal the batch and whose action fingerprint binds every tested commit SHA, issue/scope fingerprint, and test result. Any change invalidates it. Batch integration is serialized through the controller.
+This skill is self-contained and does not require the local Runr controller, its state database, or a controller approval. A matching local approval is optional evidence when the controller was used, never a prerequisite for a user-invoked skill run. Serialize integration through the dedicated worktree and protected branch flow described below; do not wait for, query, or create controller approvals.
 
 ## Deterministic Issue Status label
 

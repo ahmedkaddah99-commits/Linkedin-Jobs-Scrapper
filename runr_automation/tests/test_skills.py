@@ -41,20 +41,31 @@ def test_parallelization_skill_treats_parallelism_as_versioned_plan_property() -
     assert "Never remove" in text
 
 
-def test_existing_lifecycle_skills_use_controller_scope_plan_and_approvals() -> None:
+def test_existing_lifecycle_skills_keep_scope_contracts_without_controller_gates() -> None:
     required = {
         "runr-ticket-creation": ("Subsystem grouped label", "Allowed paths", "runr-ticket-deduplication"),
         "runr-ticket-start": ("scope manifest", "current plan", "dedicated"),
-        "runr-ticket-merge-predeployment": ("local approval", "tested commit SHA", "serialized"),
-        "runr-ticket-batch-merge-predeployment": ("local approval", "tested commit SHA", "serialized"),
-        "runr-ticket-merge-deployment": ("release approval", "tested commit SHA"),
-        "runr-ticket-batch-merge-deployment": ("release approval", "tested commit SHA"),
-        "runr-discard-issue": ("discard approval", "action fingerprint"),
+        "runr-ticket-merge-predeployment": ("tested implementation commit", "dedicated", "Execution independence"),
+        "runr-ticket-batch-merge-predeployment": ("tested implementation commit", "dedicated", "Execution independence"),
+        "runr-ticket-merge-deployment": ("tested revision", "dedicated", "Execution independence"),
+        "runr-ticket-batch-merge-deployment": ("tested revision", "dedicated", "Execution independence"),
+        "runr-discard-issue": ("exact Linear issue IDs", "Execution independence"),
     }
+    forbidden = (
+        "mandatory controller approval",
+        "mandatory release approval",
+        "mandatory discard approval",
+        "require a matching unexpired local approval",
+        "require a matching unexpired release approval",
+        "require a matching unexpired discard approval",
+    )
     for name, phrases in required.items():
         text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         for phrase in phrases:
             assert phrase in text, f"{name} is missing {phrase}"
+        lowered = text.casefold()
+        for phrase in forbidden:
+            assert phrase.casefold() not in lowered, f"{name} reintroduced controller gate: {phrase}"
 
 
 def test_independent_implementation_skill_is_single_issue_and_stops_at_review() -> None:
@@ -65,7 +76,7 @@ def test_independent_implementation_skill_is_single_issue_and_stops_at_review() 
         "dedicated worktree",
         "scope manifest",
         "Allowed paths",
-        "attempt log",
+        "attempt evidence",
         "In Review",
         "never merge",
         "never deploy",

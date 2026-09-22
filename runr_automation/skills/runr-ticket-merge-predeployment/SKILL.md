@@ -7,9 +7,9 @@ description: Use when explicitly promoting one Runr issue from implementation re
 
 This skill is explicit-only and operates on one issue or sub-issue. It integrates a reviewed ticket into the permanent predeployment branch, temporarily points the Runr Render services at that branch, and records live verification. A live-pending integration may administratively close the native Linear workflow state while retaining the custom `Predeployment Integrated` label; it never production-closes the issue or deletes its branch/worktree.
 
-## Mandatory controller approval
+## Execution independence
 
-Require a matching unexpired local approval bound to this action, target issue, current issue/scope/test fingerprints, and tested commit SHA. Any change invalidates it. Integration is serialized through the controller; never merge concurrently into the shared integration branch.
+This skill is self-contained and does not require the local Runr controller, its state database, or a controller approval. A matching local approval is optional evidence when the controller was used, never a prerequisite for a user-invoked skill run. Serialize integration through the dedicated worktree and protected branch flow described below; do not wait for, query, or create controller approvals.
 
 ## Deterministic Issue Status label
 

@@ -9,9 +9,9 @@ Before promoting any VPS acceptance ticket, verify its own exact-revision host r
 
 This skill is explicit-only. The user supplies Linear IDs, URLs, or unambiguous issue details. It promotes selected Ready for Production issues as one controlled deployment and finalizes each issue independently.
 
-## Mandatory release approval
+## Execution independence
 
-Require a matching unexpired release approval whose exact targets and action fingerprint bind every tested commit SHA, issue/scope fingerprint, and predeployment test result. Any material change invalidates approval. Deployment integration and cleanup are serialized.
+This skill is self-contained and does not require the local Runr controller, its state database, or a controller release approval. A matching local approval is optional evidence when the controller was used, never a prerequisite for a user-invoked skill run. Serialize deployment integration and cleanup through the dedicated worktree and protected branch flow described below.
 
 ## Deterministic Issue Status label
 
