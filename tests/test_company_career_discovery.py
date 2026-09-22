@@ -6,6 +6,7 @@ from unittest.mock import patch
 from backend.connectors.company_career_discovery import (
     FetchResult,
     build_career_coverage_benchmark,
+    build_source_inventory,
     collect_discovery_receipts,
     detect_ats_type,
     discover_career_url,
@@ -1298,6 +1299,90 @@ class CareerDiscoveryFixtureTests(unittest.TestCase):
         self.assertLessEqual(len(calls), 50)
         self.assertTrue(all(url.startswith("https://") for url in calls))
         self.assertFalse(any("localhost" in url for url in calls))
+
+
+class SourceInventoryTests(unittest.TestCase):
+    def test_multi_source_discovery_retains_full_candidate_inventory(self):
+        fetch = FakeFetcher(
+            {
+                "https://example.com": {
+                    "text": (
+                        '<a href="/careers">Careers</a> '
+                        '<a href="https://jobs.lever.co/example">Jobs</a>'
+                    ),
+                }
+            }
+        )
+
+        result = discover_career_url(
+            homepage_url="https://example.com",
+            fetch=fetch,
+            prefer_homepage_candidates=True,
+        )
+
+        urls = {candidate.url for candidate in result.candidates}
+        self.assertIn("https://example.com/careers", urls)
+        self.assertIn("https://jobs.lever.co/example", urls)
+        by_url = {candidate.url: candidate for candidate in result.candidates}
+        for candidate in result.candidates:
+            self.assertTrue(candidate.source)
+            self.assertTrue(candidate.host_policy)
+            self.assertTrue(candidate.validation_status)
+            self.assertGreaterEqual(candidate.confidence_score, 0.0)
+            self.assertTrue(candidate.provenance)
+        self.assertEqual(by_url["https://example.com/careers"].host_policy, "same_company_host")
+        self.assertEqual(by_url["https://jobs.lever.co/example"].ats_type, "lever")
+
+    def test_source_inventory_is_deterministic_and_fully_populated(self):
+        fetch = FakeFetcher(
+            {
+                "https://example.com": {
+                    "text": (
+                        '<a href="/careers">Careers</a> '
+                        '<a href="https://jobs.lever.co/example">Jobs</a>'
+                    ),
+                }
+            }
+        )
+
+        first = discover_career_url(
+            homepage_url="https://example.com",
+            fetch=FakeFetcher(
+                {
+                    "https://example.com": {
+                        "text": (
+                            '<a href="/careers">Careers</a> '
+                            '<a href="https://jobs.lever.co/example">Jobs</a>'
+                        ),
+                    }
+                }
+            ),
+            prefer_homepage_candidates=True,
+        )
+        second = discover_career_url(
+            homepage_url="https://example.com",
+            fetch=fetch,
+            prefer_homepage_candidates=True,
+        )
+
+        inventory = build_source_inventory(first)
+        self.assertEqual(inventory, build_source_inventory(first))
+        self.assertEqual(
+            [entry["url"] for entry in inventory],
+            [entry["url"] for entry in build_source_inventory(second)],
+        )
+        self.assertEqual(len(inventory), 2)
+        for entry in inventory:
+            self.assertEqual(entry["traversal_status"], "discovered")
+            self.assertEqual(entry["deferred_reason"], "")
+            self.assertIn("source_kind", entry)
+            self.assertIn("host_policy", entry)
+            self.assertIn("validation_status", entry)
+            self.assertIn("provenance", entry)
+            self.assertIn("confidence_score", entry)
+        kinds = {entry["url"]: entry["source_kind"] for entry in inventory}
+        self.assertEqual(kinds["https://example.com/careers"], "homepage_link")
+        self.assertEqual(kinds["https://jobs.lever.co/example"], "homepage_link")
 
 
 if __name__ == "__main__":

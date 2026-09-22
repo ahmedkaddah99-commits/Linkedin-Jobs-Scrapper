@@ -28,7 +28,6 @@ from scripts.master_linkedin_jobs_catalog import (
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 from scripts.publish_producer_states import (
     _ensure_publisher_checkpoint_table,
-    _publisher_checkpoint,
 )
 
 
@@ -642,7 +641,7 @@ def test_manifest_runtime_commands_use_posix_state_and_export_mounts() -> None:
     assert "--state-dir /srv/runr/state/employer --require-existing-state" in commands["scripts/run_manifested_employer.py"]
 
 
-def test_publisher_creates_checkpoint_table_with_expected_columns(tmp_path: Path) -> None:
+def test_registry_owns_publisher_checkpoint_table_with_expected_columns(tmp_path: Path) -> None:
     db_path = tmp_path / "catalog.db"
     store = SqliteAcquisitionStore(db_path)
     _ensure_publisher_checkpoint_table(store)
@@ -664,7 +663,7 @@ def test_publisher_creates_checkpoint_table_with_expected_columns(tmp_path: Path
         "updated_at",
     }
 
-    checkpoint = _publisher_checkpoint(store, "linkedin")
+    checkpoint = store.publisher_checkpoint("linkedin")
     assert checkpoint["source"] == "linkedin"
     assert checkpoint["source_rowid"] == 0
     assert checkpoint["bootstrap_complete"] is False

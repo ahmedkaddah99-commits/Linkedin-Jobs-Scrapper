@@ -102,8 +102,16 @@ def main() -> None:
         print(json.dumps({
             "jobs": 1000,
             "iterations": len(feed_times),
-            "feed_ms": {"p50": round(statistics.median(feed_times), 2), "p95": round(percentile(feed_times, .95), 2)},
-            "company_ms": {"p50": round(statistics.median(company_times), 2), "p95": round(percentile(company_times, .95), 2)},
+            "feed_ms": {
+                "p50": round(statistics.median(feed_times), 2),
+                "p75": round(percentile(feed_times, .75), 2),
+                "p95": round(percentile(feed_times, .95), 2),
+            },
+            "company_ms": {
+                "p50": round(statistics.median(company_times), 2),
+                "p75": round(percentile(company_times, .75), 2),
+                "p95": round(percentile(company_times, .95), 2),
+            },
         }, indent=2))
 
 

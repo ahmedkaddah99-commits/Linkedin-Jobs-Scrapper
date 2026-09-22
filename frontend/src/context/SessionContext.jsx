@@ -5,6 +5,7 @@ import {
   CLERK_JWT_TEMPLATE_NAME,
   getDefaultApiBaseUrl,
   loadStoredConnection,
+  markJobsPhase,
   persistConnection,
   resolveApiUrl,
 } from "../lib/api";
@@ -113,6 +114,8 @@ export function SessionProvider({ children }) {
   const [error, setError] = useState("");
   const authenticatedSessionRef = useRef({ tokenInfo: null, user: null });
   const trackedSessionKeyRef = useRef("");
+  const sessionBootstrapStartRef = useRef(null);
+  const sessionConnectedMarkedRef = useRef(false);
 
   const getAccessToken = useCallback(async () => {
     if (!isSignedIn) {
@@ -120,6 +123,18 @@ export function SessionProvider({ children }) {
     }
     return String(await getToken({ template: CLERK_JWT_TEMPLATE_NAME }) || "").trim();
   }, [getToken, isSignedIn]);
+
+  const markSessionConnected = useCallback(() => {
+    if (sessionConnectedMarkedRef.current) {
+      return;
+    }
+    sessionConnectedMarkedRef.current = true;
+    const startedAt = sessionBootstrapStartRef.current;
+    const durationMs = startedAt === null || typeof performance === "undefined" || typeof performance.now !== "function"
+      ? null
+      : Math.max(0, Math.round(performance.now() - startedAt));
+    markJobsPhase("session-connected", { durationMs, mode: "cold" });
+  }, []);
 
   const trackSessionStart = useCallback((baseUrl, nextUser, nextSessionId) => {
     const userId = resolveAnalyticsUserId(nextUser);
@@ -173,6 +188,7 @@ export function SessionProvider({ children }) {
       setError("");
       identify(resolveAnalyticsUserId(nextUser) || null);
       trackSessionStart(apiBaseUrl, nextUser, sessionId);
+      markSessionConnected();
       return payload;
     } catch (sessionError) {
       const nextState = getSessionRefreshErrorState({
@@ -191,12 +207,15 @@ export function SessionProvider({ children }) {
       }
       throw sessionError;
     }
-  }, [apiBaseUrl, clerkUserProfile, getAccessToken, isLoaded, isSignedIn, sessionId, trackSessionStart]);
+  }, [apiBaseUrl, clerkUserProfile, getAccessToken, isLoaded, isSignedIn, markSessionConnected, sessionId, trackSessionStart]);
 
   useEffect(() => {
     if (!isLoaded) {
       setStatus("connecting");
       return;
+    }
+    if (sessionBootstrapStartRef.current === null && typeof performance !== "undefined" && typeof performance.now === "function") {
+      sessionBootstrapStartRef.current = performance.now();
     }
     refreshSession().catch(() => undefined);
   }, [apiBaseUrl, isLoaded, isSignedIn, refreshSession]);
@@ -215,6 +234,7 @@ export function SessionProvider({ children }) {
         setError("");
         identify(resolveAnalyticsUserId(nextUser) || null);
         trackSessionStart(normalizedBaseUrl, nextUser, sessionId);
+        markSessionConnected();
         return payload;
       }).catch((sessionError) => {
         setStatus("error");
@@ -227,7 +247,7 @@ export function SessionProvider({ children }) {
         throw sessionError;
       });
     },
-    [clerkUserProfile, getAccessToken, sessionId, trackSessionStart],
+    [clerkUserProfile, getAccessToken, markSessionConnected, sessionId, trackSessionStart],
   );
 
   const disconnect = useCallback(async () => {

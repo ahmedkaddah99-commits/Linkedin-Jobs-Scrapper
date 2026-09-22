@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
+import { markJobsPhase } from "../../lib/api";
 import { logPersonalizedEvent } from "../../lib/personalizedAnalytics";
 import {
   countPersonalizedJobFilters,
@@ -24,6 +25,10 @@ const NETWORK_ITEMS = [
   ["direct", "Direct contacts", "Connection data unavailable", "lock"],
   ["warm", "Warm intros", "Connection data unavailable", "lock"],
 ];
+
+// Bounded upper limit for Jobs catalog reads so a hung request ends in a
+// retryable failure state instead of an indefinite spinner.
+const JOBS_FEED_TIMEOUT_MS = 20000;
 
 function Icon({ children, className = "", ...props }) {
   return <span className={["material-symbols-outlined", className].join(" ")} {...props}>{children}</span>;
@@ -90,16 +95,19 @@ function CatalogStateBanner({ error, feed, loading }) {
   const hasPendingIntelligence = Array.isArray(feed?.jobs) && feed.jobs.some((job) => (
     String(job?.match_intelligence?.state || job?.evaluation?.match_intelligence?.state || "").toLowerCase() === "pending"
   ));
-  const state = loading && !feed ? "loading" : error ? "failure" : hasPendingIntelligence ? "partial" : String(feed?.evaluation?.state || "unavailable");
+  // While a refresh runs, an already loaded feed stays visible; the banner
+  // says results are being updated instead of implying an empty catalog.
+  const state = loading && !feed ? "loading" : loading && feed ? "refreshing" : error ? "failure" : hasPendingIntelligence ? "partial" : String(feed?.evaluation?.state || "unavailable");
   const labels = {
     loading: "Loading the shared jobs catalog…",
+    refreshing: "Updating results with the latest catalog…",
     partial: "Some job fields are unknown. Runr is showing only verified values.",
     stale: "The shared catalog is stale. Results remain visible with their last verification time.",
     unavailable: "The shared jobs catalog is currently unavailable.",
     failure: "The shared jobs catalog could not be loaded.",
   };
   if (!error && state === "available") return null;
-  return <div className={["jobs-catalog-state", `jobs-catalog-state--${state}`].join(" ")} role={error || state === "failure" ? "alert" : "status"}><Icon>{state === "loading" ? "progress_activity" : state === "partial" ? "hourglass_top" : "cloud_off"}</Icon><span>{error || labels[state] || "Catalog state is unknown."}</span></div>;
+  return <div className={["jobs-catalog-state", `jobs-catalog-state--${state}`].join(" ")} role={error || state === "failure" ? "alert" : "status"}><Icon>{state === "loading" || state === "refreshing" ? "progress_activity" : state === "partial" ? "hourglass_top" : "cloud_off"}</Icon><span>{error || labels[state] || "Catalog state is unknown."}</span></div>;
 }
 
 function intelligenceValues(value) {
@@ -374,6 +382,14 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const relevantJobEventRef = useRef("");
   const initialFeedRef = useRef(true);
   const skipNextFeedRef = useRef(false);
+  const usefulRenderMarkedRef = useRef(false);
+  const feedRequestMsRef = useRef(null);
+  const fetchedDetailIdRef = useRef("");
+  const interactiveMarkedRef = useRef(false);
+
+  useEffect(() => {
+    markJobsPhase("route-mounted", { mode: "cold" });
+  }, []);
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
@@ -398,14 +414,24 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     let active = true;
     const isInitialFeed = initialFeedRef.current && filters === INITIAL_PERSONALIZED_JOB_FILTERS;
     initialFeedRef.current = false;
-    const timer = window.setTimeout(async () => {
+    // The first feed request fires immediately after the route connects;
+    // later filter edits stay debounced so rapid typing does not fan out.
+    const feedMode = isInitialFeed ? "cold" : "warm";
+    const requestStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : null;
+    markJobsPhase("feed-request-start", { mode: feedMode });
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const runFeedRequest = async () => {
+      // An already usable feed stays visible while a refresh is in flight;
+      // only an initial load renders without content.
       setLoading(true);
       setFeedError("");
-      setFeed(null);
       try {
         const query = buildPersonalizedJobsQuery(filters, { limit: 25, omitSort: isInitialFeed, view: "cards" });
-        const payload = await request(`/personalized-jobs?${query}`);
+        const payload = await request(`/personalized-jobs?${query}`, { signal: controller?.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS });
         if (active) {
+          const durationMs = requestStartedAt === null ? null : Math.round(performance.now() - requestStartedAt);
+          feedRequestMsRef.current = durationMs;
+          markJobsPhase("feed-request-end", { mode: feedMode, durationMs, serverMs: payload?.timings?.total_ms ?? null });
           setFeed(payload || { jobs: [], total: 0 });
           logPersonalizedEvent("jobs_feed_viewed", {
             route: "/jobs",
@@ -419,12 +445,21 @@ export default function JobsWorkspace({ initialJobId = "" }) {
           }
         }
       } catch (error) {
-        if (active) setFeedError(error?.message || "Unable to load the shared jobs catalog.");
+        if (active) {
+          markJobsPhase("feed-request-end", { mode: feedMode, durationMs: requestStartedAt === null ? null : Math.round(performance.now() - requestStartedAt), outcome: "failed" });
+          // A timed-out request must end in a retryable failure state, never
+          // an indefinite spinner.
+          setFeedError(error?.message || "Unable to load the shared jobs catalog.");
+        }
       } finally {
         if (active) setLoading(false);
       }
-    }, 150);
-    return () => { active = false; window.clearTimeout(timer); };
+    };
+    const timer = isInitialFeed ? null : window.setTimeout(runFeedRequest, 150);
+    if (timer === null) {
+      void runFeedRequest();
+    }
+    return () => { active = false; if (timer) window.clearTimeout(timer); controller?.abort(); };
   }, [feedAttempt, filters, isConnected, request]);
 
   function retryFeed() {
@@ -435,9 +470,17 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     if (!isConnected || !selectedJobId) return undefined;
     const listJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId));
     if (!routeJobId && !listJob) return undefined;
+    // Skip a duplicate detail request when this job was already fetched on
+    // this page; a failed fetch clears the marker so a later trigger retries.
+    const detailKey = String(selectedJobId);
+    if (fetchedDetailIdRef.current === detailKey) return undefined;
+    fetchedDetailIdRef.current = detailKey;
     let active = true;
-    request(`/personalized-jobs/${encodeURIComponent(selectedJobId)}`)
+    let settled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    request(`/personalized-jobs/${encodeURIComponent(selectedJobId)}`, { signal: controller?.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS })
       .then((payload) => {
+        settled = true;
         if (active) {
           setDetailJob(payload);
           setFeedError("");
@@ -448,8 +491,22 @@ export default function JobsWorkspace({ initialJobId = "" }) {
           }
         }
       })
-      .catch((error) => { if (active) setFeedError(error?.message || "This job is not available in the shared catalog."); });
-    return () => { active = false; };
+      .catch((error) => {
+        settled = true;
+        if (active) {
+          fetchedDetailIdRef.current = "";
+          setFeedError(error?.message || "This job is not available in the shared catalog.");
+        }
+      });
+    return () => {
+      active = false;
+      controller?.abort();
+      // An aborted, never-settled fetch must stay retryable on the next
+      // trigger instead of being swallowed by the dedupe marker.
+      if (!settled && fetchedDetailIdRef.current === detailKey) {
+        fetchedDetailIdRef.current = "";
+      }
+    };
   }, [isConnected, rawJobs, request, routeJobId, selectedJobId]);
 
   useEffect(() => {
@@ -457,12 +514,39 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     if (!routeJobId && selectedJobId && rawJobs.length && !rawJobs.some((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId))) setSelectedJobId(jobs[0]?.id || "");
   }, [jobs, rawJobs, routeJobId, selectedJobId]);
 
+  // First useful Jobs render: a verified card page, a truthful empty state,
+  // or a retryable failure state. Document `load` is not useful readiness.
+  useEffect(() => {
+    if (usefulRenderMarkedRef.current) return undefined;
+    const usefulState = feedError ? "error" : loading ? "" : jobs.length ? "cards" : "empty";
+    if (!usefulState) return undefined;
+    usefulRenderMarkedRef.current = true;
+    markJobsPhase("useful-render", { mode: "cold", state: usefulState, feedRequestMs: feedRequestMsRef.current });
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => {
+        if (!interactiveMarkedRef.current) {
+          interactiveMarkedRef.current = true;
+          markJobsPhase("interactive");
+        }
+      }, { timeout: 3000 });
+    } else {
+      const timeoutId = window.setTimeout(() => {
+        if (!interactiveMarkedRef.current) {
+          interactiveMarkedRef.current = true;
+          markJobsPhase("interactive");
+        }
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+    return undefined;
+  }, [feedError, jobs.length, loading]);
+
   useEffect(() => {
     if (activeTab !== "company" || !selectedJob?.company_id) return undefined;
     let active = true;
     setCompanyLoading(true);
     setCompanyError("");
-    request(`/personalized-jobs/companies/${encodeURIComponent(selectedJob.company_id)}`)
+    request(`/personalized-jobs/companies/${encodeURIComponent(selectedJob.company_id)}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS })
       .then((payload) => { if (active) setCompanyDetail(payload); })
       .catch((error) => { if (active) setCompanyError(error?.message || "Company details are unavailable."); })
       .finally(() => { if (active) setCompanyLoading(false); });
@@ -589,7 +673,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     setLoadingMore(true);
     try {
       const query = buildPersonalizedJobsQuery(filters, { cursor: feed.next_cursor, limit: 25, view: "cards" });
-      const payload = await request(`/personalized-jobs?${query}`);
+      const payload = await request(`/personalized-jobs?${query}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS });
       setFeed((current) => current ? { ...payload, jobs: [...(current.jobs || []), ...(payload?.jobs || [])] } : payload);
     } catch (error) {
       setFeedback(error?.message || "Unable to load more jobs.");
@@ -637,7 +721,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
     </section>
     <CatalogStateBanner error={feedError} feed={feed} loading={loading} />
-    {feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
+    {feedError ? <div className="jobs-feedback" role={feed ? "status" : "alert"}><Icon>cloud_off</Icon><span>{feed ? "Could not refresh the shared jobs catalog. The results below are the last verified page." : "Jobs are temporarily unavailable. Runr could not read the published catalog."}</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
       {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}

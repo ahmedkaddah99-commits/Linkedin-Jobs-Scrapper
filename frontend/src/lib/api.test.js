@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { apiRequest, apiRequestWithRetry, cancelAllDedupedRequests, createDedupedAbortController, diagnosticPathShape, resolveApiUrl, resolveDefaultApiBaseUrl, settleDedupedAbortController } from "./api.js";
+import { apiRequest, apiRequestWithRetry, cancelAllDedupedRequests, createDedupedAbortController, diagnosticPathShape, markJobsPhase, resolveApiUrl, resolveDefaultApiBaseUrl, settleDedupedAbortController } from "./api.js";
 
 test("uses explicit API base URL before Render-generated hostnames", () => {
   assert.equal(
@@ -268,4 +268,24 @@ test("apiRequestWithRetry retries on 503 and succeeds", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("markJobsPhase records a privacy-safe labeled mark on the Performance timeline", () => {
+  const name = markJobsPhase("unit-test-phase", { mode: "cold", durationMs: 5 });
+  assert.ok(name === "runr-jobs:unit-test-phase");
+  const entries = globalThis.performance.getEntriesByName(name, "mark");
+  assert.ok(entries.length >= 1);
+  const detail = entries[entries.length - 1].detail;
+  assert.equal(detail.route, "/jobs");
+  assert.equal(detail.phase, "unit-test-phase");
+  assert.equal(detail.mode, "cold");
+  assert.equal(typeof detail.revision, "string");
+  assert.ok(["mobile", "desktop", "unknown"].includes(detail.deviceClass));
+  globalThis.performance.clearMarks(name);
+});
+
+test("markJobsPhase rejects empty or unsafe phase names without marking", () => {
+  assert.equal(markJobsPhase("", {}), null);
+  assert.equal(markJobsPhase("bad phase!", {}), null);
+  assert.equal(markJobsPhase(null, {}), null);
 });

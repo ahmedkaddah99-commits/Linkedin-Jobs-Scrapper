@@ -167,86 +167,11 @@ def read_incremental_rows(
 
 
 def _ensure_publisher_checkpoint_table(store: SqliteAcquisitionStore) -> None:
-    def create(connection):
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS acquisition_publisher_checkpoints (
-                source TEXT PRIMARY KEY,
-                source_rowid INTEGER NOT NULL DEFAULT 0,
-                source_watermark TEXT NOT NULL DEFAULT '',
-                bootstrap_complete INTEGER NOT NULL DEFAULT 0,
-                last_cycle_id TEXT NOT NULL DEFAULT '',
-                last_publication_id TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
-            )"""
-        )
+    """Explicit preflight: the checkpoint schema is owned by migration
+    ``061_acquisition_publisher_checkpoints`` in the WS-5 registry, so this
+    fails fast instead of creating the table ad hoc."""
 
-    store._run_transaction(create)
-
-
-def _publisher_checkpoint(store: SqliteAcquisitionStore, source: str) -> dict[str, object]:
-    def read(connection):
-        row = connection.execute(
-            "SELECT source,source_rowid,source_watermark,bootstrap_complete,last_cycle_id,last_publication_id,updated_at FROM acquisition_publisher_checkpoints WHERE source=?",
-            (source,),
-        ).fetchone()
-        if row is None:
-            return {
-                "source": source,
-                "source_rowid": 0,
-                "source_watermark": "",
-                "bootstrap_complete": False,
-                "last_cycle_id": "",
-                "last_publication_id": "",
-                "updated_at": "",
-            }
-        return {
-            "source": _text(row["source"]),
-            "source_rowid": int(row["source_rowid"] or 0),
-            "source_watermark": _text(row["source_watermark"]),
-            "bootstrap_complete": bool(int(row["bootstrap_complete"] or 0)),
-            "last_cycle_id": _text(row["last_cycle_id"]),
-            "last_publication_id": _text(row["last_publication_id"]),
-            "updated_at": _text(row["updated_at"]),
-        }
-
-    return store._run_transaction(read)
-
-
-def _save_publisher_checkpoint(
-    store: SqliteAcquisitionStore,
-    checkpoint: Mapping[str, object],
-    *,
-    cycle_id: str,
-    publication_id: str,
-) -> None:
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    values = (
-        _text(checkpoint.get("source")),
-        int(checkpoint.get("source_rowid") or 0),
-        _text(checkpoint.get("source_watermark")),
-        int(bool(checkpoint.get("bootstrap_complete"))),
-        str(cycle_id),
-        str(publication_id),
-        now,
-    )
-
-    def write(connection):
-        connection.execute(
-            """INSERT INTO acquisition_publisher_checkpoints(
-                source,source_rowid,source_watermark,bootstrap_complete,
-                last_cycle_id,last_publication_id,updated_at
-            ) VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(source) DO UPDATE SET
-                source_rowid=excluded.source_rowid,
-                source_watermark=excluded.source_watermark,
-                bootstrap_complete=excluded.bootstrap_complete,
-                last_cycle_id=excluded.last_cycle_id,
-                last_publication_id=excluded.last_publication_id,
-                updated_at=excluded.updated_at""",
-            values,
-        )
-
-    store._run_transaction(write)
+    store.require_publisher_checkpoint_table()
 
 
 def _row_value(row: Mapping[str, object], key: str) -> object:
@@ -968,8 +893,8 @@ def run_delivery(
         for source_company_id in (company.get("linkedin_company_ids") or ())
         if _text(source_company_id)
     }
-    linkedin_checkpoint = _publisher_checkpoint(store, SOURCE_LINKEDIN)
-    employer_checkpoint = _publisher_checkpoint(store, SOURCE_EMPLOYER)
+    linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN)
+    employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     batch_size = max(25, min(1000, int(os.getenv("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", "250"))))
     telemetry = _publisher_telemetry(
@@ -1205,8 +1130,8 @@ def run_delivery(
             error_code="partial_source_coverage" if partial else "",
             error_message="One or more source companies lacked closure-safe completeness evidence." if partial else "",
         )
-        _save_publisher_checkpoint(store, next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
-        _save_publisher_checkpoint(store, next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
+        store.save_publisher_checkpoint(next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
+        store.save_publisher_checkpoint(next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         metrics.update(
             {
                 "status": "degraded" if partial else "completed",

@@ -66,4 +66,53 @@ describe("AA-216 declarative action boundary", () => {
     guard.stop();
   });
 
+  it("blocks synthetic terminal click, submit, and Enter", () => {
+    document.body.innerHTML = `<form><input id="email"><button id="terminal" type="submit">Submit application</button></form>`;
+    const guard = installSubmissionGuard(document);
+    const terminal = document.querySelector("#terminal")!;
+
+    const syntheticClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+    terminal.dispatchEvent(syntheticClick);
+    expect(syntheticClick.defaultPrevented).toBe(true);
+    const syntheticEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    document.querySelector("#email")!.dispatchEvent(syntheticEnter);
+    expect(syntheticEnter.defaultPrevented).toBe(true);
+    const syntheticSubmit = new Event("submit", { bubbles: true, cancelable: true });
+    document.querySelector("form")!.dispatchEvent(syntheticSubmit);
+    expect(syntheticSubmit.defaultPrevented).toBe(true);
+    guard.stop();
+  });
+
+  it("allows trusted user activation and still blocks the next synthetic submit", () => {
+    document.body.innerHTML = `<form><input id="email"><button id="terminal" type="submit">Submit application</button><button id="neutral" type="button">Review later</button></form>`;
+    const captured = new Map<string, (event: object) => void>();
+    const harness = {
+      addEventListener: (type: string, listener: (event: object) => void, options?: boolean | AddEventListenerOptions) => {
+        if (type === "click" || type === "submit" || type === "keydown") captured.set(type, listener);
+        document.addEventListener(type, listener as never, options);
+      },
+      removeEventListener: document.removeEventListener.bind(document) as Document["removeEventListener"],
+      defaultView: document.defaultView,
+    } as unknown as Document;
+    const guard = installSubmissionGuard(harness);
+    const fire = (type: string, target: Element, isTrusted: boolean, extra: object = {}) => {
+      const event: Record<string, unknown> = {
+        isTrusted, target, defaultPrevented: false, stopped: false, ...extra,
+        preventDefault() { event.defaultPrevented = true; },
+        stopImmediatePropagation() { event.stopped = true; },
+      };
+      captured.get(type)!(event);
+      return event;
+    };
+
+    expect(fire("click", document.querySelector("#terminal")!, false)).toMatchObject({ defaultPrevented: true, stopped: true });
+    expect(fire("keydown", document.querySelector("#email")!, false, { key: "Enter" })).toMatchObject({ defaultPrevented: true, stopped: true });
+    expect(fire("submit", document.querySelector("form")!, false)).toMatchObject({ defaultPrevented: true, stopped: true });
+
+    expect(fire("click", document.querySelector("#neutral")!, true)).toMatchObject({ defaultPrevented: false, stopped: false });
+    expect(fire("submit", document.querySelector("form")!, true)).toMatchObject({ defaultPrevented: false, stopped: false });
+    expect(fire("submit", document.querySelector("form")!, false)).toMatchObject({ defaultPrevented: true, stopped: true });
+    guard.stop();
+  });
+
 });

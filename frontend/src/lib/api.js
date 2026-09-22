@@ -217,6 +217,59 @@ function nowMs() {
   return Date.now();
 }
 
+// --- Privacy-safe Jobs readiness performance marks ---
+
+const JOBS_PERF_MARK_PREFIX = "runr-jobs";
+const JOBS_PERF_DEVICE_COARSE_QUERY = "(pointer: coarse)";
+const JOBS_PERF_DEVICE_NARROW_QUERY = "(max-width: 640px)";
+
+function jobsPerfDeviceClass() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "unknown";
+  }
+  const coarse = window.matchMedia(JOBS_PERF_DEVICE_COARSE_QUERY).matches;
+  const narrow = window.matchMedia(JOBS_PERF_DEVICE_NARROW_QUERY).matches;
+  return coarse && narrow ? "mobile" : "desktop";
+}
+
+function jobsPerfRevision() {
+  const env = import.meta.env || {};
+  return String(env.VITE_RELEASE_VERSION || env.VITE_RUNR_REVISION || "").trim() || "dev";
+}
+
+/**
+ * Record one privacy-safe Jobs phase mark on the Performance timeline.
+ *
+ * Marks carry only route, phase, device class, cold/warm mode, and the build
+ * revision. They never contain user data, query text, or payload content.
+ * Browser timing entries can be read with
+ * `performance.getEntriesByName("runr-jobs:<phase>", "mark")`.
+ */
+export function markJobsPhase(phase, detail = {}) {
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") {
+    return null;
+  }
+  const normalizedPhase = String(phase || "").trim();
+  if (!normalizedPhase || !/^[a-z0-9-]+$/i.test(normalizedPhase)) {
+    return null;
+  }
+  const label = {
+    route: "/jobs",
+    phase: normalizedPhase,
+    deviceClass: jobsPerfDeviceClass(),
+    mode: "warm",
+    revision: jobsPerfRevision(),
+    ...(detail && typeof detail === "object" ? detail : {}),
+  };
+  const name = `${JOBS_PERF_MARK_PREFIX}:${normalizedPhase}`;
+  try {
+    performance.mark(name, { detail: label });
+  } catch {
+    return null;
+  }
+  return name;
+}
+
 export function diagnosticPathShape(path) {
   const rawPath = String(path || "").split("?")[0] || "/";
   return rawPath

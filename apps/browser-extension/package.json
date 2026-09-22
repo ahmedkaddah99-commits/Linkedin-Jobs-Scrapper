@@ -22,8 +22,8 @@
     "package": "wxt build && node scripts/verify-manifest.mjs",
     "test:e2e": "npm run build:test && playwright test",
     "test:e2e:edge": "npm run build:test:edge && playwright test --config playwright.edge.config.ts",
-    "check": "npm run typecheck && npm run test:unit && npm run build && npm run verify:manifest",
-    "check:edge": "npm run typecheck && npm run build:edge && npm run verify:manifest:edge",
+    "check": "npm run typecheck && npm run test:unit && npm run build && npm run verify:manifest && npm run verify:assisted-apply-boundary",
+    "check:edge": "npm run typecheck && npm run build:edge && npm run verify:manifest:edge && npm run verify:assisted-apply-boundary",
     "check:all": "npm run check && npm run test:e2e",
     "check:all:edge": "npm run check:edge && npm run test:e2e:edge"
   },

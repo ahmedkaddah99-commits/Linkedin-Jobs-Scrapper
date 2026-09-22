@@ -2239,6 +2239,94 @@ class SqliteAcquisitionStore(_SqliteStore):
             if (lease_owner or lease_token) and updated.rowcount != 1:
                 raise AcquisitionLeaseLostError(f"Acquisition cycle lease lost: {cycle_id}")
 
+    def require_publisher_checkpoint_table(self) -> None:
+        """Fail fast when the migration-registry checkpoint table is absent.
+
+        The ``acquisition_publisher_checkpoints`` schema is owned by migration
+        ``061_acquisition_publisher_checkpoints``. The store never creates it
+        ad hoc; callers get an explicit error instead of silent schema creation.
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='acquisition_publisher_checkpoints'"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "acquisition_publisher_checkpoints is missing; run the migration registry "
+                "(061_acquisition_publisher_checkpoints) before publishing producer states."
+            )
+
+    def publisher_checkpoint(self, source: str) -> dict[str, Any]:
+        """Return the durable publisher checkpoint for one producer source."""
+
+        normalized_source = str(source or "").strip()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT source,source_rowid,source_watermark,bootstrap_complete,"
+                "last_cycle_id,last_publication_id,updated_at "
+                "FROM acquisition_publisher_checkpoints WHERE source=?",
+                (normalized_source,),
+            ).fetchone()
+        if row is None:
+            return {
+                "source": normalized_source,
+                "source_rowid": 0,
+                "source_watermark": "",
+                "bootstrap_complete": False,
+                "last_cycle_id": "",
+                "last_publication_id": "",
+                "updated_at": "",
+            }
+        return {
+            "source": str(row["source"] or ""),
+            "source_rowid": int(row["source_rowid"] or 0),
+            "source_watermark": str(row["source_watermark"] or ""),
+            "bootstrap_complete": bool(int(row["bootstrap_complete"] or 0)),
+            "last_cycle_id": str(row["last_cycle_id"] or ""),
+            "last_publication_id": str(row["last_publication_id"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
+    def save_publisher_checkpoint(
+        self,
+        checkpoint: Mapping[str, Any],
+        *,
+        cycle_id: str,
+        publication_id: str,
+    ) -> None:
+        """Upsert one publisher checkpoint row; the caller owns retry semantics."""
+
+        source = str(checkpoint.get("source") or "").strip()
+        if not source:
+            raise ValueError("Publisher checkpoint requires a non-empty source.")
+        values = (
+            source,
+            int(checkpoint.get("source_rowid") or 0),
+            str(checkpoint.get("source_watermark") or ""),
+            int(bool(checkpoint.get("bootstrap_complete"))),
+            str(cycle_id),
+            str(publication_id),
+            utc_now_iso(),
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO acquisition_publisher_checkpoints(
+                    source,source_rowid,source_watermark,bootstrap_complete,
+                    last_cycle_id,last_publication_id,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(source) DO UPDATE SET
+                    source_rowid=excluded.source_rowid,
+                    source_watermark=excluded.source_watermark,
+                    bootstrap_complete=excluded.bootstrap_complete,
+                    last_cycle_id=excluded.last_cycle_id,
+                    last_publication_id=excluded.last_publication_id,
+                    updated_at=excluded.updated_at
+                """,
+                values,
+            )
+
     @staticmethod
     def _publication_rows_with_completeness(
         candidate_rows: Iterable[Mapping[str, Any]],
