@@ -3545,3 +3545,11 @@ MIGRATIONS = (
         _apply_publication_latest_observation_index_migration,
     ),
 )
+
+
+def current_migration_head() -> str:
+    """Return the registry head used by release compatibility checks."""
+
+    if not MIGRATIONS:
+        raise RuntimeError("The migration registry must contain at least one migration.")
+    return MIGRATIONS[-1].migration_id

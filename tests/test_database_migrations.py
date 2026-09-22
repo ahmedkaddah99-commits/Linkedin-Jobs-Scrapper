@@ -7,7 +7,11 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.database.connection import database_session
+from backend.database import connection
+from backend.database.connection import (
+    DatabaseConfigurationError,
+    database_session,
+)
 from backend.database.initialization import initialize_database
 from backend.database.migrations import (
     Migration,
@@ -16,7 +20,7 @@ from backend.database.migrations import (
     run_migrations,
 )
 from backend.database.schema import BASE_SCHEMA_SQL
-from backend.repositories.sqlite_migrations import MIGRATIONS
+from backend.repositories.sqlite_migrations import MIGRATIONS, current_migration_head
 
 
 class DatabaseMigrationTests(unittest.TestCase):
@@ -162,6 +166,18 @@ class DatabaseMigrationTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
+
+    def test_registry_head_is_append_only_and_checksum_backed(self):
+        migration_ids = [migration.migration_id for migration in MIGRATIONS]
+        self.assertEqual(migration_ids, sorted(migration_ids))
+        self.assertEqual(len(migration_ids), len(set(migration_ids)))
+        self.assertEqual(current_migration_head(), "060_publication_latest_observation_index")
+        self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
+
+    def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
+        with patch.dict(os.environ, {"RUNR_MIGRATION_HEAD": "058_customer_task_queue"}, clear=True):
+            with self.assertRaisesRegex(DatabaseConfigurationError, "migration head"):
+                connection.connect_database(self._db_path("incompatible_migration_head"))
 
     def test_workspace_ownership_migration_backfills_from_the_single_run_owner(self):
         db_path = self._db_path("workspace_ownership_backfill")

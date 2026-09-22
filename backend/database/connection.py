@@ -83,6 +83,73 @@ class DatabaseConfigurationError(RuntimeError):
     """Raised when the selected database backend is not configured correctly."""
 
 
+_RELEASE_PLACEHOLDER_VALUES = frozenset({"", "unknown", "unset", "none"})
+
+
+def _known_release_value(value: object) -> str:
+    normalized = str(value or "").strip()
+    if normalized.casefold() in _RELEASE_PLACEHOLDER_VALUES:
+        return ""
+    return normalized
+
+
+def _release_value(value: str | None, environment_name: str) -> str:
+    if value is not None:
+        return _known_release_value(value)
+    return _known_release_value(os.getenv(environment_name, ""))
+
+
+def _require_matching_release_values(
+    label: str,
+    left_name: str,
+    left_value: str,
+    right_name: str,
+    right_value: str,
+) -> None:
+    if left_value and right_value and left_value != right_value:
+        raise DatabaseConfigurationError(
+            f"Release {label} mismatch: {left_name}={left_value!r}, "
+            f"{right_name}={right_value!r}."
+        )
+
+
+def validate_release_provenance(
+    *,
+    release_branch: str | None = None,
+    runtime_branch: str | None = None,
+    release_commit: str | None = None,
+    runtime_commit: str | None = None,
+    configured_migration_head: str | None = None,
+) -> str:
+    """Fail closed when known release metadata disagrees with the code registry."""
+
+    from backend.repositories.sqlite_migrations import current_migration_head
+
+    expected_migration_head = current_migration_head()
+    configured_head = _release_value(configured_migration_head, "RUNR_MIGRATION_HEAD")
+    if configured_head and configured_head != expected_migration_head:
+        raise DatabaseConfigurationError(
+            "Configured migration head does not match the code registry: "
+            f"configured={configured_head!r}, expected={expected_migration_head!r}."
+        )
+
+    _require_matching_release_values(
+        "branch",
+        "RUNR_RELEASE_BRANCH",
+        _release_value(release_branch, "RUNR_RELEASE_BRANCH"),
+        "RENDER_GIT_BRANCH",
+        _release_value(runtime_branch, "RENDER_GIT_BRANCH"),
+    )
+    _require_matching_release_values(
+        "commit",
+        "RUNR_RELEASE_COMMIT",
+        _release_value(release_commit, "RUNR_RELEASE_COMMIT"),
+        "RENDER_GIT_COMMIT",
+        _release_value(runtime_commit, "RENDER_GIT_COMMIT"),
+    )
+    return expected_migration_head
+
+
 def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
     current: BaseException | None = exc
     seen: set[int] = set()
@@ -525,6 +592,7 @@ def database_target_info(local_path: str | Path) -> dict[str, str | bool]:
 def connect_database(local_path: str | Path) -> DatabaseConnection:
     """Connect to Turso when configured, otherwise preserve local sqlite3 behavior."""
 
+    validate_release_provenance()
     remote_url = _remote_database_url()
     if remote_url or _remote_database_required():
         if not remote_url:

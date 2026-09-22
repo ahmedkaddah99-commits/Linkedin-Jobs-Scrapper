@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Iterable
 
+from backend.repositories.sqlite_migrations import current_migration_head
+
 
 RELEASE_METADATA_SCHEMA_VERSION = "runr.release.v1"
 RELEASE_CONTRACT_VERSION = "runr-contract-v1"
-DEFAULT_MIGRATION_HEAD = "058_customer_task_queue"
 SERVICES = frozenset({"frontend", "api", "worker"})
 
 # These frontend modules are runtime inputs to the server-side CV PDF renderer.
@@ -134,7 +135,7 @@ class ReleaseMetadata:
             ),
             migration_head=_environment_value(
                 "RUNR_MIGRATION_HEAD",
-                default=DEFAULT_MIGRATION_HEAD,
+                default=current_migration_head(),
             ),
             worker_role=str(worker_role or os.getenv("WORKER_ROLE") or "").strip(),
             worker_version=_environment_value("RUNR_WORKER_VERSION", default=""),
