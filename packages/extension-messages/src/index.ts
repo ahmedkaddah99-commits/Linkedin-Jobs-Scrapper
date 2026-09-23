@@ -771,7 +771,7 @@ function isBoundedTextArray(value: unknown, maxItems: number): value is string[]
 
 function isProfilePackageFact(value: unknown): value is ProfilePackageFact {
   return isRecord(value) && isExactObject(value, ["value", "provenance", "confirmed"]) &&
-    isBoundedText(value.value) && isBoundedText(value.provenance) && typeof value.confirmed === "boolean";
+    isBoundedText(value.value) && isBoundedText(value.provenance) && value.confirmed === true;
 }
 
 function isProfilePackageAnswer(value: unknown): value is ProfilePackageAnswer {
@@ -784,7 +784,7 @@ function isProfilePackageAnswer(value: unknown): value is ProfilePackageAnswer {
     ["standard", "personal", "legal", "demographic"].includes(String(value.sensitivity)) &&
     isBoundedText(value.scope, 80) && typeof value.confidence === "number" &&
     Number.isFinite(value.confidence) && value.confidence >= 0 && value.confidence <= 1 &&
-    typeof value.requires_review === "boolean" && isBoundedText(value.provenance) &&
+    value.requires_review === false && isBoundedText(value.provenance) &&
     isBoundedTextArray(value.reasons, 20);
 }
 
@@ -800,7 +800,7 @@ function isProfilePackageExperience(value: unknown): value is ProfilePackageExpe
       "bullet_id", "text", "approved_text", "source_experience_id", "provenance_id", "approved",
     ]) && isBoundedText(bullet.bullet_id, 160) && isBoundedText(bullet.text) &&
       isBoundedText(bullet.approved_text) && isBoundedText(bullet.source_experience_id, 160) &&
-      isBoundedText(bullet.provenance_id, 300) && typeof bullet.approved === "boolean") &&
+      isBoundedText(bullet.provenance_id, 300) && bullet.approved === true) &&
     isExactObject(value.generation_provenance, ["source", "profile_id"]) &&
     value.generation_provenance.source === "career_memory" &&
     isBoundedText(value.generation_provenance.profile_id, 160) &&
@@ -821,7 +821,7 @@ function isProfilePackageEducation(value: unknown): value is ProfilePackageEduca
   return isRecord(value) && isExactObject(value, ["institution", "degree", "period", "provenance", "confirmed"]) &&
     isBoundedText(value.institution, 300) && isBoundedText(value.degree, 300) &&
     isBoundedText(value.period, 160) && isBoundedText(value.provenance, 300) &&
-    typeof value.confirmed === "boolean" && value.confirmed;
+    value.confirmed === true;
 }
 
 export function isProfilePackagePayload(value: unknown): value is ProfilePackagePayload {

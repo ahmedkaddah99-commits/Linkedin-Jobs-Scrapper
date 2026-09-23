@@ -407,6 +407,16 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 403)
 
+    def test_extension_profile_package_rejects_wrong_origin(self):
+        session_token = self._create_runr_pro_extension_session()
+        status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/profile-package",
+            headers={"Authorization": f"Bearer {session_token}", "Origin": self.second_extension_origin},
+            payload={},
+        )
+        self.assertEqual(status, 401)
+
     def test_non_admin_users_only_see_their_owned_workspaces_runs_and_tracker_items(self):
         user_a = self.app.upsert_user(
             {

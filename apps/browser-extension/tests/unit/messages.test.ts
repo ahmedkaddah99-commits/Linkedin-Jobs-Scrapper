@@ -464,6 +464,25 @@ describe("extension message boundaries", () => {
       ...profilePackage,
       answers: [{ ...profilePackage.answers[0], proposed_value: undefined }],
     })).toBe(false);
+    expect(isProfilePackagePayload({
+      ...profilePackage,
+      answers: [{ ...profilePackage.answers[0], requires_review: true }],
+    })).toBe(false);
+    expect(isProfilePackagePayload({
+      ...profilePackage,
+      experiences: [{
+        ...profilePackage.experiences[0],
+        bullets: [{ ...profilePackage.experiences[0]!.bullets[0]!, approved: false }],
+      }],
+    })).toBe(false);
+    expect(isProfilePackagePayload({
+      ...profilePackage,
+      education: [{ ...profilePackage.education[0], confirmed: false }],
+    })).toBe(false);
+    expect(isProfilePackagePayload({
+      ...profilePackage,
+      skills: [{ ...profilePackage.skills[0], confirmed: false }],
+    })).toBe(false);
     expect(isPanelResponse({ ok: true, profilePackage: { schema_version: 1 } })).toBe(false);
   });
 });
