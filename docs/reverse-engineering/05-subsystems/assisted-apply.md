@@ -324,3 +324,26 @@ npm run check:extension                                 # root wrapper
 3. T03 review record: 48-path accept/adapt/reject, with the never-submit review items in §9.2 (WS9-G3, G4).
 4. Behavioural test for L3 guard interplay with portal JS and authorized intermediate navigation (WS9-G3, G6).
 5. Correct allocation/evidence note about `assistant-panel.tsx` (WS9-G5; Phase 3 / WS-12).
+
+## T49 implementation amendment (2026-09-23)
+
+The approved profile-package extension contract is now implemented across the
+backend route, shared message package, service worker, and panel mapper.
+
+- The service worker handles `ASSISTED_APPLY_PANEL_PROFILE`, requests
+  `POST /assisted-apply/extension/profile-package`, and validates the
+  schema-versioned payload before returning it as `PanelResponse.profilePackage`.
+- Session tokens remain service-worker-only. Untrusted senders, non-top frames,
+  missing sessions, failed requests, and malformed payloads fail closed with a
+  generic response.
+- The payload contains only approved candidate facts, profile-verified answers,
+  confirmed education/skills/languages, and career-memory experiences with
+  approved bullets and provenance. The panel mapper consumes the approved
+  `proposed_value` field and maps periods to planner-friendly ISO year-month
+  values; it does not invent missing facts.
+- The backend reuses `_profile_package_sections`; no profile-package store,
+  migration, manifest permission, or new external provider call is added.
+
+The route and wire contract are covered by backend API tests plus extension
+message and mapper unit tests. Boundary verification remains required for every
+future Assisted Apply change.

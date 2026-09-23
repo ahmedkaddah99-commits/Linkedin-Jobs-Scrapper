@@ -6,8 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from scripts.audit_job_publication_completeness import run_audit
-from scripts.publish_producer_states import RUNTIME_PUBLICATION_POLICY_VERSION
+from scripts.audit_job_publication_completeness import run_audit, run_policy_experiments
+from scripts.publish_producer_states import (
+    RUNTIME_PUBLICATION_POLICY_VERSION,
+    resolve_runtime_publication_policy,
+)
 from backend.acquisition.job_publication_completeness import (
     REASON_BLOCKED_OR_ERROR_BODY,
     REASON_CLOSED_BEFORE_POSTED_AT,
@@ -557,6 +560,69 @@ def test_audit_reports_trusted_linkedin_url_relaxation_impact():
 
 def test_runtime_publisher_uses_blocking_publication_policy():
     assert RUNTIME_PUBLICATION_POLICY_VERSION == "publication_policy_v2"
+
+
+def test_policy_experiments_report_incremental_counts_samples_and_field_impact():
+    short_description = _complete_record(
+        canonical_job_id="job-short",
+        description_text="Build reliable software for customers and collaborate with product teams.",
+        source="employer_site",
+        source_ats="greenhouse",
+    )
+    stale_record = _complete_record(
+        canonical_job_id="job-stale",
+        observed_at=(NOW - timedelta(days=120)).isoformat(),
+    )
+
+    report = run_policy_experiments(
+        [_complete_record(), short_description, stale_record],
+        company_registry=REGISTRY,
+        now=NOW,
+        experiment_ids=("description_threshold_60", "freshness_window_180"),
+        sample_size=5,
+    )
+
+    description = report["experiments"]["description_threshold_60"]
+    assert description["incremental_publish_count"] == 1
+    assert description["source_impact"] == {"employer_site": {"gained": 1, "lost": 0}}
+    assert description["missing_field_distribution"] == {"description": 1}
+    assert description["false_positive_sample"][0]["canonical_job_id"] == "job-short"
+
+    freshness = report["experiments"]["freshness_window_180"]
+    assert freshness["incremental_publish_count"] == 1
+    assert freshness["missing_field_distribution"] == {"observed_at": 1}
+    assert report["snapshot"]["evaluated_at"] == NOW.isoformat()
+
+
+def test_policy_experiments_preserve_trust_gates():
+    record = _complete_record(canonical_company_id="")
+    report = run_policy_experiments(
+        [record],
+        company_registry=REGISTRY,
+        now=NOW,
+        experiment_ids=("description_threshold_60", "freshness_window_180"),
+    )
+
+    assert all(
+        item["candidate_publishable_count"] == 0
+        for item in report["experiments"].values()
+    )
+
+
+def test_runtime_policy_alternative_requires_owner_approval_or_explicit_rollback():
+    with pytest.raises(ValueError, match="owner approval"):
+        resolve_runtime_publication_policy("publication_policy_v1")
+
+    assert (
+        resolve_runtime_publication_policy(
+            "publication_policy_v1", approved_versions={"publication_policy_v1"}
+        )
+        == "publication_policy_v1"
+    )
+    assert (
+        resolve_runtime_publication_policy(rollback_to="publication_policy_v1")
+        == "publication_policy_v1"
+    )
 
 
 if __name__ == "__main__":

@@ -612,3 +612,24 @@ The three deleted modules are absent at `58a96674` (intentionally; label REMOVED
 4. **WS1-G5.** Replace `bind_server_globals` with explicit imports from extracted helper modules.
 5. **WS1-G7.** CLI parser smoke tests (24 subcommands, flag defaults).
 6. **WS1-G4/G8/G9.** Security review items, routed to WS-6.
+
+## T49 implementation amendment (2026-09-23)
+
+The Assisted Apply extension now has a dedicated approved profile-package route:
+
+- `POST /v1/assisted-apply/extension/profile-package` is registered as
+  `assisted_apply.extension.profile_package.post`.
+- The body is intentionally an empty strict object. Unknown fields are rejected;
+  the endpoint does not accept profile data from the extension.
+- The request must carry an extension session token and the exact configured
+  extension `Origin`, and the account must have Runr Pro access.
+- The response is schema version `1` and is assembled by the existing
+  `_profile_package_sections` service boundary. It contains only the approved
+  candidate, profile-verified answers, confirmed career-memory experiences and
+  education, confirmed skills/languages, and warnings. No new store or
+  migration is introduced.
+
+The route is a body-bearing POST so browser requests preserve the extension
+origin during session verification. The service worker calls it and validates
+the response before returning a typed `PanelResponse`; the page/panel never
+receives the session token or an unvalidated backend payload.
