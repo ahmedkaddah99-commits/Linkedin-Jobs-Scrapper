@@ -306,6 +306,10 @@ npm run check:extension                                 # root wrapper
 
 ## Agent context and remaining work
 
+### T50 broad-host runtime panel
+
+The 0.3.0 extension uses the owner-approved `https://*/*` install-time host permission while keeping `content_scripts` absent from the manifest. The service worker reconciles the unlisted `assistant-panel.js` runtime registration, excludes Runr-owned origins, and injects newly granted matching tabs. The panel mounts only when the provider-neutral classifier identifies an application context. It requests the approved profile package through the service worker, runs provider-neutral autofill, and displays applied, review, and unresolved outcomes. T50 contains no Next/Continue control, navigation module, or synthetic navigation dispatch; that remains T51 scope.
+
 **(a) Proposed agent context packet: Assisted Apply extension**
 - *Required reading:* this doc; [apps-and-extensions.md](../01-architecture/apps-and-extensions.md); [shared-packages.md](../01-architecture/shared-packages.md); `apps/browser-extension/README.md`; `packages/ats-core/src/submission-guard.ts`; `packages/ats-core/src/index.ts:171-209`; `packages/ats-core/src/declarative-actions.ts`; `apps/browser-extension/scripts/verify-manifest.mjs`; `apps/browser-extension/scripts/verify-assisted-apply-boundary.mjs`; `docs/assisted-apply/gates/AA-P03.md`; owner memory `runr-extension-safety-posture`.
 - *Allowed paths:* `apps/browser-extension/**`, `packages/ats-core/**`, `packages/extension-messages/**`. Backend routes and services only with WS-1/WS-4 coordination.
