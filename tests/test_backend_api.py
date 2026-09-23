@@ -299,6 +299,114 @@ class BackendApiTests(unittest.TestCase):
             datetime.now(timezone.utc) - timedelta(days=days_ago)
         ).replace(hour=hour, minute=minute, second=0, microsecond=0).isoformat()
 
+    def _create_runr_pro_extension_session(self, *, pro: bool = True) -> str:
+        if pro:
+            self.app.repositories.auth_repository.upsert_subscription(
+                {
+                    "subscription_id": "sub_profile_package",
+                    "user_id": self.user.user_id,
+                    "plan_id": "runr_pro",
+                    "status": "active",
+                    "billing_provider": "creem",
+                }
+            )
+        verifier = "v" * 64
+        state = "profile_package_state"
+        _, _, created = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/connection-requests",
+            headers={"Origin": self.extension_origin},
+            payload={
+                "code_challenge": pkce_s256_challenge(verifier),
+                "state": state,
+                "installation_id": "installation_profile_package",
+                "extension_version": "0.1.0",
+            },
+        )
+        request_id = created["request_id"]
+        clerk_user_id = "user_profile_package_owner"
+        self.app.repositories.auth_repository.set_user_clerk_user_id(self.user.user_id, clerk_user_id)
+        clerk_claims = SimpleNamespace(
+            clerk_user_id=clerk_user_id,
+            session_id="sess_profile_package_owner",
+            role="user",
+            plan_id="runr_pro",
+            quota_overrides={},
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            raw_claims={},
+            authorized_party=self.frontend_origin,
+        )
+        with patch("backend.api.server.verify_session_token", return_value=clerk_claims):
+            _, _, approved = self._request_with_headers(
+                "POST",
+                f"/v1/assisted-apply/connection-requests/{quote(request_id)}/approve",
+                headers={"Authorization": f"Bearer {self._clerk_jwt_token(subject=clerk_user_id)}", "Origin": self.frontend_origin},
+                payload={"preferences": {"permit_sensitive_autofill": True}},
+            )
+        completion = urlparse(approved["completion_url"])
+        authorization_code = parse_qs(completion.query)["code"][0]
+        status, _, exchanged = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/token",
+            headers={"Origin": self.extension_origin},
+            payload={
+                "request_id": request_id,
+                "authorization_code": authorization_code,
+                "code_verifier": verifier,
+            },
+        )
+        self.assertEqual(status, 200)
+        return exchanged["session_token"]
+
+    def test_extension_profile_package_requires_session_and_returns_approved_sections(self):
+        status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/profile-package",
+            headers={"Origin": self.extension_origin},
+            payload={},
+        )
+        self.assertEqual(status, 401)
+
+        self.user.metadata = {
+            "profile": {
+                "first_name": "Alex",
+                "last_name": "Candidate",
+                "email": "alex@example.com",
+                "website": "https://alex.example",
+            }
+        }
+        self.app.upsert_user(self.user)
+        session_token = self._create_runr_pro_extension_session()
+        status, _, payload = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/profile-package",
+            headers={"Authorization": f"Bearer {session_token}", "Origin": self.extension_origin},
+            payload={},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertTrue(payload["candidate"]["approved"])
+        self.assertEqual(payload["candidate"]["email"], "alex@example.com")
+        self.assertEqual(payload["answers"][0]["proposed_value"], "Alex")
+
+        malformed_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/profile-package",
+            headers={"Authorization": f"Bearer {session_token}", "Origin": self.extension_origin},
+            payload={"unexpected": "field"},
+        )
+        self.assertEqual(malformed_status, 400)
+
+    def test_extension_profile_package_requires_runr_pro(self):
+        session_token = self._create_runr_pro_extension_session(pro=False)
+        status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/profile-package",
+            headers={"Authorization": f"Bearer {session_token}", "Origin": self.extension_origin},
+            payload={},
+        )
+        self.assertEqual(status, 403)
+
     def test_non_admin_users_only_see_their_owned_workspaces_runs_and_tracker_items(self):
         user_a = self.app.upsert_user(
             {

@@ -16,6 +16,7 @@ import {
   AssistedApplyPreparationValidator,
   isAssistedApplyPreparationMessage,
   isApplicationPackagePayload,
+  isProfilePackagePayload,
   isRunrWebLaunchRequest,
   isRunrWebLinkedInConnectionsRequest,
 } from "@runr/extension-messages";
@@ -400,5 +401,69 @@ describe("extension message boundaries", () => {
     expect(isFixtureProofMessage({ ...proof, execution: { status: "filled" } })).toBe(false);
     expect(isAssistedApplyTabState({ ...state, status: "submitted" })).toBe(false);
     expect(isPanelResponse({ ok: true, state: { ...state, tabId: "42" } })).toBe(false);
+  });
+
+  it("accepts only the approved profile-package wire contract", () => {
+    const profilePackage = {
+      schema_version: 1,
+      candidate: {
+        first_name: "Alex",
+        last_name: "Candidate",
+        full_name: "Alex Candidate",
+        email: "alex@example.com",
+        phone: "+491234567890",
+        source: "confirmed_user_profile",
+        approved: true,
+        provenance: "user_profile",
+      },
+      answers: [{
+        field_intent: "candidate.website",
+        label: "Website",
+        proposed_value: "https://alex.example",
+        source: "profile_verified",
+        sensitivity: "standard",
+        scope: "global",
+        confidence: 1,
+        requires_review: false,
+        provenance: "user_profile",
+        reasons: ["Confirmed by the candidate in Runr before launch."],
+      }],
+      experiences: [{
+        source_experience_id: "experience-1",
+        role_title: "Product Analyst",
+        company: "Example Co",
+        period: "2022 - Present",
+        location: "Berlin",
+        bullets: [{
+          bullet_id: "experience-1:description",
+          text: "Built a reporting workflow.",
+          approved_text: "Built a reporting workflow.",
+          source_experience_id: "experience-1",
+          provenance_id: "user_profile:experience-1",
+          approved: true,
+        }],
+        generation_provenance: { source: "career_memory", profile_id: "" },
+        provenance_confidence: "reduced",
+      }],
+      education: [{
+        institution: "Example University",
+        degree: "MSc",
+        period: "2020",
+        provenance: "user_profile",
+        confirmed: true,
+      }],
+      skills: [{ value: "SQL", provenance: "user_profile", confirmed: true }],
+      languages: [{ value: "English - C1", provenance: "user_profile", confirmed: true }],
+      warnings: [],
+    };
+
+    expect(isProfilePackagePayload(profilePackage)).toBe(true);
+    expect(isPanelResponse({ ok: true, profilePackage })).toBe(true);
+    expect(isProfilePackagePayload({ ...profilePackage, secret: "session-token" })).toBe(false);
+    expect(isProfilePackagePayload({
+      ...profilePackage,
+      answers: [{ ...profilePackage.answers[0], proposed_value: undefined }],
+    })).toBe(false);
+    expect(isPanelResponse({ ok: true, profilePackage: { schema_version: 1 } })).toBe(false);
   });
 });

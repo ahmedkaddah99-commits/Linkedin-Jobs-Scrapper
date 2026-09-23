@@ -619,8 +619,78 @@ export interface PackageExecutionMessage extends FixtureInspectionMessage {
   changeReasons?: string[];
 }
 
+export interface ProfilePackageCandidate {
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  source: "confirmed_career_memory" | "confirmed_user_profile";
+  approved: boolean;
+  provenance: string;
+}
+
+export interface ProfilePackageAnswer {
+  field_intent: string;
+  label: string;
+  proposed_value: string;
+  source: "profile_verified";
+  sensitivity: "standard" | "personal" | "legal" | "demographic";
+  scope: string;
+  confidence: number;
+  requires_review: boolean;
+  provenance: string;
+  reasons: string[];
+}
+
+export interface ProfilePackageExperienceBullet {
+  bullet_id: string;
+  text: string;
+  approved_text: string;
+  source_experience_id: string;
+  provenance_id: string;
+  approved: boolean;
+}
+
+export interface ProfilePackageExperience {
+  source_experience_id: string;
+  role_title: string;
+  company: string;
+  period: string;
+  location: string;
+  bullets: ProfilePackageExperienceBullet[];
+  generation_provenance: { source: "career_memory"; profile_id: string };
+  provenance_confidence: "full" | "reduced";
+}
+
+export interface ProfilePackageEducation {
+  institution: string;
+  degree: string;
+  period: string;
+  provenance: string;
+  confirmed: boolean;
+}
+
+export interface ProfilePackageFact {
+  value: string;
+  provenance: string;
+  confirmed: boolean;
+}
+
+export interface ProfilePackagePayload {
+  schema_version: 1;
+  candidate: ProfilePackageCandidate;
+  answers: ProfilePackageAnswer[];
+  experiences: ProfilePackageExperience[];
+  education: ProfilePackageEducation[];
+  skills: ProfilePackageFact[];
+  languages: ProfilePackageFact[];
+  warnings: string[];
+}
+
 export interface PanelResponse {
   ok: boolean;
+  profilePackage?: ProfilePackagePayload;
   state?: AssistedApplyTabState;
   connection?: ExtensionConnectionState;
   package?: ApplicationPackagePayload;
@@ -689,6 +759,81 @@ function isSupportedAts(value: unknown): value is SupportedAts | null {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isBoundedText(value: unknown, maxLength = 5_000): value is string {
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+function isBoundedTextArray(value: unknown, maxItems: number): value is string[] {
+  return Array.isArray(value) && value.length <= maxItems && value.every((item) => isBoundedText(item));
+}
+
+function isProfilePackageFact(value: unknown): value is ProfilePackageFact {
+  return isRecord(value) && isExactObject(value, ["value", "provenance", "confirmed"]) &&
+    isBoundedText(value.value) && isBoundedText(value.provenance) && typeof value.confirmed === "boolean";
+}
+
+function isProfilePackageAnswer(value: unknown): value is ProfilePackageAnswer {
+  return isRecord(value) && isExactObject(value, [
+    "field_intent", "label", "proposed_value", "source", "sensitivity", "scope",
+    "confidence", "requires_review", "provenance", "reasons",
+  ]) &&
+    isBoundedText(value.field_intent, 160) && isBoundedText(value.label, 300) &&
+    isBoundedText(value.proposed_value) && value.source === "profile_verified" &&
+    ["standard", "personal", "legal", "demographic"].includes(String(value.sensitivity)) &&
+    isBoundedText(value.scope, 80) && typeof value.confidence === "number" &&
+    Number.isFinite(value.confidence) && value.confidence >= 0 && value.confidence <= 1 &&
+    typeof value.requires_review === "boolean" && isBoundedText(value.provenance) &&
+    isBoundedTextArray(value.reasons, 20);
+}
+
+function isProfilePackageExperience(value: unknown): value is ProfilePackageExperience {
+  if (!isRecord(value) || !isExactObject(value, [
+    "source_experience_id", "role_title", "company", "period", "location", "bullets",
+    "generation_provenance", "provenance_confidence",
+  ]) || !isRecord(value.generation_provenance)) return false;
+  return isBoundedText(value.source_experience_id, 160) && isBoundedText(value.role_title, 300) &&
+    isBoundedText(value.company, 300) && isBoundedText(value.period, 160) &&
+    isBoundedText(value.location, 300) && Array.isArray(value.bullets) && value.bullets.length <= 100 &&
+    value.bullets.every((bullet: unknown) => isRecord(bullet) && isExactObject(bullet, [
+      "bullet_id", "text", "approved_text", "source_experience_id", "provenance_id", "approved",
+    ]) && isBoundedText(bullet.bullet_id, 160) && isBoundedText(bullet.text) &&
+      isBoundedText(bullet.approved_text) && isBoundedText(bullet.source_experience_id, 160) &&
+      isBoundedText(bullet.provenance_id, 300) && typeof bullet.approved === "boolean") &&
+    isExactObject(value.generation_provenance, ["source", "profile_id"]) &&
+    value.generation_provenance.source === "career_memory" &&
+    isBoundedText(value.generation_provenance.profile_id, 160) &&
+    (value.provenance_confidence === "full" || value.provenance_confidence === "reduced");
+}
+
+function isProfilePackageCandidate(value: unknown): value is ProfilePackageCandidate {
+  return isRecord(value) && isExactObject(value, [
+    "first_name", "last_name", "full_name", "email", "phone", "source", "approved", "provenance",
+  ]) && isBoundedText(value.first_name, 300) && isBoundedText(value.last_name, 300) &&
+    isBoundedText(value.full_name, 600) && isBoundedText(value.email, 320) &&
+    isBoundedText(value.phone, 80) &&
+    (value.source === "confirmed_career_memory" || value.source === "confirmed_user_profile") &&
+    typeof value.approved === "boolean" && value.approved && isBoundedText(value.provenance, 300);
+}
+
+function isProfilePackageEducation(value: unknown): value is ProfilePackageEducation {
+  return isRecord(value) && isExactObject(value, ["institution", "degree", "period", "provenance", "confirmed"]) &&
+    isBoundedText(value.institution, 300) && isBoundedText(value.degree, 300) &&
+    isBoundedText(value.period, 160) && isBoundedText(value.provenance, 300) &&
+    typeof value.confirmed === "boolean" && value.confirmed;
+}
+
+export function isProfilePackagePayload(value: unknown): value is ProfilePackagePayload {
+  return isRecord(value) && isExactObject(value, [
+    "schema_version", "candidate", "answers", "experiences", "education", "skills", "languages", "warnings",
+  ]) && value.schema_version === 1 && isProfilePackageCandidate(value.candidate) &&
+    Array.isArray(value.answers) && value.answers.length <= 500 && value.answers.every(isProfilePackageAnswer) &&
+    Array.isArray(value.experiences) && value.experiences.length <= 100 && value.experiences.every(isProfilePackageExperience) &&
+    Array.isArray(value.education) && value.education.length <= 100 && value.education.every(isProfilePackageEducation) &&
+    Array.isArray(value.skills) && value.skills.length <= 500 && value.skills.every(isProfilePackageFact) &&
+    Array.isArray(value.languages) && value.languages.length <= 100 && value.languages.every(isProfilePackageFact) &&
+    isBoundedTextArray(value.warnings, 20);
 }
 
 function isFixtureExecutionSummary(value: unknown): value is FixtureExecutionSummary {
@@ -1021,8 +1166,10 @@ export function isPanelResponse(value: unknown): value is PanelResponse {
           value.missingPortalPermissions.every((perm: unknown) => isRecord(perm) &&
             (perm.portal === "greenhouse" || perm.portal === "lever") &&
             typeof perm.origin === "string")));
+    const hasProfilePackage = "profilePackage" in value && isProfilePackagePayload(value.profilePackage);
     const nonErrorFields = [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload,
-      hasPendingConfirmation, hasTrackerConfirmation, hasPermissionGranted, hasMissingPermissions, hasPreparation]
+      hasPendingConfirmation, hasTrackerConfirmation, hasPermissionGranted, hasMissingPermissions, hasPreparation,
+      hasProfilePackage]
       .filter(Boolean).length;
     return nonErrorFields >= 1;
   }
