@@ -24,8 +24,10 @@ from scripts.master_linkedin_jobs_catalog import (
 )
 from scripts.benchmark_linkedin_pipeline import (
     BENCHMARK_PROFILES,
+    BENCHMARK_SOURCE,
     BENCHMARK_WINDOW_SECONDS,
     BenchmarkWorkload,
+    LINKEDIN_BENCHMARK_REVISION,
     benchmark_failure_count,
     evaluate_benchmark_contract,
     main as benchmark_main,
@@ -568,6 +570,170 @@ def test_offline_pipeline_benchmark_emits_common_contract(tmp_path: Path) -> Non
     assert contract["counts"]["published"] == 0
     assert contract["accepted_source"] is None
     assert contract["info_codes"] == ["accepted_throughput_threshold_unconfigured"]
+
+
+def test_t37_fixture_benchmark_passes_deterministically_against_t36() -> None:
+    """The LinkedIn fixture benchmark is deterministic against the T36 contract."""
+
+    results = [
+        run_benchmark(BenchmarkWorkload(companies=1, pages_per_company=1, jobs_per_page=1))
+        for _ in range(2)
+    ]
+    for result in results:
+        contract = result["benchmark_contract"]
+        assert contract["contract"] == "runr.producer-throughput.v1"
+        assert contract["contract_revision"] == "T36"
+        assert contract["benchmark_revision"] == LINKEDIN_BENCHMARK_REVISION == "T37"
+        assert contract["passed"] is True
+        assert contract["reason_codes"] == ["within_profile_ceilings"]
+        assert contract["input_profile"]["source"] == BENCHMARK_SOURCE == "linkedin"
+        assert contract["input_profile"]["workload"]["total_jobs"] == 1
+        assert contract["provider_limits"]["max_concurrency"] == (
+            BENCHMARK_PROFILES["ci-fixture"]["concurrency"]
+        )
+        assert contract["provider_limits"]["max_requests"] == (
+            BENCHMARK_PROFILES["ci-fixture"]["requests"]
+        )
+        assert contract["quality_yield"]["parsed_over_discovered"] == 1.0
+        assert contract["quality_yield"]["accepted_counts_sourced"] is False
+        assert contract["failure_classes"] == {"detail_failures": 0, "companies_partial": 0, "companies_failed": 0}
+    assert results[0]["benchmark_contract"]["counts"] == results[1]["benchmark_contract"]["counts"]
+    assert results[0]["benchmark_contract"]["input_profile"] == results[1]["benchmark_contract"]["input_profile"]
+    assert results[0]["benchmark_contract"]["quality_yield"] == results[1]["benchmark_contract"]["quality_yield"]
+    assert (
+        results[0]["benchmark_contract"]["optimization_follow_up"]
+        == results[1]["benchmark_contract"]["optimization_follow_up"]
+    )
+
+
+def test_t37_receipt_identifies_failure_classes_and_requires_follow_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingRunner:
+        def __init__(self, config, *, transport):
+            return None
+
+        def run(self) -> dict[str, object]:
+            return {
+                "run_outcome": "PARTIAL",
+                "requests": 3,
+                "detail_failures": 1,
+                "companies_partial": 1,
+                "detail_successes": 1,
+                "detail_cache_hits": 0,
+            }
+
+    monkeypatch.setattr(benchmark_pipeline, "CatalogRunner", FailingRunner)
+    result = run_benchmark(
+        BenchmarkWorkload(companies=1, pages_per_company=1, jobs_per_page=1)
+    )
+
+    contract = result["benchmark_contract"]
+    assert contract["failure_classes"] == {
+        "detail_failures": 1,
+        "companies_partial": 1,
+        "companies_failed": 0,
+    }
+    assert contract["counts"]["failed"] == 1
+    assert contract["passed"] is False
+    follow_up = contract["optimization_follow_up"]
+    assert follow_up["required"] is True
+    assert follow_up["waived"] is False
+    assert "errors_ceiling_exceeded" in follow_up["reason_codes"]
+    assert "accepted_source_not_declared" in follow_up["reason_codes"]
+    assert "accepted_throughput_threshold_unconfigured" in follow_up["reason_codes"]
+    assert "errors_ceiling_exceeded" in follow_up["reason_codes"]
+    assert "declare-accepted-source" in follow_up["actions"]
+
+
+def test_missed_threshold_creates_optimization_follow_up_not_waived() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={name: 0 for name in ("discovered", "parsed", "complete", "accepted", "published", "duplicate", "failed")},
+        elapsed_seconds=1.0,
+        cpu_seconds=1.0,
+        rss_bytes=None,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["passed"] is False
+    follow_up = result["optimization_follow_up"]
+    assert follow_up["required"] is True
+    assert follow_up["waived"] is False
+    assert "rss_unavailable" in follow_up["reason_codes"]
+    assert "configure-accepted-throughput-threshold" in follow_up["actions"]
+
+
+def test_passing_sourced_thresholded_contract_closes_follow_up() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 10,
+            "parsed": 10,
+            "complete": 8,
+            "accepted": 8,
+            "published": 8,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=10,
+        concurrency=2,
+        timeout_seconds=30,
+        accepted_source="approved-offline-source",
+        approval_status="approved",
+        minimum_accepted_per_window=300,
+    )
+
+    assert result["passed"] is True
+    assert result["optimization_follow_up"] == {
+        "required": False,
+        "reason_codes": [],
+        "actions": [],
+        "waived": False,
+    }
+    assert result["quality_yield"] == {
+        "parsed_over_discovered": 1.0,
+        "complete_over_discovered": 0.8,
+        "accepted_over_complete": 1.0,
+        "published_over_accepted": 1.0,
+        "accepted_counts_sourced": True,
+    }
+
+
+def test_unsourced_accepted_yield_is_not_reported() -> None:
+    result = evaluate_benchmark_contract(
+        profile="ci-fixture",
+        counts={
+            "discovered": 10,
+            "parsed": 10,
+            "complete": 8,
+            "accepted": 7,
+            "published": 6,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=64 * 1024 * 1024,
+        browser_requests=0,
+        requests=10,
+        concurrency=2,
+        timeout_seconds=30,
+    )
+
+    assert result["quality_yield"]["accepted_counts_sourced"] is False
+    assert result["quality_yield"]["accepted_over_complete"] is None
+    assert result["quality_yield"]["published_over_accepted"] is None
+    follow_up = result["optimization_follow_up"]
+    assert follow_up["required"] is True
+    assert "accepted_source_not_declared" in follow_up["reason_codes"]
 
 
 def _duplicate_card_page(job_id: str) -> str:

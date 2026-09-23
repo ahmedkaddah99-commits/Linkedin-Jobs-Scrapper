@@ -429,3 +429,88 @@ def test_reusable_browser_serializes_concurrent_host_navigations(monkeypatch) ->
     assert all(result["status"] == "completed" for result in results)
     assert _SharedFakePage.peak == 1
     assert session.launch_count == 1
+
+
+def test_per_host_request_budget_enforces_and_observes() -> None:
+    from scripts.run_manifested_employer import (
+        EmployerPerHostBudgetExceeded,
+        PerHostRequestBudget,
+    )
+
+    budget = PerHostRequestBudget(2)
+    assert budget.admit("https://one.example/first") == "one.example"
+    assert budget.admit("https://one.example/second") == "one.example"
+    try:
+        budget.admit("https://one.example/third")
+        raise AssertionError("per-host ceiling should prevent the third same-host request")
+    except EmployerPerHostBudgetExceeded as exc:
+        assert exc.host == "one.example"
+        assert exc.max_requests_per_host == 2
+    assert budget.admit("https://two.example/first") == "two.example"
+    assert budget.snapshot() == {"one.example": 2, "two.example": 1}
+
+    observer = PerHostRequestBudget(1, enforce=False)
+    for _ in range(3):
+        observer.admit("https://busy.example/jobs")
+    assert observer.snapshot() == {"busy.example": 3}
+    assert observer.exceeded_hosts() == ["busy.example"]
+
+
+def test_employer_fixture_benchmark_distinguishes_lifecycle_stages(tmp_path: Path) -> None:
+    import json as json_module
+
+    from scripts.run_manifested_employer import (
+        BENCHMARK_STAGE_NAMES,
+        run_employer_fixture_benchmark,
+    )
+
+    receipt = run_employer_fixture_benchmark(
+        output_dir=tmp_path,
+        profile="local-dry-run",
+        accepted_source="employer-durable-state",
+        approval_status="approved",
+    )
+
+    assert list(receipt["stages"].keys()) == list(BENCHMARK_STAGE_NAMES)
+    assert receipt["benchmark_revision"] == "T38"
+    assert receipt["mode"] == "fixture_benchmark"
+    assert receipt["window_seconds"] == 300
+    assert receipt["elapsed_seconds"] <= receipt["window_seconds"]
+    counts = receipt["counts"]
+    assert counts["discovered"] >= counts["parsed"] >= counts["complete"]
+    assert counts["complete"] >= counts["accepted"] >= counts["published"]
+    assert counts["duplicate"] >= 1
+    assert counts["accepted"] > 0
+    assert counts["failed"] == 0
+    attribution = receipt["low_yield_attribution"]
+    assert attribution["attributed"] is True
+    assert attribution["classes"]["missing_url"] >= 1
+    assert attribution["classes"]["data_quality"] >= 2
+    assert "discovery:no_career_target_found" in attribution["reason_codes"]["missing_url"]
+    evaluation = receipt["contract_evaluation"]
+    assert evaluation["status"] == "PASS"
+    assert evaluation["window_seconds"] == 300
+    assert evaluation["throughput_per_300_seconds"]["accepted"] > 0
+    assert receipt["per_host_limits"] == {
+        "max_requests_per_host": 25,
+        "enforced": True,
+    }
+    assert receipt["per_host_observed"]["acme-full.example"] >= 1
+    assert receipt["per_host_exceeded"] == []
+    assert json_module.loads(Path(receipt["receipt_path"]).read_text(encoding="utf-8"))["counts"] == counts
+
+
+def test_employer_fixture_benchmark_receipt_fails_without_declared_source(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import run_employer_fixture_benchmark
+
+    receipt = run_employer_fixture_benchmark(
+        output_dir=tmp_path,
+        profile="local-dry-run",
+    )
+
+    assert receipt["counts"]["accepted"] == 0
+    assert receipt["counts"]["published"] == 0
+    evaluation = receipt["contract_evaluation"]
+    assert evaluation["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in evaluation["reason_codes"]
+    assert evaluation["counts_zeroed_by_source_guard"] == ["accepted", "published"]
