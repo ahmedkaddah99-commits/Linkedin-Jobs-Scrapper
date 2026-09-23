@@ -344,3 +344,29 @@ completeness gate is blocking before a publication head advances. The audit
 report includes `required_field_coverage` split into `job` and `company` groups
 and `policy_impact.trusted_linkedin_job_detail_url`, including additional
 eligible records by source plus precision/recall proxy notes.
+
+## 14. Frozen policy experiments and rollback
+
+The audit supports provider-free counterfactual comparisons over one frozen
+snapshot:
+
+```
+.venv\Scripts\python.exe scripts\audit_job_publication_completeness.py `
+  --input data/audit/master_jobs_sample.jsonl `
+  --output data/audit/policy_experiments `
+  --experiment description_threshold_60 `
+  --experiment freshness_window_180
+```
+
+Each experiment reports the candidate publishable count, incremental count,
+source impact, reason-code metrics, missing-field distribution, and a bounded
+potential false-positive sample. The sample is a review proxy and exact
+precision/recall still requires labelled truth. Experiments never call a live
+provider and never mutate the input snapshot.
+
+The scheduled publisher keeps `publication_policy_v2` as its default. An
+alternative policy must be explicitly owner-approved through
+`RUNR_APPROVED_PUBLICATION_POLICIES` or selected as a deliberate
+`--rollback-policy-version`; changing policy records the selected version in
+the target, cycle, and publication receipt. Rollback changes the policy for a
+new publication cycle and does not delete source rows or prior publications.
