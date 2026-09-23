@@ -46,6 +46,9 @@ from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRMED", "SATURATED_RECOVERED"})
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
 RUNTIME_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
+REGISTERED_PUBLICATION_POLICY_VERSIONS = frozenset({"publication_policy_v1", "publication_policy_v2"})
+PUBLICATION_POLICY_VERSION_ENV = "RUNR_PUBLICATION_POLICY_VERSION"
+APPROVED_PUBLICATION_POLICIES_ENV = "RUNR_APPROVED_PUBLICATION_POLICIES"
 
 TELEMETRY_SCHEMA_VERSION = "runr.producer.telemetry.v1"
 TELEMETRY_SOURCE_KEYS = frozenset(
@@ -58,6 +61,37 @@ TELEMETRY_SOURCE_KEYS = frozenset(
     }
 )
 DEFAULT_STALE_CHECKPOINT_SECONDS = 86400
+
+
+def resolve_runtime_publication_policy(
+    requested_version: str | None = None,
+    *,
+    approved_versions: Iterable[str] = (),
+    rollback_to: str | None = None,
+) -> str:
+    """Resolve an explicit policy flag without implicitly relaxing publication."""
+
+    if requested_version and rollback_to:
+        raise ValueError("Choose a policy version or rollback target, not both.")
+    approved = {
+        item.strip()
+        for item in os.getenv(APPROVED_PUBLICATION_POLICIES_ENV, "").split(",")
+        if item.strip()
+    }
+    approved.update(str(item).strip() for item in approved_versions if str(item).strip())
+    requested = str(
+        rollback_to
+        or requested_version
+        or os.getenv(PUBLICATION_POLICY_VERSION_ENV, "")
+        or RUNTIME_PUBLICATION_POLICY_VERSION
+    ).strip()
+    if requested not in REGISTERED_PUBLICATION_POLICY_VERSIONS:
+        raise ValueError(f"Unknown publication policy: {requested}")
+    if requested != RUNTIME_PUBLICATION_POLICY_VERSION and requested not in approved and not rollback_to:
+        raise ValueError(
+            f"Publication policy {requested} requires owner approval or an explicit rollback target."
+        )
+    return requested
 
 
 def _resource_peaks() -> dict[str, float | int | None]:
@@ -526,7 +560,12 @@ def _iter_employer_groups(
     yield from grouped.items()
 
 
-def _target(company: Mapping[str, object], source: str) -> dict[str, object]:
+def _target(
+    company: Mapping[str, object],
+    source: str,
+    *,
+    policy_version: str = "publication_policy_v1",
+) -> dict[str, object]:
     company_id = _text(company.get("canonical_company_id"))
     company_name = _text(company.get("canonical_company_name") or company.get("company_name")) or company_id
     source_label = "linkedin" if source == SOURCE_LINKEDIN else "employer"
@@ -544,7 +583,7 @@ def _target(company: Mapping[str, object], source: str) -> dict[str, object]:
         "connector": f"producer_{source_label}",
         "provider": source_label,
         "source_token": company_id,
-        "policy_version": "publication_policy_v1",
+        "policy_version": policy_version,
         "maturity_state": "proven",
         "enabled": True,
         "publication_enabled": True,
@@ -858,9 +897,15 @@ def run_delivery(
     skip_status_only: bool = False,
     identity_crosswalk: Mapping[str, str] | None = None,
     identity_crosswalk_document: Mapping[str, object] | None = None,
+    publication_policy: str | None = None,
+    rollback_policy: str | None = None,
 ) -> dict[str, object]:
     """Incrementally publish source changes without replaying whole catalogs."""
 
+    policy_version = resolve_runtime_publication_policy(
+        publication_policy,
+        rollback_to=rollback_policy,
+    )
     manifest = load_manifest(manifest_path)
     crosswalk = dict(identity_crosswalk or {})
     linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only, crosswalk=crosswalk)
@@ -963,6 +1008,7 @@ def run_delivery(
             "manifest_id": _text(manifest.get("manifest_id")),
             "manifest_hash": _text(manifest.get("manifest_hash")),
             "source_version": source_version,
+            "policy_version": policy_version,
             "sources": source_metrics,
             "identity_crosswalk": crosswalk_result,
             "telemetry": telemetry,
@@ -977,7 +1023,11 @@ def run_delivery(
         SOURCE_EMPLOYER: employer_companies,
     }
     targets = [
-        _target(companies_by_source[source][company_id], source)
+        _target(
+            companies_by_source[source][company_id],
+            source,
+            policy_version=policy_version,
+        )
         for source, company_ids_for_source in changed_by_source.items()
         for company_id in company_ids_for_source
         if company_id in companies_by_source[source]
@@ -988,6 +1038,7 @@ def run_delivery(
             "manifest_id": _text(manifest.get("manifest_id")),
             "manifest_hash": _text(manifest.get("manifest_hash")),
             "source_version": source_version,
+            "policy_version": policy_version,
             "sources": source_metrics,
             "identity_crosswalk": crosswalk_result,
             "telemetry": telemetry,
@@ -1003,6 +1054,7 @@ def run_delivery(
             _text(linkedin_checkpoint.get("source_watermark")),
             _text(employer_checkpoint.get("source_watermark")),
             source_version,
+            policy_version,
         ]
     )
     cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
@@ -1026,6 +1078,7 @@ def run_delivery(
         "manifest_id": _text(manifest.get("manifest_id")),
         "manifest_hash": _text(manifest.get("manifest_hash")),
         "source_version": source_version,
+        "policy_version": policy_version,
         "sources": source_metrics,
         "unresolved_observations": 0,
         "identity_crosswalk": crosswalk_result,
@@ -1038,7 +1091,7 @@ def run_delivery(
     def deliver_company(source: str, company_id: str) -> dict[str, object]:
         nonlocal partial
         company = companies_by_source[source][company_id]
-        target_id = _text(_target(company, source)["target_id"])
+        target_id = _text(_target(company, source, policy_version=policy_version)["target_id"])
         task_id = _text(cycle_task_ids.get(target_id)) or f"producer_task:{target_id}"
         raw_rows = (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, [])
         if source == SOURCE_LINKEDIN:
@@ -1121,7 +1174,7 @@ def run_delivery(
             origin="scheduled",
             created_by="producer_bridge",
             scheduled_run_id=cycle_id,
-            policy_version=RUNTIME_PUBLICATION_POLICY_VERSION,
+            policy_version=policy_version,
         )
         store.complete_cycle(
             cycle_id,
@@ -1165,6 +1218,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--identity-crosswalk", type=Path, help="optional reviewed company_identity_crosswalk.json")
+    parser.add_argument(
+        "--publication-policy-version",
+        dest="publication_policy_version",
+        help="owner-approved policy version; defaults to the blocking runtime policy",
+    )
+    parser.add_argument(
+        "--rollback-policy-version",
+        dest="rollback_policy_version",
+        help="explicitly restore a registered prior policy without deleting data",
+    )
     return parser
 
 
@@ -1193,6 +1256,8 @@ def main(argv: list[str] | None = None) -> int:
         skip_status_only=bool(args.skip_status_only),
         identity_crosswalk=identity_crosswalk,
         identity_crosswalk_document=identity_crosswalk_document,
+        publication_policy=args.publication_policy_version,
+        rollback_policy=args.rollback_policy_version,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0

@@ -6,9 +6,25 @@ from backend.application.source_eligibility_manifest import (
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState
 from scripts.master_linkedin_jobs_catalog import CATALOG_FIELDS, StateStore
-from scripts.publish_producer_states import SOURCE_EMPLOYER, SOURCE_LINKEDIN, run_delivery
+from scripts.publish_producer_states import (
+    RUNTIME_PUBLICATION_POLICY_VERSION,
+    SOURCE_EMPLOYER,
+    SOURCE_LINKEDIN,
+    _target,
+    run_delivery,
+)
 
 import pytest
+
+
+def test_producer_targets_record_the_selected_policy_version():
+    target = _target(
+        {"canonical_company_id": "company-1", "canonical_company_name": "Company"},
+        SOURCE_EMPLOYER,
+        policy_version=RUNTIME_PUBLICATION_POLICY_VERSION,
+    )
+
+    assert target["policy_version"] == RUNTIME_PUBLICATION_POLICY_VERSION
 
 
 def _manifest(tmp_path):
