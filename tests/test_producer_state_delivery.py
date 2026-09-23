@@ -6,7 +6,12 @@ from backend.application.source_eligibility_manifest import (
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState
 from scripts.master_linkedin_jobs_catalog import CATALOG_FIELDS, StateStore
-from scripts.publish_producer_states import SOURCE_EMPLOYER, SOURCE_LINKEDIN, run_delivery
+from scripts.publish_producer_states import (
+    BackfillControls,
+    SOURCE_EMPLOYER,
+    SOURCE_LINKEDIN,
+    run_delivery,
+)
 
 import pytest
 
@@ -159,6 +164,101 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
     assert replay["cycle_id"] == first_cycle
     assert replay["publication_id"] == result["publication_id"]
 
+
+def test_dry_run_reports_eligibility_without_creating_catalog_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
+
+    result = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=tmp_path / "backend",
+        source_version="fixture-release",
+        controls=BackfillControls(batch_size=1, dry_run=True),
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["dry_run"] is True
+    assert result["limits"] == {
+        "batch_size": 1,
+        "max_companies": None,
+        "rate_per_second": 0.0,
+        "timeout_seconds": None,
+        "max_failures": 0,
+    }
+    assert result["eligibility"]["eligible"] + result["eligibility"]["ineligible"] > 0
+    assert result["receipt"]["dry_run"] is True
+    assert not (tmp_path / "backend" / "backend.sqlite3").exists()
+
+
+def test_backfill_controls_reject_unbounded_or_negative_limits():
+    with pytest.raises(ValueError, match="batch_size"):
+        BackfillControls(batch_size=0)
+    with pytest.raises(ValueError, match="rate_per_second"):
+        BackfillControls(batch_size=1, rate_per_second=-1)
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        BackfillControls(batch_size=1, timeout_seconds=0)
+    with pytest.raises(ValueError, match="max_failures"):
+        BackfillControls(batch_size=1, max_failures=-1)
+
+
+def test_failure_threshold_stops_without_advancing_checkpoint_and_resume_is_safe(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
+
+    import scripts.publish_producer_states as publisher
+
+    original_deliver_group = publisher._deliver_group
+
+    def fail_once(*args, **kwargs):
+        raise RuntimeError("transient canary failure")
+
+    monkeypatch.setattr(publisher, "_deliver_group", fail_once)
+    stopped = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=tmp_path / "backend",
+        source_version="fixture-release",
+        controls=BackfillControls(batch_size=1, max_failures=1),
+    )
+    assert stopped["status"] == "stopped"
+    assert stopped["failures"] == 1
+    assert stopped["stop_reason"] == "max_failures"
+
+    monkeypatch.setattr(publisher, "_deliver_group", original_deliver_group)
+    resumed = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=tmp_path / "backend",
+        source_version="fixture-release",
+        controls=BackfillControls(batch_size=1, max_failures=1),
+    )
+    assert resumed["status"] in {"completed", "degraded"}
+    assert resumed["receipt"]["limits"]["batch_size"] == 1
+
+    store = SqliteAcquisitionStore(tmp_path / "backend" / "backend.sqlite3")
+    try:
+        with store._connect() as connection:
+            duplicated_pairs = connection.execute(
+                "SELECT target_id, external_job_id, COUNT(*) AS occurrences "
+                "FROM job_source_observations GROUP BY target_id, external_job_id "
+                "HAVING occurrences > 1"
+            ).fetchall()
+        assert duplicated_pairs == []
+    finally:
+        if hasattr(store, "close"):
+            store.close()
 
 def test_crash_before_checkpoint_save_reruns_the_same_window_idempotently(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNR_ENV", "test")

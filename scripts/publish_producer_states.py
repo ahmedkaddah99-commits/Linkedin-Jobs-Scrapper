@@ -15,8 +15,10 @@ import os
 import sqlite3
 import sys
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic, sleep
 from urllib.parse import urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +29,7 @@ from backend.acquisition.producer_adapters import (
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
     UNKNOWN,
+    _observation_to_ingest_job,
     adapt_employer_job,
     adapt_linkedin_job,
     empty_observation_batch,
@@ -40,6 +43,7 @@ from backend.application.source_eligibility_manifest import (
 from backend.application.company_identity_canonicalization import (
     resolve_company_id as resolve_company_identity,
 )
+from backend.acquisition.job_publication_completeness import validate_job_for_publication
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
@@ -58,6 +62,164 @@ TELEMETRY_SOURCE_KEYS = frozenset(
     }
 )
 DEFAULT_STALE_CHECKPOINT_SECONDS = 86400
+
+
+@dataclass(frozen=True)
+class BackfillControls:
+    """Operator limits for one bounded producer-state backfill attempt."""
+
+    batch_size: int = 250
+    max_companies: int | None = None
+    rate_per_second: float = 0.0
+    timeout_seconds: float | None = None
+    max_failures: int = 0
+    dry_run: bool = False
+
+    def __post_init__(self) -> None:
+        if not 1 <= int(self.batch_size) <= 1000:
+            raise ValueError("batch_size must be between 1 and 1000")
+        if self.max_companies is not None and int(self.max_companies) < 1:
+            raise ValueError("max_companies must be positive")
+        if float(self.rate_per_second) < 0:
+            raise ValueError("rate_per_second must be non-negative")
+        if self.timeout_seconds is not None and float(self.timeout_seconds) <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if int(self.max_failures) < 0:
+            raise ValueError("max_failures must be non-negative")
+
+    @property
+    def limits(self) -> dict[str, int | float | None]:
+        return {
+            "batch_size": int(self.batch_size),
+            "max_companies": int(self.max_companies) if self.max_companies is not None else None,
+            "rate_per_second": float(self.rate_per_second),
+            "timeout_seconds": float(self.timeout_seconds) if self.timeout_seconds is not None else None,
+            "max_failures": int(self.max_failures),
+        }
+
+
+def _default_backfill_controls(*, dry_run: bool = False) -> BackfillControls:
+    def env_int(name: str, default: int) -> int:
+        raw = os.getenv(name, str(default)).strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    def env_float(name: str, default: float | None) -> float | None:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    return BackfillControls(
+        batch_size=env_int("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", 250),
+        rate_per_second=env_float("RUNR_PUBLISHER_RATE_PER_SECOND", 0.0) or 0.0,
+        timeout_seconds=env_float("RUNR_PUBLISHER_TIMEOUT_SECONDS", None),
+        max_failures=env_int("RUNR_PUBLISHER_MAX_FAILURES", 0),
+        dry_run=dry_run,
+    )
+
+
+def _receipt(
+    controls: BackfillControls,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    status: str,
+    failures: int = 0,
+    stop_reason: str = "",
+    eligibility: Mapping[str, int] | None = None,
+) -> dict[str, object]:
+    finished_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    result: dict[str, object] = {
+        "schema_version": "runr.producer.backfill-receipt.v1",
+        "dry_run": bool(controls.dry_run),
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": round(max(0.0, monotonic() - started_monotonic), 3),
+        "limits": controls.limits,
+        "failures": int(failures),
+        "stop_reason": stop_reason,
+        "resume": True,
+    }
+    if eligibility is not None:
+        result["eligibility"] = {
+            "eligible": int(eligibility.get("eligible") or 0),
+            "ineligible": int(eligibility.get("ineligible") or 0),
+        }
+    return result
+
+
+def _with_receipt(
+    result: dict[str, object],
+    controls: BackfillControls,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    failures: int = 0,
+    stop_reason: str = "",
+    eligibility: Mapping[str, int] | None = None,
+) -> dict[str, object]:
+    result["limits"] = controls.limits
+    result["failures"] = int(failures)
+    if stop_reason:
+        result["stop_reason"] = stop_reason
+    result["receipt"] = _receipt(
+        controls,
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        status=str(result.get("status") or "unknown"),
+        failures=failures,
+        stop_reason=stop_reason,
+        eligibility=eligibility,
+    )
+    return result
+
+
+def _preview_eligibility(
+    source_specs: Iterable[tuple[str, Mapping[str, Mapping[str, object]], Mapping[str, list[Mapping[str, object]]]]],
+    *,
+    cycle_id: str,
+    max_companies: int | None = None,
+) -> dict[str, int]:
+    """Classify source rows without opening or mutating the acquisition store."""
+
+    company_ids = {
+        company_id
+        for _source, companies, _groups in source_specs
+        for company_id in companies
+    }
+    eligible = 0
+    ineligible = 0
+    companies_seen = 0
+    for source, companies, groups in source_specs:
+        for company_id in companies:
+            if max_companies is not None and companies_seen >= max_companies:
+                return {"eligible": eligible, "ineligible": ineligible}
+            companies_seen += 1
+            for row in groups.get(company_id, []):
+                observation = (
+                    adapt_linkedin_job(row, cycle_id=cycle_id, scan_id=_text(row.get("company_scan_id")))
+                    if source == SOURCE_LINKEDIN
+                    else adapt_employer_job(row, cycle_id=cycle_id)
+                )
+                candidate = dict(observation.normalized_mapping)
+                candidate.update(_observation_to_ingest_job(observation))
+                result = validate_job_for_publication(
+                    candidate,
+                    company_registry=company_ids,
+                    require_application_destination=True,
+                )
+                if result.publishable:
+                    eligible += 1
+                else:
+                    ineligible += 1
+    return {"eligible": eligible, "ineligible": ineligible}
 
 
 def _resource_peaks() -> dict[str, float | int | None]:
@@ -858,9 +1020,13 @@ def run_delivery(
     skip_status_only: bool = False,
     identity_crosswalk: Mapping[str, str] | None = None,
     identity_crosswalk_document: Mapping[str, object] | None = None,
+    controls: BackfillControls | None = None,
 ) -> dict[str, object]:
     """Incrementally publish source changes without replaying whole catalogs."""
 
+    controls = controls or _default_backfill_controls()
+    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    started_monotonic = monotonic()
     manifest = load_manifest(manifest_path)
     crosswalk = dict(identity_crosswalk or {})
     linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only, crosswalk=crosswalk)
@@ -870,10 +1036,12 @@ def run_delivery(
         linkedin_companies = {key: value for key, value in linkedin_companies.items() if key in requested}
         employer_companies = {key: value for key, value in employer_companies.items() if key in requested}
 
-    store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
-    _ensure_publisher_checkpoint_table(store)
+    store: SqliteAcquisitionStore | None = None
+    if not controls.dry_run:
+        store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+        _ensure_publisher_checkpoint_table(store)
     crosswalk_result: dict[str, object] = {}
-    if identity_crosswalk_document:
+    if identity_crosswalk_document and store is not None:
         crosswalk_report = identity_crosswalk_document.get("report")
         crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
         crosswalk_result = store.apply_company_identity_crosswalk(
@@ -893,10 +1061,17 @@ def run_delivery(
         for source_company_id in (company.get("linkedin_company_ids") or ())
         if _text(source_company_id)
     }
-    linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN)
-    employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER)
+    empty_checkpoint = {
+        "source_rowid": 0,
+        "source_watermark": "",
+        "bootstrap_complete": False,
+        "last_cycle_id": "",
+        "last_publication_id": "",
+    }
+    linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN) if store is not None else dict(empty_checkpoint)
+    employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER) if store is not None else dict(empty_checkpoint)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    batch_size = max(25, min(1000, int(os.getenv("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", "250"))))
+    batch_size = controls.batch_size
     telemetry = _publisher_telemetry(
         {SOURCE_LINKEDIN: linkedin_checkpoint, SOURCE_EMPLOYER: employer_checkpoint}, now
     )
@@ -955,23 +1130,65 @@ def run_delivery(
             "bootstrap_complete": bool(next_employer_checkpoint.get("bootstrap_complete")),
         },
     }
+    source_specs = (
+        (SOURCE_LINKEDIN, linkedin_companies, linkedin_groups),
+        (SOURCE_EMPLOYER, employer_companies, employer_groups),
+    )
+    if controls.dry_run:
+        eligibility = _preview_eligibility(
+            source_specs,
+            cycle_id="dry-run",
+            max_companies=controls.max_companies,
+        )
+        return _with_receipt(
+            {
+                "status": "dry_run",
+                "dry_run": True,
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "sources": source_metrics,
+                "identity_crosswalk": {},
+                "telemetry": telemetry,
+                "eligibility": eligibility,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            eligibility=eligibility,
+        )
     if not linkedin_changed and not employer_changed:
-        return {
-            "status": "no_changes",
-            "cycle_id": _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id")),
-            "publication_id": _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id")),
-            "manifest_id": _text(manifest.get("manifest_id")),
-            "manifest_hash": _text(manifest.get("manifest_hash")),
-            "source_version": source_version,
-            "sources": source_metrics,
-            "identity_crosswalk": crosswalk_result,
-            "telemetry": telemetry,
-        }
+        return _with_receipt(
+            {
+                "status": "no_changes",
+                "cycle_id": _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id")),
+                "publication_id": _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id")),
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "sources": source_metrics,
+                "identity_crosswalk": crosswalk_result,
+                "telemetry": telemetry,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
 
     changed_by_source = {
         SOURCE_LINKEDIN: linkedin_changed_ids,
         SOURCE_EMPLOYER: employer_changed_ids,
     }
+    deferred_companies = False
+    if controls.max_companies is not None:
+        remaining = controls.max_companies
+        bounded_changed_by_source: dict[str, set[str]] = {}
+        for source, company_ids_for_source in changed_by_source.items():
+            selected = set(sorted(company_ids_for_source)[:remaining])
+            bounded_changed_by_source[source] = selected
+            deferred_companies = deferred_companies or len(selected) < len(company_ids_for_source)
+            remaining -= len(selected)
+        changed_by_source = bounded_changed_by_source
     companies_by_source = {
         SOURCE_LINKEDIN: linkedin_companies,
         SOURCE_EMPLOYER: employer_companies,
@@ -983,15 +1200,21 @@ def run_delivery(
         if company_id in companies_by_source[source]
     ]
     if not targets:
-        return {
-            "status": "no_changes",
-            "manifest_id": _text(manifest.get("manifest_id")),
-            "manifest_hash": _text(manifest.get("manifest_hash")),
-            "source_version": source_version,
-            "sources": source_metrics,
-            "identity_crosswalk": crosswalk_result,
-            "telemetry": telemetry,
-        }
+        return _with_receipt(
+            {
+                "status": "no_changes",
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "sources": source_metrics,
+                "identity_crosswalk": crosswalk_result,
+                "telemetry": telemetry,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
+    assert store is not None
     store.ensure_targets(targets)
     marker = "|".join(
         [
@@ -1015,7 +1238,12 @@ def run_delivery(
         scope_key="producer_state",
     )
     if cycle is None:
-        return {"status": "already_running", "cycle_key": cycle_key, "telemetry": telemetry}
+        return _with_receipt(
+            {"status": "already_running", "cycle_key": cycle_key, "telemetry": telemetry},
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
     cycle_id = _text(cycle.get("cycle_id"))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)
@@ -1034,6 +1262,11 @@ def run_delivery(
     }
     partial = False
     valid_target_ids: list[str] = []
+    failures = 0
+    companies_attempted = 0
+    stop_reason = ""
+    stop_requested = False
+    next_allowed_delivery = 0.0
 
     def deliver_company(source: str, company_id: str) -> dict[str, object]:
         nonlocal partial
@@ -1108,13 +1341,69 @@ def run_delivery(
             for company_id in sorted(changed_ids):
                 if skip_status_only and not (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id):
                     continue
-                delivered = deliver_company(source, company_id)
+                if controls.max_companies is not None and companies_attempted >= controls.max_companies:
+                    stop_reason = "max_companies"
+                    stop_requested = True
+                    break
+                if controls.timeout_seconds is not None and monotonic() - started_monotonic >= controls.timeout_seconds:
+                    stop_reason = "timeout"
+                    stop_requested = True
+                    break
+                if controls.rate_per_second:
+                    wait_seconds = next_allowed_delivery - monotonic()
+                    if wait_seconds > 0:
+                        sleep(wait_seconds)
+                    next_allowed_delivery = monotonic() + (1.0 / controls.rate_per_second)
+                companies_attempted += 1
+                try:
+                    delivered = deliver_company(source, company_id)
+                except Exception as exc:
+                    failures += 1
+                    partial = True
+                    source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+                    source_metrics[source]["last_error"] = type(exc).__name__.casefold()
+                    if controls.max_failures == 0 or failures >= controls.max_failures:
+                        stop_reason = "max_failures"
+                        stop_requested = True
+                        break
+                    continue
                 source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
                 source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
                 if bool(delivered["failed"]):
                     source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
                 if not bool(delivered["closure_safe"]):
                     source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+            if stop_requested:
+                break
+        if not stop_requested and deferred_companies:
+            stop_reason = "max_companies"
+            stop_requested = True
+        if not stop_requested and failures:
+            stop_reason = "failures_observed"
+            stop_requested = True
+        if stop_requested:
+            store.complete_cycle(
+                cycle_id,
+                status="recovery_required",
+                error_code=stop_reason,
+                error_message="Backfill stopped before checkpoint advancement; resume is safe after operator review.",
+            )
+            metrics.update(
+                {
+                    "status": "stopped",
+                    "failures": failures,
+                    "stop_reason": stop_reason,
+                    "companies_attempted": companies_attempted,
+                }
+            )
+            return _with_receipt(
+                metrics,
+                controls,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                failures=failures,
+                stop_reason=stop_reason,
+            )
         publication_id = store.publish_valid_snapshot(
             cycle_id=cycle_id,
             valid_target_ids=valid_target_ids,
@@ -1139,7 +1428,13 @@ def run_delivery(
                 "report": store.get_cycle_report(cycle_id),
             }
         )
-        return metrics
+        return _with_receipt(
+            metrics,
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            failures=failures,
+        )
     except BaseException as exc:
         store.complete_cycle(
             cycle_id,
@@ -1165,11 +1460,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--identity-crosswalk", type=Path, help="optional reviewed company_identity_crosswalk.json")
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--max-companies", type=int)
+    parser.add_argument("--rate-per-second", type=float)
+    parser.add_argument("--timeout-seconds", type=float)
+    parser.add_argument("--max-failures", type=int)
+    parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    defaults = _default_backfill_controls(dry_run=bool(args.dry_run))
+    controls = BackfillControls(
+        batch_size=args.batch_size if args.batch_size is not None else defaults.batch_size,
+        max_companies=args.max_companies,
+        rate_per_second=args.rate_per_second if args.rate_per_second is not None else defaults.rate_per_second,
+        timeout_seconds=args.timeout_seconds if args.timeout_seconds is not None else defaults.timeout_seconds,
+        max_failures=args.max_failures if args.max_failures is not None else defaults.max_failures,
+        dry_run=bool(args.dry_run),
+    )
     identity_crosswalk = {}
     identity_crosswalk_document: Mapping[str, object] | None = None
     if args.identity_crosswalk:
@@ -1193,6 +1503,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_status_only=bool(args.skip_status_only),
         identity_crosswalk=identity_crosswalk,
         identity_crosswalk_document=identity_crosswalk_document,
+        controls=controls,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0

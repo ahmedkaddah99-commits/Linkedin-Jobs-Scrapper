@@ -2665,7 +2665,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         created_by: str = "system",
         scheduled_run_id: str = "",
         policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
-    ) -> str:
+        batch_size: int = 1000,
+        dry_run: bool = False,
+    ) -> str | dict[str, Any]:
         """Publish the currently stored active catalog after a fresh gate check.
 
         This is an explicit recovery path for a catalog whose source delivery
@@ -2746,7 +2748,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             snapshot: list[dict[str, Any]] = []
             candidate_count = 0
             rejected_count = 0
-            page_size = 1000
+            page_size = max(1, min(1000, int(batch_size)))
             offset = 0
             while True:
                 candidate_rows = connection.execute(
@@ -2761,16 +2763,27 @@ class SqliteAcquisitionStore(_SqliteStore):
                     policy=policy,
                 )
                 snapshot.extend(page_snapshot)
-                self._persist_publication_rejections(
-                    connection,
-                    cycle_id=cycle_id,
-                    rejected_rows=rejected_rows,
-                )
+                if not dry_run:
+                    self._persist_publication_rejections(
+                        connection,
+                        cycle_id=cycle_id,
+                        rejected_rows=rejected_rows,
+                    )
                 candidate_count += len(candidate_rows)
                 rejected_count += len(rejected_rows)
                 offset += len(candidate_rows)
                 if len(candidate_rows) < page_size:
                     break
+            if dry_run:
+                return {
+                    "status": "dry_run",
+                    "dry_run": True,
+                    "candidate_count": candidate_count,
+                    "eligible": len(snapshot),
+                    "ineligible": rejected_count,
+                    "batch_size": page_size,
+                    "policy_version": policy.version,
+                }
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
