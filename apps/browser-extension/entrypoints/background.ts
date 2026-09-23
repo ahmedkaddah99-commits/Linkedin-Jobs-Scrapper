@@ -5,6 +5,7 @@ import {
   isFixtureInspectionMessage,
   isPackageExecutionMessage,
   isApplicationPackagePayload,
+  isProfilePackagePayload,
   ASSISTED_APPLY_PREPARATION_PROTOCOL,
   ASSISTED_APPLY_PREPARATION_MAX_AGE_MS,
   isDocumentUploadMessage,
@@ -1086,6 +1087,25 @@ export default defineBackground(() => {
       const tabId = sender.tab?.id;
       if (sender.id === browser.runtime.id && tabId != null) preparationReadyWaiters.get(tabId)?.();
       return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_PROFILE") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      let token: string;
+      try {
+        token = await currentSessionToken();
+      } catch {
+        return { ok: false, error: "not_connected" };
+      }
+      try {
+        const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+        const payload = await api.request("/assisted-apply/extension/profile-package", "POST", {}, token);
+        if (!isProfilePackagePayload(payload)) return { ok: false, error: "profile_unavailable" };
+        return { ok: true, profilePackage: payload };
+      } catch {
+        return { ok: false, error: "profile_unavailable" };
+      }
     }
     if (message && typeof message === "object" &&
         (message as { type?: unknown }).type === "ASSISTED_APPLY_DYNAMIC_FORM_CHANGED") {
