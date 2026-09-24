@@ -55,3 +55,7 @@ The following points are reflected in the store listing description and in the e
 ## Versioning
 
 The extension follows semantic versioning. The initial store-ready version is **0.2.0** (V1 pilot).
+
+## Version 0.3.0 broad-host update
+
+The owner-approved 0.3.0 posture replaces the curated optional-host list with install-time `https://*/*` access so provider-neutral application detection works across employer and ATS hosts. The extension still declares no manifest content script: the service worker reconciles an unlisted assistant-panel script at runtime, excludes Runr-owned origins, and the panel mounts only after application-context classification. The panel is review/autofill-only and never renders or dispatches a navigation or submit action. Web Store publication remains a separate release action.
