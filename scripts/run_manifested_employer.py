@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -1210,22 +1212,25 @@ def main(argv: list[str] | None = None) -> int:
             duration_budget_seconds=args.dry_run_minutes * 60,
         )
     else:
-        metrics = run_collection(
-            input_csv=staged_input,
-            output_dir=output_dir,
-            limit=0 if args.full else args.limit,
-            state_dir=state_dir,
-            require_existing_state=args.require_existing_state,
-            company_id=args.company_id,
-            dry_run=args.dry_run,
-            resume=args.resume,
-            max_job_links=args.max_job_links,
-            max_pages=args.max_pages,
-            max_browser_requests=args.max_browser_requests,
-            max_targets=args.max_targets,
-            max_requests=args.max_requests or None,
-            timeout_seconds=args.timeout,
-        )
+        # The low-level collector emits progress JSON. The systemd wrapper
+        # persists stdout as one JSON document, so suppress those events here.
+        with contextlib.redirect_stdout(io.StringIO()):
+            metrics = run_collection(
+                input_csv=staged_input,
+                output_dir=output_dir,
+                limit=0 if args.full else args.limit,
+                state_dir=state_dir,
+                require_existing_state=args.require_existing_state,
+                company_id=args.company_id,
+                dry_run=args.dry_run,
+                resume=args.resume,
+                max_job_links=args.max_job_links,
+                max_pages=args.max_pages,
+                max_browser_requests=args.max_browser_requests,
+                max_targets=args.max_targets,
+                max_requests=args.max_requests or None,
+                timeout_seconds=args.timeout,
+            )
         metrics.update(
             {
                 "eligibility_manifest_id": manifest["manifest_id"],
