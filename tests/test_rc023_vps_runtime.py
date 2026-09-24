@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "deploy" / "systemd"
@@ -24,6 +26,69 @@ def _schedule_manifest() -> dict[str, object]:
     )
     assert match is not None
     return json.loads(match.group(1))
+
+
+def test_scrapeops_transport_is_explicit_bounded_and_reports_safe_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_manifested_linkedin as wrapper
+
+    class Response:
+        status_code = 503
+        text = '{"status_code": 503, "body": "", "sops_api_credits": 0}'
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: Response())
+    transport = wrapper.ScrapeOpsTransport("secret", max_requests=1)
+    first = transport.get("https://www.linkedin.com/jobs", kind="search")
+    second = transport.get("https://www.linkedin.com/jobs", kind="search")
+
+    assert first.status_code == 503
+    assert first.error == "provider_http_503"
+    assert second.error == "request_budget_exhausted"
+    assert transport.request_counts_by_kind == {"search": 1}
+    assert "secret" not in json.dumps(transport.proxy_health_snapshot())
+
+
+def test_linkedin_live_transport_defaults_to_webshare_and_requires_scrapeops_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_manifested_linkedin as wrapper
+
+    args = type("Args", (), {"timeout": 30, "max_requests": 2})()
+    monkeypatch.delenv("RUNR_LINKEDIN_TRANSPORT", raising=False)
+    assert wrapper._live_transport(args) is None
+
+    monkeypatch.setenv("RUNR_LINKEDIN_TRANSPORT", "scrapeops")
+    monkeypatch.delenv("SCRAPEOPS_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="SCRAPEOPS_API_KEY"):
+        wrapper._live_transport(args)
+
+
+def test_employer_wrapper_suppresses_collector_progress_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts import run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "manifest-test", "manifest_hash": "hash-test"}
+    monkeypatch.setattr(wrapper, "require_eligibility_manifest", lambda *args, **kwargs: (manifest, [object()]))
+    monkeypatch.setattr(wrapper, "materialize_source_input", lambda *args, **kwargs: {"rows": 1})
+
+    def fake_collection(**kwargs):
+        print('{"company":"progress-event"}')
+        return {"companies_processed": 1, "jobs_written": 2}
+
+    monkeypatch.setattr(wrapper, "run_collection", fake_collection)
+    result = wrapper.main([
+        "--manifest", str(tmp_path / "manifest.json"),
+        "--output-dir", str(tmp_path / "output"),
+        "--state-dir", str(tmp_path / "state"),
+        "--limit", "1",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["companies_processed"] == 1
+    assert "progress-event" not in json.dumps(payload)
 
 
 def test_runtime_contract_selects_systemd_and_keeps_unmeasured_values_explicit() -> None:

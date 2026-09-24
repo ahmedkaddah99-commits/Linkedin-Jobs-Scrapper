@@ -8,6 +8,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -98,6 +100,94 @@ _PUBLISHABLE_LOCATION_CLASSES = frozenset(
 )
 _PLACEHOLDER_VALUES = frozenset({"", "unknown", "n/a", "na", "none", "tbd", "tbd"})
 _DEFAULT_FIXTURE_MAX_REQUESTS = 25
+
+
+class ScrapeOpsTransport:
+    """Bounded opt-in transport used when the Webshare pool is unavailable."""
+
+    proxies = ("scrapeops",)
+
+    def __init__(self, api_key: str, *, mode: str = "basic", timeout: float = 45.0, max_requests: int | None = None) -> None:
+        if not str(api_key or "").strip():
+            raise ValueError("SCRAPEOPS_API_KEY is required for the ScrapeOps transport")
+        from backend.integrations.scrapeops import SCRAPEOPS_REQUEST_MODES
+
+        normalized_mode = str(mode or "basic").strip()
+        if normalized_mode not in SCRAPEOPS_REQUEST_MODES:
+            raise ValueError(f"unsupported ScrapeOps request mode: {normalized_mode}")
+        self.api_key = str(api_key).strip()
+        self.mode = normalized_mode
+        self.timeout = max(1.0, float(timeout))
+        self.max_requests = max_requests
+        self._lock = threading.Lock()
+        self._request_count = 0
+        self._request_counts_by_kind: dict[str, int] = {}
+        self.provider_credits_used = 0
+        self._last_status_code = 0
+        self._last_error_class = ""
+
+    @property
+    def request_counts_by_kind(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._request_counts_by_kind)
+
+    def proxy_health_snapshot(self) -> tuple[dict[str, object], ...]:
+        with self._lock:
+            return ({
+                "proxy_id": "scrapeops",
+                "request_count": self._request_count,
+                "success_count": int(self._last_status_code == 200),
+                "last_status_code": self._last_status_code,
+                "last_error_class": self._last_error_class,
+            },)
+
+    def get(self, url: str, *, kind: str) -> ResponseEnvelope:
+        from backend.integrations.scrapeops import SCRAPEOPS_PROXY_ENDPOINT, build_proxy_params, parse_proxy_response_envelope
+
+        with self._lock:
+            if self.max_requests is not None and self._request_count >= self.max_requests:
+                return ResponseEnvelope(0, "", "scrapeops", 0.0, "request_budget_exhausted")
+            self._request_count += 1
+            self._request_counts_by_kind[kind] = self._request_counts_by_kind.get(kind, 0) + 1
+        started = time.monotonic()
+        try:
+            import requests
+
+            response = requests.get(
+                SCRAPEOPS_PROXY_ENDPOINT,
+                params=build_proxy_params(api_key=self.api_key, url=url, mode=self.mode),
+                timeout=self.timeout,
+            )
+            envelope = parse_proxy_response_envelope(response)
+            error = "" if envelope.provider_status_code < 400 else f"provider_http_{envelope.provider_status_code}"
+            with self._lock:
+                self.provider_credits_used += int(envelope.billed_credits_actual or 0)
+                self._last_status_code = int(envelope.target_status_code)
+                self._last_error_class = error
+            return ResponseEnvelope(int(envelope.target_status_code), envelope.body, "scrapeops", time.monotonic() - started, error)
+        except Exception as exc:
+            error = type(exc).__name__.casefold()
+            with self._lock:
+                self._last_status_code = 0
+                self._last_error_class = error
+            return ResponseEnvelope(0, "", "scrapeops", time.monotonic() - started, error)
+
+    def close(self) -> None:
+        return None
+
+
+def _live_transport(args: argparse.Namespace) -> ScrapeOpsTransport | None:
+    provider = str(os.environ.get("RUNR_LINKEDIN_TRANSPORT") or "webshare").strip().casefold()
+    if provider == "webshare":
+        return None
+    if provider != "scrapeops":
+        raise ValueError(f"unsupported RUNR_LINKEDIN_TRANSPORT: {provider}")
+    return ScrapeOpsTransport(
+        os.environ.get("SCRAPEOPS_API_KEY", ""),
+        mode=os.environ.get("RUNR_LINKEDIN_SCRAPEOPS_MODE", "basic"),
+        timeout=args.timeout,
+        max_requests=args.max_requests or None,
+    )
 
 
 def _env_path(name: str) -> Path | None:
@@ -584,9 +674,9 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             max_companies=staged["rows"] if args.company_ids else args.max_companies,
         )
-        # The low-level producer creates its transport lazily. A non-dry-run
-        # invocation uses the real Webshare transport configuration lookup.
-        runner = CatalogRunner(config, transport=None)
+        # Webshare remains the default. Operations may explicitly select the
+        # bounded ScrapeOps transport when the Webshare entitlement is down.
+        runner = CatalogRunner(config, transport=_live_transport(args))
         metrics = runner.run()
     metrics.update(
         {
