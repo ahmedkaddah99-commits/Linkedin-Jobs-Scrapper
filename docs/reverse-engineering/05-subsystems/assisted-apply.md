@@ -290,16 +290,55 @@ npm run check:extension                                 # root wrapper
 - Render blueprint secrets list `RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS` and `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION` by name (evidence package `deployment-evidence.md`). Values and live state are UNKNOWN.
 - The Web Store URL is hard-coded in `apps/browser-extension/src/auth/config.ts:12`. Whether the listing is published is UNKNOWN. LIVE PRODUCTION = UNKNOWN.
 
+## T51 implementation amendment (2026-09-24)
+
+RUN-51 adds a separate **Continue to Next Step** panel action after the current
+page's autofill run completes. The recovered label-only classifier is not used.
+The helper requires one visible ordered application stepper, exactly one
+`aria-current="step"` item with a visible following item, and exactly one
+visible enabled Next/Continue control associated with a form. Terminal wording
+on the active step or candidate control, and explicit terminal state on the
+active step, stepper, form, or control, wins; missing or ambiguous evidence
+stays manual.
+
+Before activation, the helper reclassifies the page and requires the same
+stepper, active and following items, and control nodes. It requests one permit
+from `installSubmissionGuard`; the permit is stored on the document so the
+assistant-panel and application-form bundles share it in the extension's
+isolated world. The automatically registered panel installs L3 itself because
+it can run without the separate form runner. When both scripts are present, the
+document-scoped state reuses one listener and patch set. The permit expires after
+the one click. For a submit-type Continue
+control, only a submit event whose submitter is the same still-connected control
+on the same original form can pass. All other synthetic button clicks and
+submit events remain blocked, and trusted user actions keep their prior path.
+
+After activation, the helper reports success only when the ordered stepper's
+active marker moves to the exact next item. A replaced control is refused before
+activation; a transition that cannot be verified is reported for manual review
+without another click. The static boundary script contains a file-specific
+allowance for this one helper callsite and continues to reject unclassified
+synthetic activation.
+
+T51 narrows WS9-G3 and resolves WS9-G4 for the tested intermediate-step path.
+The Avature fixture browser test exercises the panel action and verifies both
+the step change and absence of a form submit; the final-step fixture verifies
+zero activation and unchanged URL. The extension unit suite also checks
+ambiguous/terminal refusal, one-shot guard behavior, matching submitter
+coexistence, and control replacement. WS9-G6 remains: page-owned fetch/XHR and
+navigation effects are observed rather than globally blocked. The terminal
+control is never activated by this feature.
+
 ## 10. Confirmed gaps and unresolved questions
 
 | ID | Gap / question |
 |---|---|
 | WS9-G1 | ~~`verify:assisted-apply-boundary` is not run by `check`, `check:all`, `check:edge` or CI. It scans only top-level `packages/ats-core/src/*.ts` and exempts `declarative-actions.ts` (which calls `option.click()`).~~ **RESOLVED by T47 (2026-09-21):** the gate now scans `apps/browser-extension/entrypoints/**`, `apps/browser-extension/src/**` and `packages/ats-core/src/**` recursively, detects synthetic `dispatchEvent(new MouseEvent\|PointerEvent\|TouchEvent\|KeyboardEvent)` activation and location navigation mutations, exempts only `submission-guard.ts`, explicitly classifies the `declarative-actions.ts` `option.click()` value interaction and the side panel `App.tsx` Enter accessibility handlers, and runs through `check`, `check:all`, `check:edge` and both extension CI jobs. |
 | WS9-G2 | The owner decision (broad host access at install, no curated optional list) is not implemented on baseline: `wxt.config.ts:36-43`, `verify-manifest.mjs:82-91` and `host-permissions.ts` enforce the narrow model. The implementation is UNMERGED in `0d7f2b5c` (T03). The permission rationale doc is stale relative to the decision. Store-review trade-off to discuss with owner. |
-| WS9-G3 | Runtime guard L3 blocks *all* untrusted button clicks and Enter, including page-script-dispatched ones, for the life of the page. It is never stopped and is re-installed on each injection. Possible interference with portal JS and with UNMERGED synthetic step advance. Needs a behavioural test decision. |
-| WS9-G4 | UNMERGED automated step advance relies on label text only and uses `dispatchEvent(MouseEvent)`, invisible to static gates. ~~T03 must add a static and a test gate for `apps/browser-extension/src/panel/**` and entrypoints.~~ **Static and test gate now exist (T47, 2026-09-21):** synthetic pointer/keyboard activation is a boundary-script violation in `entrypoints/**` and `src/**` (future panel code lands inside the scanned roots), and `tests/unit/aa216-declarative-actions.test.ts` proves synthetic terminal click/submit/Enter are blocked while trusted user activation remains allowed. **Remaining:** the label-only terminal/advance classification risk itself is still UNMERGED code and is owned by the T48–T51 hierarchy (T51 must prove safe intermediate navigation). |
+| WS9-G3 | **NARROWED by T51 (2026-09-24):** the automatically registered panel now installs the L3 guard; one revalidated, structurally verified intermediate Continue activation may pass once. Other untrusted terminal/control activations remain blocked. Guard state shares one listener set across panel and form-runner installs. Diverse live ATS behavior remains unassessed. |
+| WS9-G4 | **RESOLVED for T51 (2026-09-24):** label-only classification is replaced by ordered-stepper evidence, terminal wording/state vetoes, exact control revalidation, one-shot guard authorization, post-transition proof, and final-step refusal. Unit and browser acceptance cover these paths; the static boundary allows only the classified helper callsite. |
 | WS9-G5 | Allocation text says the extension imports ats-core from `assistant-panel.tsx`, but that file is UNMERGED only. Baseline consumers are `background.ts`, `application-form.ts`, `controlled-field-bridge.ts`, `inactive-fixture-spike.ts`. |
-| WS9-G6 | Fetch/XHR/navigation are recorded but not blocked by L3. Protection against page-initiated terminal network requests relies on not clicking terminal controls. Document as intended or tighten. |
+| WS9-G6 | **REMAINS OPEN:** page-owned fetch/XHR and navigation effects are observed rather than blocked. T51 constrains the extension activation path and never activates a terminal control; it does not firewall page-world network activity. |
 | U5 | Plan for feature-branch commits including extension changes (`0d7f2b5c`) → T03. |
 | T03 | Review assisted-apply panel and generic ATS planner work (48 paths). |
 | Open | Live state of the Web Store listing, backend extension-origin value, and preparation flag: UNKNOWN. |
@@ -326,7 +365,7 @@ The 0.3.0 extension uses the owner-approved `https://*/*` install-time host perm
 1. ~~Wire `verify:assisted-apply-boundary` into `check` and CI, and extend its scan to `apps/browser-extension/{entrypoints,src}` with `dispatchEvent(new MouseEvent` / `.click(` detection (WS9-G1, G4; CI edit via WS-7).~~ DONE by T47 (2026-09-21).
 2. Owner decision record + implementation of broad host permissions via T03, updating `verify-manifest.mjs`, `host-permissions.ts` and the permission rationale doc (WS9-G2).
 3. T03 review record: 48-path accept/adapt/reject, with the never-submit review items in §9.2 (WS9-G3, G4).
-4. Behavioural test for L3 guard interplay with portal JS and authorized intermediate navigation (WS9-G3, G6).
+4. ~~Behavioural test for L3 guard interplay with portal JS and authorized intermediate navigation (WS9-G3, G6).~~ DONE by T51 for the sanitized Avature fixture; WS9-G6 remains open for page-owned fetch/XHR and navigation effects.
 5. Correct allocation/evidence note about `assistant-panel.tsx` (WS9-G5; Phase 3 / WS-12).
 
 ## T49 implementation amendment (2026-09-23)
