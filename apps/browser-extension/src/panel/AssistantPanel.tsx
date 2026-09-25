@@ -11,6 +11,10 @@ export interface AssistantPanelProps {
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onPrimaryAction: () => void;
+  onContinueToNextStep: () => void;
+  canContinueToNextStep: boolean;
+  continuingToNextStep: boolean;
+  navigationMessage?: string;
   onOpenSettings: () => void;
   onReport: () => void;
   /** Set when the primary action cannot run yet; renders in place of the CTA note. */
@@ -131,6 +135,10 @@ export default function AssistantPanel({
   collapsed,
   onCollapsedChange,
   onPrimaryAction,
+  onContinueToNextStep,
+  canContinueToNextStep,
+  continuingToNextStep,
+  navigationMessage,
   onOpenSettings,
   onReport,
   primaryBlockedReason,
@@ -321,12 +329,28 @@ export default function AssistantPanel({
             type="button"
             className="primary"
             onClick={onPrimaryAction}
-            disabled={busy || Boolean(primaryBlockedReason)}
+            disabled={busy || continuingToNextStep || Boolean(primaryBlockedReason)}
             data-testid="runr-panel-primary"
           >
             {busy ? "Autofilling…" : "Autofill This Page"}
           </button>
         }
+        {run?.stage === "complete" && canContinueToNextStep ? (
+          <button
+            type="button"
+            className="primary"
+            onClick={onContinueToNextStep}
+            disabled={busy || continuingToNextStep}
+            data-testid="runr-panel-continue-step"
+          >
+            {continuingToNextStep ? "Verifying next step" : "Continue to Next Step"}
+          </button>
+        ) : null}
+        {navigationMessage ? (
+          <p className="footer-note" role="status" data-testid="runr-panel-navigation-status">
+            {navigationMessage}
+          </p>
+        ) : null}
         <p className="footer-note" data-testid="runr-panel-footer-note">
           {primaryBlockedReason ||
             `${detection.fillableFieldCount} fields detected on ${providerLabel(detection.provider)}.`}

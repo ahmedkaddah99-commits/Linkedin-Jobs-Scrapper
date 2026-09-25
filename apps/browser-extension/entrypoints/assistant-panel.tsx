@@ -6,11 +6,13 @@ import {
   type ApplicationJobContext,
   type ApplicationPageDetection,
 } from "@runr/ats-core/application-context";
+import { installSubmissionGuard } from "@runr/ats-core";
 import { isPanelResponse } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
 import { defineUnlistedScript } from "wxt/utils/define-unlisted-script";
 import AssistantPanel from "../src/panel/AssistantPanel";
 import { runAutofill, type AutofillRunState } from "../src/panel/autofill-run";
+import { advanceIntermediateStep, findIntermediateNavigation } from "../src/panel/step-navigation";
 import { computeResumeMatch, profileCompleteness, type ProfileCompleteness, type ResumeMatch } from "@runr/ats-core/resume-match";
 import type { CandidateProfile } from "@runr/ats-core/generic-planner";
 import { toCandidateProfile } from "../src/panel/profile-package";
@@ -123,14 +125,17 @@ function notify(type: string): void {
 let runState: AutofillRunState | null = null;
 let busy = false;
 let runError = "";
+let navigationBusy = false;
+let navigationMessage = "";
 let candidateProfile: CandidateProfile | null = null;
 let resumeMatch: ResumeMatch | null = null;
 let completeness: ProfileCompleteness | null = null;
 
 async function startAutofill(detection: ApplicationPageDetection, job: ApplicationJobContext | null): Promise<void> {
-  if (busy) return;
+  if (busy || navigationBusy) return;
   busy = true;
   runError = "";
+  navigationMessage = "";
   render(detection, job);
 
   try {
@@ -168,6 +173,37 @@ async function startAutofill(detection: ApplicationPageDetection, job: Applicati
     runError = error instanceof Error ? error.message : "Runr could not complete the autofill.";
   } finally {
     busy = false;
+    render(detection, job);
+  }
+}
+
+async function continueToNextStep(detection: ApplicationPageDetection, job: ApplicationJobContext | null): Promise<void> {
+  if (busy || navigationBusy) return;
+  const target = findIntermediateNavigation(document);
+  if (!target) {
+    navigationMessage = "Runr could not verify an intermediate step. Continue manually after reviewing the page.";
+    render(detection, job);
+    return;
+  }
+
+  navigationBusy = true;
+  navigationMessage = "";
+  render(detection, job);
+  try {
+    const result = await advanceIntermediateStep(document, target);
+    if (result.status === "advanced") {
+      runState = null;
+      runError = "";
+      navigationMessage = `Advanced to ${result.nextStepLabel}. Autofill the next step when you are ready.`;
+    } else if (result.status === "unverified") {
+      navigationMessage = `Continue was activated, but Runr could not verify ${result.nextStepLabel}. Review the page and continue manually.`;
+    } else {
+      navigationMessage = result.reason || "Runr could not safely verify the next step. Continue manually.";
+    }
+  } catch {
+    navigationMessage = "Runr could not verify the next step. Review the page and continue manually.";
+  } finally {
+    navigationBusy = false;
     render(detection, job);
   }
 }
@@ -210,6 +246,9 @@ function render(detection: ApplicationPageDetection, job: ApplicationJobContext 
       run: runState,
       busy,
       error: runError || undefined,
+      canContinueToNextStep: runState?.stage === "complete" && findIntermediateNavigation(document) !== null,
+      continuingToNextStep: navigationBusy,
+      navigationMessage: navigationMessage || undefined,
       resumeMatch,
       completeness,
       onTailorResume: () => notify("ASSISTED_APPLY_PANEL_TAILOR_RESUME"),
@@ -223,6 +262,7 @@ function render(detection: ApplicationPageDetection, job: ApplicationJobContext 
         render(detection, job);
       },
       onPrimaryAction: () => void startAutofill(detection, job),
+      onContinueToNextStep: () => void continueToNextStep(detection, job),
       onOpenSettings: () => notify("ASSISTED_APPLY_PANEL_OPEN_SETTINGS"),
       onReport: () => notify("ASSISTED_APPLY_PANEL_REPORT"),
     }),
@@ -280,6 +320,11 @@ declare global {
 export default defineUnlistedScript(async () => {
   if (window.__runrAssistantPanelInstalled) return;
   window.__runrAssistantPanelInstalled = true;
+
+  // The panel is independently runtime-registered, so it must install the L3
+  // guard itself instead of assuming the side-panel form runner was injected.
+  const submissionGuard = installSubmissionGuard(document);
+  void submissionGuard;
 
   // Installed before anything else runs: every synthetic activation from this
   // point on is refused unless Runr explicitly authorized it.

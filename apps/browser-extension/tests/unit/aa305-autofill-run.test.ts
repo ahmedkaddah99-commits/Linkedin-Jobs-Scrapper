@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { installSubmissionGuard } from "@runr/ats-core";
 import { runAutofill, type AutofillRunState } from "../../src/panel/autofill-run";
+import { advanceIntermediateStep, findIntermediateNavigation } from "../../src/panel/step-navigation";
 import { isoMonth, parsePeriod, toCandidateProfile } from "../../src/panel/profile-package";
 
 const fixturesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../fixtures");
@@ -12,6 +14,13 @@ function loadRegisterForm(): Document {
   const html = readFileSync(path.join(fixturesDir, "avature-register-form.html"), "utf8");
   const parsed = new DOMParser().parseFromString(html, "text/html");
   document.documentElement.replaceWith(document.importNode(parsed.documentElement, true));
+  return document;
+}
+
+function loadNavigationFixture(name: string): Document {
+  const html = readFileSync(path.join(fixturesDir, name), "utf8");
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  document.body.innerHTML = parsed.body.innerHTML;
   return document;
 }
 
@@ -180,5 +189,93 @@ describe("AA-305 autofill run", () => {
     ).length;
     expect(state.reviewCount).toBe(counted);
     expect(state.reviewCount).toBeGreaterThan(0);
+  });
+});
+
+describe("T51 verified intermediate-step navigation", () => {
+  it("finds one Continue control only with an explicit active step and a following step", () => {
+    const document_ = loadNavigationFixture("avature-register-form.html");
+    const target = findIntermediateNavigation(document_);
+
+    expect(target).toMatchObject({
+      currentStepLabel: "Profile information",
+      nextStepLabel: "Global questions",
+      currentIndex: 1,
+    });
+    expect(target?.control.id).toBe("continue-application");
+
+    target?.currentStep.removeAttribute("aria-current");
+    expect(findIntermediateNavigation(document_)).toBeNull();
+  });
+
+  it("lets terminal wording, terminal state, and ambiguous controls override Continue", () => {
+    const document_ = loadNavigationFixture("avature-register-form.html");
+    const control = document_.querySelector<HTMLButtonElement>("#continue-application")!;
+
+    control.textContent = "Continue and Submit Application";
+    expect(findIntermediateNavigation(document_)).toBeNull();
+    control.textContent = "Continue Application";
+    control.setAttribute("data-final-submit", "true");
+    expect(findIntermediateNavigation(document_)).toBeNull();
+    control.removeAttribute("data-final-submit");
+    const second = control.cloneNode(true) as HTMLButtonElement;
+    second.textContent = "Next step";
+    control.after(second);
+    expect(findIntermediateNavigation(document_)).toBeNull();
+  });
+
+  it("activates once and reports the exact next step after the active marker moves", async () => {
+    const document_ = loadNavigationFixture("avature-register-form.html");
+    const target = findIntermediateNavigation(document_)!;
+    const guard = installSubmissionGuard(document_);
+    const eventOffset = guard.events.length;
+    target.control.addEventListener("click", (event) => {
+      target.currentStep.removeAttribute("aria-current");
+      target.nextStep.setAttribute("aria-current", "step");
+      event.preventDefault();
+    });
+
+    const result = await advanceIntermediateStep(document_, target);
+
+    expect(result).toEqual({ status: "advanced", nextStepLabel: "Global questions" });
+    expect(guard.events.slice(eventOffset)).toEqual(["click"]);
+    expect(document_.querySelector('[aria-current="step"]')?.textContent?.trim()).toBe("Global questions");
+    guard.stop();
+  });
+
+  it("refuses a replaced control before activation", async () => {
+    const document_ = loadNavigationFixture("avature-register-form.html");
+    const target = findIntermediateNavigation(document_)!;
+    let clicks = 0;
+    target.control.addEventListener("click", () => { clicks += 1; });
+    target.control.replaceWith(target.control.cloneNode(true));
+    const guard = installSubmissionGuard(document_);
+    const eventOffset = guard.events.length;
+
+    const result = await advanceIntermediateStep(document_, target);
+
+    expect(result.status).toBe("refused");
+    expect(clicks).toBe(0);
+    expect(guard.events.slice(eventOffset)).toEqual([]);
+    guard.stop();
+  });
+
+  it("never activates the final-step fixture or changes its URL", async () => {
+    const document_ = loadNavigationFixture("avature-final-step.html");
+    const finalControl = document_.querySelector<HTMLButtonElement>("#final-submit")!;
+    const initialUrl = document_.defaultView?.location.href;
+    let clicks = 0;
+    finalControl.addEventListener("click", () => { clicks += 1; });
+    const guard = installSubmissionGuard(document_);
+    const eventOffset = guard.events.length;
+
+    const result = await advanceIntermediateStep(document_);
+
+    expect(findIntermediateNavigation(document_)).toBeNull();
+    expect(result.status).toBe("refused");
+    expect(clicks).toBe(0);
+    expect(guard.events.slice(eventOffset)).toEqual([]);
+    expect(document_.defaultView?.location.href).toBe(initialUrl);
+    guard.stop();
   });
 });

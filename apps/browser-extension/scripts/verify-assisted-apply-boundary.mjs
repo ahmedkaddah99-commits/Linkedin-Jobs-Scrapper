@@ -44,6 +44,11 @@ const classifiedAllowances = [
     ],
     reason: "Extension-own side panel keyboard accessibility for document upload and review state; never a page-form activation.",
   },
+  {
+    file: "apps/browser-extension/src/panel/step-navigation.ts",
+    allow: [/target\.control\.dispatchEvent\s*\(\s*new MouseEvent\s*\(\s*["']click["']/u],
+    reason: "T51 permits one structurally verified intermediate Continue activation through the installed submission guard, then requires an observed active-step transition. Terminal or ambiguous controls are refused.",
+  },
 ];
 
 function withGlobalFlags(pattern) {
