@@ -238,6 +238,18 @@
 
         <button type="submit" id="continue-application">Continue Application</button>
       </form>
+      <script>
+        window.__avatureContinueClicks = 0;
+        document.querySelector("#continue-application").addEventListener("click", (event) => {
+          window.__avatureContinueClicks += 1;
+          const active = document.querySelector(".application-stepper [aria-current='step']");
+          const next = active?.nextElementSibling;
+          if (!active || !next) return;
+          active.removeAttribute("aria-current");
+          next.setAttribute("aria-current", "step");
+          event.preventDefault();
+        });
+      </script>
     </main>
   </body>
 </html>

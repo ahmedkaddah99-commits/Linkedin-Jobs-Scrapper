@@ -115,4 +115,97 @@ describe("AA-216 declarative action boundary", () => {
     guard.stop();
   });
 
+  it("allows one validated intermediate click through the submission guard", async () => {
+    document.body.innerHTML = `<form><button id="next" type="button">Continue</button></form>`;
+    const guard = installSubmissionGuard(document);
+    const submissionGuardModule = await import("../../../../packages/ats-core/src/submission-guard");
+    const authorize = Reflect.get(submissionGuardModule, "authorizeIntermediateActivation");
+    expect(typeof authorize).toBe("function");
+
+    const control = document.querySelector<HTMLButtonElement>("#next")!;
+    const revoke = authorize(document, control, () => true);
+    const first = new MouseEvent("click", { bubbles: true, cancelable: true });
+    control.dispatchEvent(first);
+    expect(first.defaultPrevented).toBe(false);
+
+    const second = new MouseEvent("click", { bubbles: true, cancelable: true });
+    control.dispatchEvent(second);
+    expect(second.defaultPrevented).toBe(true);
+
+    revoke?.();
+    guard.stop();
+  });
+
+  it("refuses intermediate activation when no submission guard is installed", async () => {
+    document.body.innerHTML = `<form><button id="next" type="button">Continue</button></form>`;
+    const submissionGuardModule = await import("../../../../packages/ats-core/src/submission-guard");
+    const authorize = Reflect.get(submissionGuardModule, "authorizeIntermediateActivation");
+    const control = document.querySelector<HTMLButtonElement>("#next")!;
+
+    expect(authorize(document, control, () => true)).toBeNull();
+  });
+
+  it("allows only the submit side effect from the authorized intermediate control", async () => {
+    document.body.innerHTML = `<form><button id="next" type="submit">Continue</button></form>`;
+    const guard = installSubmissionGuard(document);
+    const submissionGuardModule = await import("../../../../packages/ats-core/src/submission-guard");
+    const authorize = Reflect.get(submissionGuardModule, "authorizeIntermediateActivation");
+    expect(typeof authorize).toBe("function");
+
+    const control = document.querySelector<HTMLButtonElement>("#next")!;
+    const form = document.querySelector("form")!;
+    const revoke = authorize(document, control, () => true);
+    let clickReachedControl = false;
+    control.addEventListener("click", (event) => {
+      clickReachedControl = true;
+      event.preventDefault();
+    });
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    control.dispatchEvent(click);
+    expect(clickReachedControl).toBe(true);
+
+    const intermediateSubmit = new SubmitEvent("submit", {
+      bubbles: true,
+      cancelable: true,
+      submitter: control,
+    });
+    form.dispatchEvent(intermediateSubmit);
+    expect(intermediateSubmit.defaultPrevented).toBe(false);
+
+    const repeatedSubmit = new SubmitEvent("submit", {
+      bubbles: true,
+      cancelable: true,
+      submitter: control,
+    });
+    form.dispatchEvent(repeatedSubmit);
+    expect(repeatedSubmit.defaultPrevented).toBe(true);
+
+    revoke?.();
+    guard.stop();
+  });
+
+  it("refuses the submit side effect if the authorized control was replaced", async () => {
+    document.body.innerHTML = `<form><button id="next" type="submit">Continue</button></form>`;
+    const guard = installSubmissionGuard(document);
+    const submissionGuardModule = await import("../../../../packages/ats-core/src/submission-guard");
+    const authorize = Reflect.get(submissionGuardModule, "authorizeIntermediateActivation");
+    const control = document.querySelector<HTMLButtonElement>("#next")!;
+    const form = document.querySelector("form")!;
+    const revoke = authorize(document, control, () => true);
+    control.addEventListener("click", (event) => event.preventDefault());
+    control.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    control.replaceWith(control.cloneNode(true));
+
+    const replacedSubmit = new SubmitEvent("submit", {
+      bubbles: true,
+      cancelable: true,
+      submitter: control,
+    });
+    form.dispatchEvent(replacedSubmit);
+    expect(replacedSubmit.defaultPrevented).toBe(true);
+
+    revoke?.();
+    guard.stop();
+  });
+
 });

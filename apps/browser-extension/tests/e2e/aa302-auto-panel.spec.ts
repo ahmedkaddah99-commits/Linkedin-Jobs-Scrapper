@@ -1,10 +1,13 @@
 import { test, expect, chromium, type BrowserContext, type Worker } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 declare const chrome: {
   scripting: {
     getRegisteredContentScripts(filter?: { ids?: string[] }): Promise<Array<{ id: string }>>;
+    executeScript(options: { target: { tabId: number }; files: string[] }): Promise<Array<{ result?: unknown }>>;
   };
+  tabs: { query(filter: { url: string }): Promise<Array<{ id?: number }>> };
   storage: {
     local: {
       set(items: Record<string, unknown>): Promise<void>;
@@ -27,6 +30,7 @@ const FIXTURE_ORIGIN = "http://127.0.0.1:4174";
 const JOB_DETAIL_URL = `${FIXTURE_ORIGIN}/en_US/externaljobs/JobDetail/618402`;
 const GATEWAY_URL = `${FIXTURE_ORIGIN}/en_US/externaljobs/ApplicationMethods?folderId=618402`;
 const REGISTER_URL = `${FIXTURE_ORIGIN}/en_US/externaljobs/Register?folderId=618402`;
+const FINAL_STEP_FIXTURE = readFileSync(resolve("tests/fixtures/avature-final-step.html"), "utf8");
 
 let context: BrowserContext;
 let serviceWorker: Worker;
@@ -137,7 +141,7 @@ test("AA-302 switches sections without claiming data it does not have", async ()
   await page.close();
 });
 
-test("AA-306 autofills the page from the connected Runr profile and verifies it landed", async () => {
+test("AA-306 autofills and Continue advances one verified step without submitting", async () => {
   // Opening the side panel is what triggers the extension to connect.
   const panelPage = await context.newPage();
   await panelPage.goto(`chrome-extension://${new URL(serviceWorker.url()).host}/sidepanel.html`);
@@ -166,6 +170,47 @@ test("AA-306 autofills the page from the connected Runr profile and verifies it 
   await expect(page.getByTestId("runr-panel-review-count")).toBeVisible();
   await expect(page.getByTestId("runr-panel-completed-list")).toBeVisible();
 
+  await page.evaluate(() => {
+    (window as unknown as { __runrObservedSubmits: number }).__runrObservedSubmits = 0;
+    document.querySelector("form")?.addEventListener("submit", (event) => {
+      const fixtureWindow = window as unknown as { __runrObservedSubmits: number };
+      fixtureWindow.__runrObservedSubmits += 1;
+      event.preventDefault();
+    });
+  });
+  const formRunnerGuardInstalled = await serviceWorker.evaluate(async (urlPattern) => {
+    const [tab] = await chrome.tabs.query({ url: urlPattern });
+    if (tab?.id == null) return false;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["/application-form.js"] });
+    return true;
+  }, `${FIXTURE_ORIGIN}/en_US/externaljobs/Register*`);
+  expect(formRunnerGuardInstalled).toBe(true);
+  await expect(page.getByTestId("runr-panel-continue-step")).toBeVisible();
+  await page.getByTestId("runr-panel-continue-step").click();
+  await expect(page.getByTestId("runr-panel-navigation-status")).toContainText("Advanced to Global questions");
+  expect(await page.evaluate(() => (window as unknown as { __avatureContinueClicks: number }).__avatureContinueClicks)).toBe(1);
+  await expect(page.locator('.application-stepper > li[aria-current="step"]')).toHaveText("Global questions");
+  await expect(page.getByTestId("runr-panel-continue-step")).toHaveCount(0);
+  expect(page.url()).toBe(REGISTER_URL);
+  expect(await page.evaluate(() => (window as unknown as { __runrObservedSubmits: number }).__runrObservedSubmits)).toBe(0);
+
+  await page.evaluate((finalFixture) => {
+    const parsed = new DOMParser().parseFromString(finalFixture, "text/html");
+    const stepper = parsed.querySelector("ol.application-stepper");
+    const form = parsed.querySelector("form");
+    if (!stepper || !form) throw new Error("The final-step fixture is incomplete.");
+    document.querySelector("ol.application-stepper")?.replaceWith(document.importNode(stepper, true));
+    document.querySelector("form")?.replaceWith(document.importNode(form, true));
+    (window as unknown as { __finalApplicationSubmitClicks: number }).__finalApplicationSubmitClicks = 0;
+    document.querySelector("#final-submit")?.addEventListener("click", () => {
+      (window as unknown as { __finalApplicationSubmitClicks: number }).__finalApplicationSubmitClicks += 1;
+    });
+  }, FINAL_STEP_FIXTURE);
+  await page.getByTestId("runr-panel-primary").click();
+  await expect(page.getByTestId("runr-panel-complete")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("runr-panel-continue-step")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __finalApplicationSubmitClicks: number }).__finalApplicationSubmitClicks)).toBe(0);
+  expect(page.url()).toBe(REGISTER_URL);
   await page.close();
 });
 
