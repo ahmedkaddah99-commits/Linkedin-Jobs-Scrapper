@@ -9,14 +9,16 @@ company as an independent target, and creates one explicit v2 publication.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic, sleep
 from urllib.parse import urlsplit
@@ -65,6 +67,12 @@ TELEMETRY_SOURCE_KEYS = frozenset(
     }
 )
 DEFAULT_STALE_CHECKPOINT_SECONDS = 86400
+_SENIORITY_IN_TITLE = re.compile(
+    r"\b(senior|sr\.?|lead|principal|staff|junior|jr\.?|entry.level|intern|trainee|"
+    r"berufseinsteiger|werkstudent|praktikant|teamleit[eu]ng)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_WORKPLACE = re.compile(r"\b(remote|hybrid|on[- ]site|onsite|vor\s+ort)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -408,6 +416,100 @@ def _crosswalk_already_applied(
         return True
 
     return bool(store._run_transaction(check))
+
+
+def _verified_company_registry(manifest_path: Path) -> tuple[dict[str, dict[str, str]], str]:
+    """Load recently verified company facts beside the reviewed source manifest."""
+
+    path = Path(os.getenv("RUNR_PUBLISHER_COMPANY_REGISTRY") or manifest_path.with_name("company_registry_canonical.csv"))
+    if not path.is_file():
+        return {}, ""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    current_time = datetime.now(timezone.utc)
+    cutoff = current_time - timedelta(days=90)
+    verified: dict[str, dict[str, str]] = {}
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            company_id = _text(row.get("canonical_CompanyID"))
+            logo = _text(row.get("logo_url"))
+            try:
+                logo_url = urlsplit(logo)
+            except ValueError:
+                continue
+            if (
+                not company_id
+                or _text(row.get("enrichment_status")) != "succeeded"
+                or logo_url.scheme != "https"
+                or not logo_url.hostname
+            ):
+                continue
+            try:
+                enriched_at = datetime.fromisoformat(_text(row.get("last_enriched_at")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if enriched_at.tzinfo is None or not cutoff <= enriched_at <= current_time:
+                continue
+            facts = {
+                key: _text(row.get(key))
+                for key in ("industry", "description", "employee_count", "headquarters_display", "website_url")
+                if _text(row.get(key))
+            }
+            if facts:
+                verified[company_id] = {"logo_url": logo, "last_enriched_at": enriched_at.isoformat(), **facts}
+    return verified, digest
+
+
+def _explicit_workplace(value: str) -> str:
+    match = _EXPLICIT_WORKPLACE.search(value)
+    if match is None:
+        return ""
+    nearby = value[max(0, match.start() - 25):match.start()].casefold()
+    if re.search(r"\b(no|not|kein(?:e|en)?|nicht|without)\s+(?:\w+\s+){0,2}$", nearby):
+        return ""
+    return match.group(0)
+
+
+def _enrich_source_groups(
+    groups: Mapping[str, list[dict[str, object]]],
+    *,
+    verified_companies: Mapping[str, Mapping[str, str]],
+    registry_sha256: str,
+) -> dict[str, list[dict[str, object]]]:
+    enriched: dict[str, list[dict[str, object]]] = {}
+    for company_id, rows in groups.items():
+        company = verified_companies.get(company_id)
+        enriched_rows: list[dict[str, object]] = []
+        for original in rows:
+            row = dict(original)
+            evidence: dict[str, object] = {}
+            if company:
+                if not _text(row.get("company_logo") or row.get("logo_url")):
+                    row["company_logo"] = company["logo_url"]
+                if not row.get("company_enrichment"):
+                    row["company_enrichment"] = {
+                        "source": "verified_company_registry",
+                        "registry_sha256": registry_sha256,
+                        "verified_at": company["last_enriched_at"],
+                        "fields": {key: value for key, value in company.items() if key not in {"logo_url", "last_enriched_at"}},
+                    }
+                evidence["company_registry_sha256"] = registry_sha256
+            if not _text(row.get("seniority") or row.get("experience_level")):
+                match = _SENIORITY_IN_TITLE.search(_text(row.get("job_title") or row.get("title")))
+                if match:
+                    row["seniority"] = match.group(0)
+                    evidence["seniority_source"] = "explicit_job_title"
+            if not _text(row.get("workplace_type") or row.get("workplace_arrangement")):
+                for field in ("job_title", "title", "location", "location_raw", "description_text", "description"):
+                    value = _explicit_workplace(_text(row.get(field)))
+                    if value:
+                        row["workplace_type"] = value
+                        evidence["workplace_source"] = f"explicit_{field}"
+                        break
+            if evidence:
+                row["publication_enrichment_evidence"] = evidence
+            enriched_rows.append(row)
+        enriched[company_id] = enriched_rows
+    return enriched
 
 
 def _row_value(row: Mapping[str, object], key: str) -> object:
@@ -1114,6 +1216,7 @@ def run_delivery(
     )
     manifest = load_manifest(manifest_path)
     crosswalk = dict(identity_crosswalk or {})
+    verified_companies, company_registry_sha256 = _verified_company_registry(manifest_path)
     linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only, crosswalk=crosswalk)
     employer_companies = _manifest_companies(manifest, SOURCE_EMPLOYER, pilot_only=pilot_only, crosswalk=crosswalk)
     requested = {value.strip() for value in (company_ids or ()) if value.strip()}
@@ -1186,6 +1289,16 @@ def run_delivery(
             batch_size=batch_size,
             now=now,
         )
+        linkedin_groups = _enrich_source_groups(
+            linkedin_groups,
+            verified_companies=verified_companies,
+            registry_sha256=company_registry_sha256,
+        )
+        employer_groups = _enrich_source_groups(
+            employer_groups,
+            verified_companies=verified_companies,
+            registry_sha256=company_registry_sha256,
+        )
         li_source_ids = {
             _text(item.get("linkedin_company_id"))
             for rows in linkedin_groups.values()
@@ -1210,12 +1323,14 @@ def run_delivery(
             "groups_with_jobs": len(linkedin_groups),
             "source_marker": linkedin_marker,
             "bootstrap_complete": bool(next_linkedin_checkpoint.get("bootstrap_complete")),
+            "verified_company_registry_sha256": company_registry_sha256,
         },
         SOURCE_EMPLOYER: {
             "companies_changed": len(employer_changed_ids),
             "groups_with_jobs": len(employer_groups),
             "source_marker": employer_marker,
             "bootstrap_complete": bool(next_employer_checkpoint.get("bootstrap_complete")),
+            "verified_company_registry_sha256": company_registry_sha256,
         },
     }
     source_specs = (

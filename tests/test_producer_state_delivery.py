@@ -12,11 +12,43 @@ from scripts.publish_producer_states import (
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
     _crosswalk_already_applied,
+    _enrich_source_groups,
+    _verified_company_registry,
     _target,
     run_delivery,
 )
 
 import pytest
+from datetime import datetime, timezone
+
+
+def test_publisher_uses_only_verified_registry_and_explicit_job_evidence(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    registry = tmp_path / "company_registry_canonical.csv"
+    registry.write_text(
+        "canonical_CompanyID,enrichment_status,logo_url,last_enriched_at,industry,description\n"
+        f"company-1,succeeded,https://example.com/logo.png,{datetime.now(timezone.utc).isoformat()},Technology,Verified company\n"
+        f"company-2,failed,https://example.com/other.png,{datetime.now(timezone.utc).isoformat()},Technology,Unverified\n",
+        encoding="utf-8",
+    )
+    companies, digest = _verified_company_registry(manifest)
+    groups = _enrich_source_groups(
+        {
+            "company-1": [{"job_title": "Senior Engineer", "description": "Work on-site in Berlin."}],
+            "company-2": [{"job_title": "Engineer", "description": "No remote work."}],
+        },
+        verified_companies=companies,
+        registry_sha256=digest,
+    )
+
+    assert groups["company-1"][0]["company_logo"] == "https://example.com/logo.png"
+    assert groups["company-1"][0]["company_enrichment"]["fields"]["industry"] == "Technology"
+    assert groups["company-1"][0]["seniority"] == "Senior"
+    assert groups["company-1"][0]["workplace_type"] == "on-site"
+    assert "company_logo" not in groups["company-2"][0]
+    assert "seniority" not in groups["company-2"][0]
+    assert "workplace_type" not in groups["company-2"][0]
 
 
 def test_publisher_skips_only_an_exact_applied_crosswalk(tmp_path):
