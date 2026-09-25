@@ -1070,6 +1070,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="opt into website-only/LinkedIn-only expansion tasks; default is the dual-source pilot",
     )
     parser.add_argument("--company-id", default="")
+    parser.add_argument(
+        "--verified-ats-url",
+        default="",
+        help="operator-verified HTTPS ATS listing for the exact --company-id; bypasses homepage discovery",
+    )
     parser.add_argument("--company-ids", nargs="+", help="exact eligible canonical IDs for a bounded cohort")
     parser.add_argument("--max-job-links", type=int, default=25)
     parser.add_argument("--max-pages", type=int, default=20)
@@ -1166,6 +1171,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--benchmark-fixture writes its own receipt and cannot combine with --benchmark-receipt")
     if args.company_id and args.company_ids:
         parser.error("use either --company-id or --company-ids")
+    if args.verified_ats_url and (not args.company_id or not args.max_requests):
+        parser.error("--verified-ats-url requires --company-id and a positive --max-requests")
     if args.company_ids and not args.full and len(set(args.company_ids)) > args.limit:
         parser.error("--limit must cover every requested company ID")
     pilot_only = not args.include_single_source
@@ -1222,6 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
                 state_dir=state_dir,
                 require_existing_state=args.require_existing_state,
                 company_id=args.company_id,
+                verified_ats_url=args.verified_ats_url,
                 dry_run=args.dry_run,
                 resume=args.resume,
                 max_job_links=args.max_job_links,

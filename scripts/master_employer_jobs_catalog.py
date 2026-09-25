@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -288,6 +288,7 @@ class EmployerCompany:
     linkedin_company_url: str = ""
     source_row_number: int = 0
     website_provenance: dict[str, Any] = field(default_factory=dict)
+    verified_ats_url: str = ""
 
 
 class RequestAccounting:
@@ -1120,18 +1121,25 @@ def collect_company(
             return fallback
         return snapshot
 
-    discovery = discover_career_url(
-        homepage_url=company.website_url,
-        homepage_provenance=company.website_provenance,
-        company_name=company.company_name,
-        fetch=fetcher,
-        request_timeout_seconds=limits.timeout_seconds,
-        shallow_crawl_pages=8,
-        use_rendered_fallback=False,
-        prefer_homepage_candidates=True,
-    )
-    candidates = _candidate_rows(discovery, limits)
-    source_inventory = build_source_inventory(discovery)
+    if company.verified_ats_url:
+        # An operator-reviewed ATS target can be collected under the same
+        # request gate without spending the budget rediscovering its homepage.
+        discovery = None
+        candidates = [SimpleCandidate(company.verified_ats_url, "verified_ats_target", detect_ats_type(company.verified_ats_url))]
+        source_inventory: list[dict[str, Any]] = []
+    else:
+        discovery = discover_career_url(
+            homepage_url=company.website_url,
+            homepage_provenance=company.website_provenance,
+            company_name=company.company_name,
+            fetch=fetcher,
+            request_timeout_seconds=limits.timeout_seconds,
+            shallow_crawl_pages=8,
+            use_rendered_fallback=False,
+            prefer_homepage_candidates=True,
+        )
+        candidates = _candidate_rows(discovery, limits)
+        source_inventory = build_source_inventory(discovery)
     inventory_by_url: dict[str, dict[str, Any]] = {
         str(entry.get("url") or ""): entry for entry in source_inventory
     }
@@ -1241,7 +1249,7 @@ def collect_company(
                     requester=getattr(fetcher, "requester", None),
                     timeout_seconds=limits.timeout_seconds,
                     max_pages=limits.max_pages,
-                    max_requests=limits.max_pages,
+                    max_requests=(limits.max_pages + limits.max_job_links) if company.verified_ats_url else limits.max_pages,
                     enabled=detected_provider in EXPANSION_CONNECTORS,
                 ))
                 ats_snapshot.setdefault("_source_kind", "ats")
@@ -1255,9 +1263,9 @@ def collect_company(
                 and snapshots
                 and _snapshot_is_complete(snapshots[-1], source_kind="ats")
             )
-            if not ats_snapshot_complete:
+            if not ats_snapshot_complete and not (company.verified_ats_url and snapshots[-1].get("jobs")):
                 direct_page = fetcher(target_url)
-            if (not ats_snapshot_complete or direct_page is not None) and not (
+            if (not ats_snapshot_complete or direct_page is not None) and not (company.verified_ats_url and snapshots[-1].get("jobs")) and not (
                 candidates_from_rendered_discovery and direct_page is None
             ):
                 direct_text = str(getattr(direct_page, "text", "") or "") if direct_page else ""
@@ -2165,6 +2173,7 @@ def run_collection(
     state_dir: Path | None = None,
     require_existing_state: bool = False,
     company_id: str = "",
+    verified_ats_url: str = "",
     dry_run: bool = False,
     resume: bool = True,
     max_job_links: int = 25,
@@ -2192,6 +2201,11 @@ def run_collection(
     )
     if company_id:
         companies = [company for company in companies if company.canonical_company_id == company_id]
+    if verified_ats_url:
+        parsed_ats = urlsplit(verified_ats_url)
+        if not company_id or len(companies) != 1 or parsed_ats.scheme != "https" or not detect_ats_type(verified_ats_url):
+            raise ValueError("A verified HTTPS ATS target requires one exact eligible company ID.")
+        companies = [replace(companies[0], verified_ats_url=verified_ats_url)]
     selected = companies if limit <= 0 else companies[:limit]
     request_budget = max(0, int(max_requests)) if max_requests is not None else None
     accounting = RequestAccounting(max_attempts=request_budget)
