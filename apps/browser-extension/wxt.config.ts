@@ -7,7 +7,7 @@ export default defineConfig({
     name: "Runr Assisted Apply",
     description:
       "Review-first assistance for supported job applications. Runr never submits an application for you.",
-    version: "0.2.2",
+    version: "0.3.0",
     ...(browser === "chrome"
       ? {
           key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9vfcDQbZcLIkeK0Y9Ddx89ViTTdSQIOvRIprwztytepFOdyw6AZdGK9wpR3Fo47XiP+0F6OZshp4JQXXPDLWCU1VKPs6CXl7Sh8j7VrdEn9ptLHbFYRPOUjgriR3ZxM5Ad+sEMuF84lMDb8YFDHeqUFjRsit37f97sQuL+1Tl+tGv1uK2CqA3h+t6+MSWj658BVIYWRla9bwhpoGQFgLxIeh4/pbBfaXS8AvcZ9R8UQnieDg6kIqyXZd+JV62UyxagQaLaLiZAmNcKznqMwvDKMxZ24bmQ1A8VKGKFWHGw7bM46SBFQ4yisTkb/xwDbXbyHhLpddlyQULifvr3z3wwIDAQAB",
@@ -33,14 +33,21 @@ export default defineConfig({
     },
     side_panel: { default_path: "sidepanel.html" },
     permissions: ["activeTab", "identity", "scripting", "sidePanel", "storage"],
+    // Broad host access, granted at install. Application portals are
+    // overwhelmingly employer-hosted, so a curated allowlist cannot reach them
+    // and per-site prompts would fire on every new employer.
     host_permissions:
       mode === "testing"
         ? ["http://127.0.0.1/*"]
-        : ["https://runr-api.onrender.com/*", "https://www.linkedin.com/*", "https://linkedin.com/*"],
-    optional_host_permissions:
-      mode === "testing"
-        ? ["http://127.0.0.1/*"]
-        : ["https://boards.greenhouse.io/*", "https://*.lever.co/*"],
+        : [
+            "https://runr-api.onrender.com/*",
+            "https://www.linkedin.com/*",
+            "https://linkedin.com/*",
+            "https://*/*",
+          ],
+    // No optional host permissions. Application portals are reached through the
+    // broad grant above so the assistant works on any employer career site
+    // without a permission prompt per employer.
     externally_connectable: {
       matches: mode === "testing"
         ? ["http://127.0.0.1/*"]

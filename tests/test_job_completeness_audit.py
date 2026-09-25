@@ -27,6 +27,11 @@ def _complete(canonical_job_id: str, **overrides) -> dict:
         "source_job_id": canonical_job_id,
         "observed_at": "2026-09-09T00:00:00Z",
         "lifecycle_state": "active",
+        "seniority": "mid",
+        "employment_type": "full_time",
+        "workplace_arrangement": "hybrid",
+        "company_logo": "https://acme.example/logo.png",
+        "company_enrichment": "verified",
         "apply_url": "https://acme.example-careers.com/jobs/1/apply",
         "application_url": "https://acme.example-careers.com/jobs/1/apply",
         "application_destination": {

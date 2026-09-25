@@ -26,6 +26,12 @@ from backend.application.company_enrichment import (
     ScrapeOpsLinkedInCompanyProvider,
     configured_company_enrichment_provider,
 )
+from backend.integrations.companyenrich import (
+    CompanyEnrichAmbiguousTimeout,
+    CompanyEnrichProviderError,
+    CompanyEnrichProvider,
+    discover_company_enrich_credentials,
+)
 from backend.bootstrap import create_backend
 from tests.test_phase_f_company_profiles import _seed_catalog
 
@@ -143,6 +149,299 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
             ),
             ["https://www.linkedin.com/company/acme"],
         )
+
+    def test_companyenrich_credential_discovery_is_numeric_and_unbounded(self):
+        with patch.dict(
+            os.environ,
+            {
+                "Company_Enrich_API_KEY": "primary-token",
+                "Company_Enrich_API_URL_v10": "slot-ten-token",
+                "Company_Enrich_API_URL_v2": "slot-two-token",
+                "Company_Enrich_API_URL_v1": "slot-one-token",
+                "Company_Enrich_API_URL_v3": "",
+                "Company_Enrich_API_URL_v999": "slot-nine-nine-nine-token",
+                "Company_Enrich_API_URL_not_numeric": "ignored",
+            },
+            clear=False,
+        ):
+            credentials = discover_company_enrich_credentials()
+
+        self.assertEqual(
+            [credential.name for credential in credentials],
+            [
+                "Company_Enrich_API_KEY",
+                "Company_Enrich_API_URL_v1",
+                "Company_Enrich_API_URL_v2",
+                "Company_Enrich_API_URL_v10",
+                "Company_Enrich_API_URL_v999",
+            ],
+        )
+        self.assertNotIn("primary-token", repr(credentials))
+
+    def test_companyenrich_domain_fixture_maps_only_approved_identity_fields(self):
+        provider = CompanyEnrichProvider(
+            credentials=(
+                {"name": "Company_Enrich_API_KEY", "token": "fixture-token"},
+            ),
+            timeout_seconds=1,
+        )
+        response = SimpleNamespace(
+            status_code=200,
+            headers={
+                "X-Credit-Balance": "100",
+                "X-Credit-Cost": "1",
+                "X-Credit-Remaining": "99",
+                "X-Ratelimit-Limit": "300",
+                "X-Ratelimit-Remaining": "299",
+                "X-Ratelimit-Window": "00:01:00",
+            },
+            json=lambda: {
+                "id": "ce-acme",
+                "name": "Acme GmbH",
+                "domain": "acme.example",
+                "website": "https://acme.example",
+                "industry": "Software",
+                "employees": "51-200",
+                "location": {"country": {"name": "Germany"}, "city": {"name": "Berlin"}},
+                "socials": {"linkedin_url": "https://www.linkedin.com/company/acme", "linkedin_id": "123"},
+                "keywords": ["must not be persisted"],
+                "financial": {"total_funding": 999},
+            },
+        )
+
+        with patch("backend.integrations.companyenrich.requests.request", return_value=response):
+            result = asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+
+        self.assertEqual(result["extra_fields"]["companyenrich_id"], "ce-acme")
+        self.assertEqual(result["extra_fields"]["company_name"], "Acme GmbH")
+        self.assertEqual(result["fields"]["company_size"], "51-200")
+        self.assertEqual(result["fields"]["headquarters"], "Berlin, Germany")
+        self.assertEqual(result["extra_fields"]["linkedin_company_id"], "123")
+        self.assertNotIn("keywords", result["fields"])
+        self.assertNotIn("financial", result["fields"])
+        self.assertEqual(result["cost_units"], 1.0)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["credit_balance"], 100.0)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["credit_remaining"], 99.0)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["rate_limit"], 300)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["rate_remaining"], 299)
+
+    def test_companyenrich_batch_deduplicates_and_chunks_without_single_duplicates(self):
+        provider = CompanyEnrichProvider(
+            credentials=({"name": "Company_Enrich_API_KEY", "token": "fixture-token"},),
+            timeout_seconds=1,
+        )
+        domains = [f"company-{index}.example" for index in range(51)] + ["company-0.example"]
+        responses = []
+
+        def respond(method, url, **kwargs):
+            self.assertEqual(method, "POST")
+            self.assertTrue(url.endswith("/companies/enrich/batch"))
+            requested = kwargs["json"]["domains"]
+            responses.append(requested)
+            return SimpleNamespace(
+                status_code=200,
+                headers={"X-Credit-Cost": str(len(requested))},
+                json=lambda: [{"id": domain, "name": domain, "domain": domain, "website": f"https://{domain}"} for domain in requested],
+            )
+
+        with patch("backend.integrations.companyenrich.requests.request", side_effect=respond):
+            result = asyncio.run(provider.enrich_many([{"domain": domain} for domain in domains]))
+
+        self.assertEqual([len(chunk) for chunk in responses], [50, 1])
+        self.assertEqual(len(result), 51)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["credit_cost"], 51.0)
+
+    def test_companyenrich_timeout_is_not_retried_or_failed_over(self):
+        provider = CompanyEnrichProvider(
+            credentials=(
+                {"name": "Company_Enrich_API_KEY", "token": "primary-token"},
+                {"name": "Company_Enrich_API_URL_v1", "token": "secondary-token"},
+            ),
+            timeout_seconds=1,
+        )
+
+        with patch(
+            "backend.integrations.companyenrich.requests.request",
+            side_effect=__import__("requests").Timeout("ambiguous timeout"),
+        ) as request:
+            with self.assertRaises(CompanyEnrichAmbiguousTimeout):
+                asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["requests"], 1)
+        self.assertEqual(provider.accounting["Company_Enrich_API_URL_v1"]["requests"], 0)
+
+    def test_companyenrich_domain_no_match_falls_back_to_property_once(self):
+        provider = CompanyEnrichProvider(
+            credentials=({"name": "Company_Enrich_API_KEY", "token": "fixture-token"},),
+            timeout_seconds=1,
+        )
+        calls = []
+        responses = iter(
+            [
+                SimpleNamespace(status_code=404, headers={}, json=lambda: {}),
+                SimpleNamespace(
+                    status_code=200,
+                    headers={"X-Credit-Cost": "1"},
+                    json=lambda: {"id": "ce-acme", "name": "Acme", "domain": "acme.example"},
+                ),
+            ]
+        )
+
+        def respond(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return next(responses)
+
+        with patch("backend.integrations.companyenrich.requests.request", side_effect=respond):
+            result = asyncio.run(
+                provider.enrich(
+                    {"domain": "acme.example", "linkedin_company_url": "https://www.linkedin.com/company/acme"},
+                    conditional={},
+                )
+            )
+
+        self.assertEqual([call[0] for call in calls], ["GET", "POST"])
+        self.assertEqual(calls[0][2]["params"]["waitForEnrichment"], "false")
+        self.assertEqual(calls[1][2]["json"], {"linkedinUrl": "https://www.linkedin.com/company/acme"})
+        self.assertEqual(result["extra_fields"]["companyenrich_id"], "ce-acme")
+
+    def test_companyenrich_failover_uses_next_credential_for_auth_failure(self):
+        provider = CompanyEnrichProvider(
+            credentials=(
+                {"name": "Company_Enrich_API_KEY", "token": "primary-fixture-token"},
+                {"name": "Company_Enrich_API_URL_v1", "token": "secondary-fixture-token"},
+            ),
+            timeout_seconds=1,
+        )
+        responses = iter(
+            [
+                SimpleNamespace(status_code=401, headers={}, json=lambda: {}),
+                SimpleNamespace(
+                    status_code=200,
+                    headers={"X-Credit-Cost": "1"},
+                    json=lambda: {"id": "ce-acme", "name": "Acme", "domain": "acme.example"},
+                ),
+            ]
+        )
+        with patch("backend.integrations.companyenrich.requests.request", side_effect=lambda *args, **kwargs: next(responses)) as request:
+            result = asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(result["extra_fields"]["companyenrich_id"], "ce-acme")
+        self.assertEqual(provider.accounting["Company_Enrich_API_KEY"]["failures"], 1)
+        self.assertEqual(provider.accounting["Company_Enrich_API_URL_v1"]["successes"], 1)
+
+    def test_companyenrich_provider_is_selected_from_explicit_configuration(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNR_COMPANY_ENRICHMENT_PROVIDER": "companyenrich",
+                "Company_Enrich_API_KEY": "fixture-token",
+            },
+            clear=False,
+        ):
+            provider = configured_company_enrichment_provider()
+
+        self.assertIsInstance(provider, CompanyEnrichProvider)
+
+    def test_companyenrich_provider_handles_rate_payment_validation_and_upstream_errors(self):
+        for status in (402, 422, 429, 500):
+            provider = CompanyEnrichProvider(
+                credentials=({"name": "Company_Enrich_API_KEY", "token": "fixture-token"},),
+                timeout_seconds=1,
+            )
+            response = SimpleNamespace(status_code=status, headers={"Retry-After": "3"}, json=lambda: {"detail": "fixture"})
+            with patch("backend.integrations.companyenrich.requests.request", return_value=response) as request:
+                with self.assertRaises(CompanyEnrichProviderError) as raised:
+                    asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+
+            self.assertEqual(request.call_count, 1)
+            self.assertNotIn("fixture", str(raised.exception))
+
+    def test_companyenrich_provider_returns_stale_cache_after_provider_failure(self):
+        provider = CompanyEnrichProvider(
+            credentials=({"name": "Company_Enrich_API_KEY", "token": "fixture-token"},),
+            timeout_seconds=1,
+            cache_ttl_seconds=0,
+        )
+        responses = iter(
+            [
+                SimpleNamespace(
+                    status_code=200,
+                    headers={"X-Credit-Cost": "1"},
+                    json=lambda: {"id": "ce-acme", "name": "Acme", "domain": "acme.example"},
+                ),
+                SimpleNamespace(status_code=500, headers={}, json=lambda: {"detail": "fixture"}),
+            ]
+        )
+        with patch("backend.integrations.companyenrich.requests.request", side_effect=lambda *args, **kwargs: next(responses)):
+            first = asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+            second = asyncio.run(provider.enrich({"domain": "acme.example"}, conditional={}))
+
+        self.assertEqual(first["extra_fields"]["companyenrich_id"], "ce-acme")
+        self.assertEqual(second["extra_fields"]["companyenrich_id"], "ce-acme")
+        self.assertIn("stale_cache", second["source"])
+        self.assertEqual(second["cost_units"], 0.0)
+
+    def test_companyenrich_does_not_replace_existing_first_party_identity(self):
+        app, _ = self.backend()
+        app.repositories.personalized_jobs_store.upsert_company_profile(
+            "company-a",
+            {
+                "schema_version": "phase_f_v3",
+                "fields": {
+                    "companyenrich_id": {
+                        "value": "ce-first-party",
+                        "state": "known",
+                        "provenance": {"source": "first_party_registry", "url": "https://registry.example/acme"},
+                    },
+                    "domain": {
+                        "value": "first-party.example",
+                        "state": "known",
+                        "provenance": {"source": "first_party_catalog", "url": "https://first-party.example"},
+                    },
+                    "linkedin_company_url": {
+                        "value": "https://www.linkedin.com/company/first-party-acme",
+                        "state": "known",
+                        "provenance": {"source": "linkedin_company_page", "url": "https://www.linkedin.com/company/first-party-acme"},
+                    },
+                    "linkedin_company_id": {
+                        "value": "123",
+                        "state": "known",
+                        "provenance": {"source": "linkedin_company_page", "url": "https://www.linkedin.com/company/first-party-acme"},
+                    },
+                },
+            },
+        )
+
+        class ConflictingCompanyEnrichFixture:
+            async def enrich(self, company, *, conditional):
+                return {
+                    "fields": {"industry": "Software"},
+                    "extra_fields": {
+                        "companyenrich_id": "ce-lower-confidence",
+                        "domain": "lower-confidence.example",
+                        "linkedin_company_url": "https://www.linkedin.com/company/lower-confidence",
+                        "linkedin_company_id": "999",
+                        "companyenrich_lookup_method": "domain",
+                    },
+                    "source": "companyenrich:domain",
+                    "provenance_url": "https://api.companyenrich.com/companies/enrich",
+                    "request_count": 1,
+                    "cost_units": 1.0,
+                }
+
+        app._company_enrichment_service.provider = ConflictingCompanyEnrichFixture()
+        result = app.run_due_company_enrichment(provider=app._company_enrichment_service.provider, cycle_key="identity-precedence", force=True)
+
+        self.assertEqual(result["companies_succeeded"], 1)
+        profile = app.repositories.personalized_jobs_store.get_company_profile("company-a")["profile"]
+        self.assertEqual(profile["additional_fields"]["companyenrich_id"]["value"], "ce-first-party")
+        self.assertEqual(profile["additional_fields"]["domain"]["value"], "first-party.example")
+        self.assertEqual(profile["additional_fields"]["linkedin_company_url"]["value"], "https://www.linkedin.com/company/first-party-acme")
+        self.assertEqual(profile["additional_fields"]["linkedin_company_id"]["value"], "123")
+        self.assertEqual(profile["fields"]["industry"]["confidence"], "provider_verified")
+        self.assertEqual(profile["fields"]["industry"]["lookup_method"], "domain")
 
     def test_webshare_linkedin_provider_is_selected_without_scrapeops(self):
         original = os.environ.get("RUNR_COMPANY_ENRICHMENT_PROVIDER")
@@ -282,6 +581,26 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(disabled["status"], "disabled")
         self.assertEqual(provider.calls, 0)
         self.assertEqual(storage.put_calls, [])
+
+    def test_company_enrichment_dry_run_reports_without_mutating_profile_or_attempts(self):
+        app, storage = self.backend()
+        provider = FixtureProvider()
+        app._company_enrichment_service.provider = provider
+
+        result = app._company_enrichment_service.run_sync(
+            request_budget=3,
+            cycle_key="dry-run",
+            force=True,
+            dry_run=True,
+        )
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["companies_succeeded"], 1)
+        self.assertEqual(result["contract_passing_companies"][0]["company_id"], "company-a")
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(storage.put_calls, [])
+        self.assertEqual(app.list_company_enrichment_attempts(company_id="company-a"), [])
+        self.assertIsNone(app.repositories.personalized_jobs_store.get_company_profile("company-a"))
 
     def test_explicit_environment_enable_overrides_durable_disabled_config(self):
         app, _ = self.backend()

@@ -35,6 +35,8 @@ def detect_ats(url: str) -> str | None:
         return "recruitee"
     if _host_matches(host, "smartrecruiters.com"):
         return "smartrecruiters"
+    if _host_matches(host, "softgarden.io", "softgarden.de"):
+        return "softgarden"
     return None
 
 
@@ -199,6 +201,21 @@ def fetch_ats_snapshot(
 
     request = requester or requests.get
     normalized_ats = str(ats or "").strip().casefold()
+    target_ats = detect_ats(url)
+    if target_ats != normalized_ats:
+        return {
+            "jobs": [],
+            "status": "invalid_target",
+            "complete_snapshot": False,
+            "credible_evidence": False,
+            "request_url": url,
+            "reason_code": "host_policy_mismatch",
+            "host_policy": {
+                "allowed": False,
+                "target_ats": target_ats,
+                "requested_ats": normalized_ats,
+            },
+        }
     if normalized_ats == "greenhouse":
         board_token = _greenhouse_board_token(url)
         if not board_token:
@@ -363,6 +380,8 @@ def fetch_ats_snapshot(
         "complete_snapshot": False,
         "credible_evidence": False,
         "request_url": url,
+        "reason_code": "unsupported_ats",
+        "host_policy": {"allowed": True, "target_ats": target_ats},
     }
 
 

@@ -8,7 +8,7 @@ This is the primary doc of the 03-data doc group (schema, Turso/libSQL connectio
 
 There is one relational schema, and it is shared by local SQLite and remote Turso/libSQL. It is built in two layers:
 1. Base DDL, `BASE_SCHEMA_SQL` in `backend/database/schema.py` (all `CREATE … IF NOT EXISTS`).
-2. An ordered, checksum-guarded Python migration registry, `MIGRATIONS` at `backend/repositories/sqlite_migrations.py:3217-3547`. It holds 60 entries, `001`–`060`, contiguous. Despite the module name, the same registry serves libSQL.
+2. An ordered, checksum-guarded Python migration registry, `MIGRATIONS` at `backend/repositories/sqlite_migrations.py:3235-3570`. It holds 61 entries, `001`–`061`, contiguous. Despite the module name, the same registry serves libSQL.
 
 There is no ORM and no Alembic. See [turso-and-libsql.md](turso-and-libsql.md) for how the connection is chosen and [object-storage-r2.md](object-storage-r2.md) for binary objects, which live outside this schema.
 
@@ -48,7 +48,7 @@ Engine (`backend/database/migrations.py`):
 
 17 tables: `schema_migrations`, `workflow_templates`, `workspaces`, `runs`, `run_job_sets`, `run_blobs`, `artifacts`, `reviews`, `application_status_history`, `users`, `candidate_assets`, `candidate_documents`, `workspace_document_bindings`, `run_document_bindings`, `api_tokens`, `assisted_apply_connections`, `secrets`. There are also 24 indexes (L177-208).
 
-### 4.2 Migration registry 001–060
+### 4.2 Migration registry 001–061
 
 How the table was built:
 - Purpose is the registry description string.
@@ -117,6 +117,7 @@ How the table was built:
 | 058_customer_task_queue | 1886 | User-scoped durable queue for slow customer operations | C `customer_tasks` |
 | 059_company_identity_crosswalk | 3183 | Deterministic company identity crosswalks + merge receipts | C `company_identity_crosswalk`, `company_merge_receipts` |
 | 060_publication_latest_observation_index | 3172 | Accelerate latest-observation joins for publication gates | I `job_source_observations` |
+| 061_acquisition_publisher_checkpoints | 3183 | Own the durable producer-state publisher checkpoint schema (WS-3/WS-5; closes WS3-G9 ad hoc creation) | C `acquisition_publisher_checkpoints` |
 
 History at other SHAs (audit row 13; not re-run): `3c5e609a` = 054, `93099afc`/`ce3718b0` = 055, `848408f3` = 058. The last two entries were added by `d44d3c0f` (059, 2026-09-11) and `c964b208` (060, 2026-09-12).
 
@@ -152,18 +153,20 @@ Worker `backend/adapters/stage_adapters.py:141-165`/`:744` → `SqliteAnalyticsS
 - **055 is retained, append-only residue.** It was added by `12f342fb` ("feat: add read-only acquisition analytics dashboard", 2026-08-12). The admin analytics consumers were removed in `dd47acf9`, merged by `550ee00a` (RETIRED feature; see [retired-features.md](../06-history-and-provenance/retired-features.md), WS-11). The migration must stay in the registry: deleting or editing it changes nothing in migrated databases and breaks registry continuity. Removing its indexes would need a new `061_*` migration and an owner decision. Its indexes cost write amplification on high-volume acquisition tables; the size of that cost is UNKNOWN.
 - **042 `admin_job_*` tables** are admin-import state from the same era. They are still in the schema and must not be removed; whether the WS-3 code still uses them was not traced here.
 - **`analytics_events` (002) is still written.** Writers and readers as in section 5.6. The HTTP ingestion endpoint is unregistered (audit N-1; U7).
-- **C3: release head 058 vs registry head 060.**
+- **C3: release head 058 vs registry head 061.**
   - `render.yaml:76-77` (api) and `:193-194` (worker) set `RUNR_MIGRATION_HEAD=058_customer_task_queue`.
   - `backend/deployment/release_contract.py:14` defaults `DEFAULT_MIGRATION_HEAD = "058_customer_task_queue"` and reads it only into release metadata (`:135-137`).
-  - `git grep "MIGRATION_HEAD\|migration_head"` over `backend tests deploy scripts .github` finds no comparison with `MIGRATIONS[-1]` or with applied rows. **There is no gate.** The metadata under-reports the schema by two migrations (059 `company_identity_crosswalk`, 060 `publication_latest_observation_index`).
+  - `git grep "MIGRATION_HEAD\|migration_head"` over `backend tests deploy scripts .github` finds no comparison with `MIGRATIONS[-1]` or with applied rows. **There is no gate.** The metadata under-reports the schema by three migrations (059 `company_identity_crosswalk`, 060 `publication_latest_observation_index`, 061 `acquisition_publisher_checkpoints`).
   - The 058 value came from `39d15b8f` ("RC-022 separate release and runtime contracts", 2026-09-08) and was not bumped by `d44d3c0f`/`c964b208`.
+  - T30 (RUN-29) recorded the owner decision: direct release metadata must derive its default migration head from `current_migration_head()` instead of the stale 058 fallback. Note: at the T31 base revision `539c6e2a` that derivation fix is not yet present on `predeployment/render-turso-r2` (the tested T30 commit `2db8997b` is not an ancestor of the recorded integration revision `5d68ae93`); the registry tail at that revision is 061.
+  - 061 (`acquisition_publisher_checkpoints`) was appended by T31 as an add-only `CREATE TABLE IF NOT EXISTS`, so both fresh databases and databases that already carry the publisher's former ad hoc table stay checksum-safe.
 - **Checksum hazard.** Declared dependencies (for example `_table_columns`, `_ensure_table_column`, and `prepare_user_payload` from WS-4's `backend/repositories/document_payloads.py`, used by 013) are part of the checksum. Refactoring those helpers breaks startup on every migrated database. Past fixes: `81140897`, `6fd91cb2`.
 - **Startup migration vs pre-deploy ownership (WS5-S1).** Any process that constructs repositories applies pending migrations. The doc rule "worker must not run migrations" is therefore not enforced in code. A worker that deploys before the API migrates would itself migrate Turso under `BEGIN IMMEDIATE`.
 - **Registry integrity checks** (`migrations.py:69-76`): ids unique and sorted; every migration needs a checksum. Recovery: checksum mismatch aborts startup (no auto-repair); legacy rows without checksums are back-filled to `applied_unverified` rather than failing.
 
 ## 7. Tests and safe verification (not executed in Phase 2)
 
-- `tests/test_database_migrations.py`: 6 tests. Ids frozen for 001–020 only (L138); gap WS5-G1.
+- `tests/test_database_migrations.py`: 9 tests (6 pre-T31 plus publisher-checkpoint fresh-database, upgrade-path, and pre-existing-ad-hoc-table coverage added by T31). Ids frozen for 001–020 only (L138); gap WS5-G1.
 - `tests/test_sqlite_repositories.py:565`: run user-id backfill.
 - `tests/test_database_connection.py`: transaction/rollback semantics.
 
@@ -195,7 +198,7 @@ Safe verification commands, not executed in Phase 2. The migrate command must ne
 
 | Capability | Classification |
 |---|---|
-| Base schema + registry 001–060 | VERIFIED (scope: static AST enumeration of `MIGRATIONS`; ids contiguous and sorted; tail `060_publication_latest_observation_index` read at `sqlite_migrations.py:3542-3546`) |
+| Base schema + registry 001–061 | VERIFIED (scope: static AST enumeration of `MIGRATIONS`; ids contiguous and sorted; tail `061_acquisition_publisher_checkpoints` read at `sqlite_migrations.py:3565-3569`, appended by T31) |
 | Checksum guard | VERIFIED (scope: static read of `migrations.py:165-204`) |
 | Pre-deploy migration on Render api | IMPLEMENTED-UNVERIFIED (config `render.yaml:52`; no deploy observed) |
 | Migration-head release gate | UNKNOWN (absent in code; no plan cited) |

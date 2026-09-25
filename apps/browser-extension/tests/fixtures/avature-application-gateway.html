@@ -1,0 +1,67 @@
+<!doctype html>
+<!--
+  Sanitized Avature-style application-gateway fixture.
+
+  This is the login / registration-method step that sits between the posting and
+  the application form. Employer and job identifiers are fictional; no candidate
+  data appears anywhere in this file.
+
+  Detection contract: this page MUST classify as `application_gateway`. It is on
+  an application route and belongs to the application flow, but there is nothing
+  here Runr should fill, so the assistant panel must stay closed.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Applying to Automation Platform Engineer | Careers Marketplace</title>
+    <script src="/assets/avature/portal-runtime.js"></script>
+  </head>
+  <body>
+    <header>
+      <img src="/assets/logo.svg" alt="Northwind Industries" />
+      <a href="/en_US/externaljobs/Login">Login</a>
+    </header>
+
+    <main>
+      <nav aria-label="Breadcrumb">
+        <a href="/en_US/externaljobs/SearchJobs">Open jobs</a>
+        <a href="/en_US/externaljobs/JobDetail/618402">Job details</a>
+        <span aria-current="step">Application</span>
+      </nav>
+
+      <h1>Automation Platform Engineer (m/w/d)</h1>
+
+      <ol class="application-stepper">
+        <li aria-current="step">Login / Registration</li>
+        <li>Profile information</li>
+        <li>Global questions</li>
+        <li>Country questions</li>
+      </ol>
+
+      <section>
+        <h2>Already registered?</h2>
+        <form action="/en_US/externaljobs/Authenticate" method="post">
+          <label for="login-email">Email</label>
+          <input id="login-email" name="email" type="email" autocomplete="username" />
+
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" />
+
+          <button type="submit">Log in</button>
+        </form>
+        <a href="/en_US/externaljobs/CodeLogin">Log in with a code</a>
+        <a href="/en_US/externaljobs/PasswordReset">Forgot your password?</a>
+      </section>
+
+      <section>
+        <h2>Create an account using any of the following options:</h2>
+        <button type="button" id="upload-file">Upload file</button>
+        <button type="button" id="self-complete">Self-complete</button>
+        <p>
+          Hint: Generally, CV/resumes without images, graphics, or complex designs
+          ensure a better data extraction.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

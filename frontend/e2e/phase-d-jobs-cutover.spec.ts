@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test, type Page } from "playwright/test";
 
 const job = {
   canonical_job_id: "job-a",
@@ -40,10 +40,59 @@ test.beforeEach(async ({ page }) => {
   });
   await page.route("**/v1/personalized-jobs/saved-search", (route) => route.fulfill({ json: { filters: {} } }));
   await page.route("**/v1/personalized-jobs?**", (route) => route.fulfill({ json: { jobs: [{ ...job, match_intelligence: { state: "pending" } }], total: 1, evaluation: { state: "partial" }, filter_capabilities: {} } }));
-  await page.route("**/v1/personalized-jobs/job-a", (route) => route.fulfill({ json: job }));
+  const userState = { value: "none" };
+  await page.route("**/v1/personalized-jobs/job-a", (route) => route.fulfill({ json: { ...job, user_state: userState.value } }));
   await page.route("**/v1/personalized-jobs/companies/company-a", (route) => route.fulfill({ json: { name: "Acme Labs", job_count: 1, profile: { fields: {} } } }));
-  await page.route("**/v1/personalized-jobs/job-a/*", (route) => route.fulfill({ json: { state: "ok" } }));
+  await page.route("**/v1/personalized-jobs/job-a/*", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/hide")) userState.value = "hidden";
+    if (path.endsWith("/restore")) userState.value = "none";
+    if (path.endsWith("/applied")) userState.value = "applied";
+    if (path.endsWith("/save") && route.request().method() === "POST") userState.value = "saved";
+    if (path.endsWith("/save") && route.request().method() === "DELETE") userState.value = "none";
+    return route.fulfill({ json: { state: "ok" } });
+  });
 });
+
+function percentile(runs: number[], fraction: number): number | null {
+  if (!runs.length) return null;
+  const ordered = [...runs].sort((a, b) => a - b);
+  const position = Math.min(ordered.length - 1, Math.round((ordered.length - 1) * fraction));
+  return ordered[position];
+}
+
+interface UsefulRun {
+  deviceClass: string | null;
+  documentLoadMs: number | null;
+  feedRequestMs: number | null;
+  mode: string;
+  phase: string | null;
+  revision: string | null;
+  usefulMs: number | null;
+}
+
+async function collectUsefulReadiness(page: Page, runs = 5): Promise<UsefulRun[]> {
+  const collected: UsefulRun[] = [];
+  for (let index = 0; index < runs; index += 1) {
+    await page.goto("/jobs", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => performance.getEntriesByName("runr-jobs:useful-render", "mark").length > 0, undefined, { timeout: 15000 });
+    collected.push(await page.evaluate((mode: string) => {
+      const mark = performance.getEntriesByName("runr-jobs:useful-render", "mark").pop();
+      const detail = (mark as PerformanceMark & { detail?: Record<string, unknown> })?.detail || {};
+      const navigation = performance.getEntriesByType("navigation")[0];
+      return {
+        phase: String(detail.phase || "useful-render"),
+        deviceClass: detail.deviceClass === undefined ? null : String(detail.deviceClass),
+        mode,
+        revision: detail.revision === undefined ? null : String(detail.revision),
+        usefulMs: mark ? Math.round(mark.startTime) : null,
+        feedRequestMs: detail.durationMs === undefined && detail.feedRequestMs === undefined ? null : Number(detail.feedRequestMs ?? detail.durationMs),
+        documentLoadMs: navigation?.loadEventEnd || null,
+      };
+    }, index === 0 ? "cold" : "warm"));
+  }
+  return collected;
+}
 
 test("Jobs production cutover is responsive, keyboard-accessible, truthful, and read-only for acquisition", async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -82,7 +131,7 @@ test("Jobs production cutover is responsive, keyboard-accessible, truthful, and 
   await page.getByRole("button", { name: "Company" }).click();
   await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
   await page.getByRole("button", { name: "Overview" }).click();
-  await page.getByRole("button", { name: "Full job posting" }).click();
+  await page.getByRole("button", { name: "Employer job description" }).click();
   await expect(page.getByText("Original Posting")).toBeVisible();
 
   const performance = await page.evaluate(() => {
@@ -91,6 +140,21 @@ test("Jobs production cutover is responsive, keyboard-accessible, truthful, and 
   });
   console.log(`jobs-production-performance ${JSON.stringify(performance)}`);
   await testInfo.attach("jobs-production-performance.json", { body: JSON.stringify(performance, null, 2), contentType: "application/json" });
+
+  // Useful Jobs readiness percentiles (p50/p75/p95): time to the first
+  // verified card page, truthful empty state, or retryable failure state —
+  // measured per reload, not document `load` alone. The current browser
+  // project (desktop-chromium or mobile-chromium) labels the device class.
+  const usefulRuns = await collectUsefulReadiness(page);
+  const usefulTimes = usefulRuns.map((run) => run.usefulMs).filter((value): value is number => value !== null);
+  const usefulReadiness = {
+    project: testInfo.project.name,
+    runs: usefulRuns,
+    usefulReadinessMs: { p50: percentile(usefulTimes, 0.5), p75: percentile(usefulTimes, 0.75), p95: percentile(usefulTimes, 0.95), samples: usefulTimes.length },
+  };
+  console.log(`jobs-useful-readiness ${JSON.stringify(usefulReadiness)}`);
+  await testInfo.attach("jobs-useful-readiness.json", { body: JSON.stringify(usefulReadiness, null, 2), contentType: "application/json" });
+  expect(usefulReadiness.usefulReadinessMs.p95).toBeLessThan(5000);
 
   for (const width of [375, 1366, 1920]) {
     await page.setViewportSize({ width, height: width === 375 ? 844 : 1000 });

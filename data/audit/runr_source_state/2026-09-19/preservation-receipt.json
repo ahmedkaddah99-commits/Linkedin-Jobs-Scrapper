@@ -1,0 +1,195 @@
+{
+  "assets": [
+    {
+      "bytes": 3479191552,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/linkedin/master_linkedin_jobs_state.db",
+      "logical_role": "linkedin_producer_state",
+      "off_host": {
+        "bytes": 3479191552,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/linkedin/master_linkedin_jobs_state.db",
+        "sha256": "adc5c1ab7ac5b7bdca67cdabd7687fdd29913afae188fab2aba4377a41327525",
+        "status": "uploaded"
+      },
+      "relative_path": "linkedin/master_linkedin_jobs_state.db",
+      "retention_class": "producer_state",
+      "sha256": "adc5c1ab7ac5b7bdca67cdabd7687fdd29913afae188fab2aba4377a41327525"
+    },
+    {
+      "bytes": 775613386,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/linkedin/master_linkedin_jobs.csv",
+      "logical_role": "linkedin_export",
+      "off_host": {
+        "bytes": 775613386,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/linkedin/master_linkedin_jobs.csv",
+        "sha256": "5db2eb21032cc9d6ff8bb837a71e58d6e7e4e1bef827ce8c5429367377292033",
+        "status": "uploaded"
+      },
+      "relative_path": "linkedin/master_linkedin_jobs.csv",
+      "retention_class": "export",
+      "sha256": "5db2eb21032cc9d6ff8bb837a71e58d6e7e4e1bef827ce8c5429367377292033"
+    },
+    {
+      "bytes": 83841024,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs_state.db",
+      "logical_role": "employer_producer_state",
+      "off_host": {
+        "bytes": 83841024,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs_state.db",
+        "sha256": "4f779500c9cd5fb66342cb36bd2fd236cefb9b9eebb3caf13876fca8b1265aaf",
+        "status": "uploaded"
+      },
+      "relative_path": "employer/master_employer_jobs_state.db",
+      "retention_class": "producer_state",
+      "sha256": "4f779500c9cd5fb66342cb36bd2fd236cefb9b9eebb3caf13876fca8b1265aaf"
+    },
+    {
+      "bytes": 38097370,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs.csv",
+      "logical_role": "employer_export",
+      "off_host": {
+        "bytes": 38097370,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs.csv",
+        "sha256": "49bef439521161f0d251dd3e331a4ccb615dd354214b0559baf0e59d8ec16790",
+        "status": "uploaded"
+      },
+      "relative_path": "employer/master_employer_jobs.csv",
+      "retention_class": "export",
+      "sha256": "49bef439521161f0d251dd3e331a4ccb615dd354214b0559baf0e59d8ec16790"
+    },
+    {
+      "bytes": 40036727,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs.jsonl",
+      "logical_role": "employer_export",
+      "off_host": {
+        "bytes": 40036727,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs.jsonl",
+        "sha256": "c22d44216006b5b6f4e9fd1115057694e81cb4df9f096a8f3db6ab7027da7811",
+        "status": "uploaded"
+      },
+      "relative_path": "employer/master_employer_jobs.jsonl",
+      "retention_class": "export",
+      "sha256": "c22d44216006b5b6f4e9fd1115057694e81cb4df9f096a8f3db6ab7027da7811"
+    },
+    {
+      "bytes": 456,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs_metrics.json",
+      "logical_role": "employer_export_metrics",
+      "off_host": {
+        "bytes": 456,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/master_employer_jobs_metrics.json",
+        "sha256": "faf48365397ff8d65f95e242d1f6ec11f578204711608855b37c79f46d8f5715",
+        "status": "uploaded"
+      },
+      "relative_path": "employer/master_employer_jobs_metrics.json",
+      "retention_class": "export",
+      "sha256": "faf48365397ff8d65f95e242d1f6ec11f578204711608855b37c79f46d8f5715"
+    },
+    {
+      "bytes": 2377,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/checkpoint.json",
+      "logical_role": "employer_checkpoint_record",
+      "off_host": {
+        "bytes": 2377,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/employer/checkpoint.json",
+        "sha256": "aa452da6dc1f8e5abdc26e3332f28f9fee8273217f6b1fed9e41a749bd719df1",
+        "status": "uploaded"
+      },
+      "relative_path": "employer/checkpoint.json",
+      "retention_class": "historical_record",
+      "sha256": "aa452da6dc1f8e5abdc26e3332f28f9fee8273217f6b1fed9e41a749bd719df1"
+    },
+    {
+      "bytes": 413691904,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/linkedin_id_resolution.sqlite3",
+      "logical_role": "company_identity_enrichment_state",
+      "off_host": {
+        "bytes": 413691904,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/linkedin_id_resolution.sqlite3",
+        "sha256": "4da05480f291dbdf47c4bbd7988d1da8b79206cb2310332f3f5a32dfba627f2e",
+        "status": "uploaded"
+      },
+      "relative_path": "company/linkedin_id_resolution.sqlite3",
+      "retention_class": "producer_state",
+      "sha256": "4da05480f291dbdf47c4bbd7988d1da8b79206cb2310332f3f5a32dfba627f2e"
+    },
+    {
+      "bytes": 18807044,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_sources_linkedin_ids.csv",
+      "logical_role": "company_source_input",
+      "off_host": {
+        "bytes": 18807044,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_sources_linkedin_ids.csv",
+        "sha256": "b8b8512c0669cf57754a2783ed3e9e9b341fa4a0b7abcd3db9a7cfc91cd3dce0",
+        "status": "uploaded"
+      },
+      "relative_path": "company/company_sources_linkedin_ids.csv",
+      "retention_class": "producer_input",
+      "sha256": "b8b8512c0669cf57754a2783ed3e9e9b341fa4a0b7abcd3db9a7cfc91cd3dce0"
+    },
+    {
+      "bytes": 11968530,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_registry_canonical.csv",
+      "logical_role": "company_registry",
+      "off_host": {
+        "bytes": 11968530,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_registry_canonical.csv",
+        "sha256": "dede5fd5052ec8cc85886344c66c1761d818fc686e437670e8b5ac1636914f87",
+        "status": "uploaded"
+      },
+      "relative_path": "company/company_registry_canonical.csv",
+      "retention_class": "producer_input",
+      "sha256": "dede5fd5052ec8cc85886344c66c1761d818fc686e437670e8b5ac1636914f87"
+    },
+    {
+      "bytes": 17482721,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_master.csv",
+      "logical_role": "company_master",
+      "off_host": {
+        "bytes": 17482721,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/company/company_master.csv",
+        "sha256": "f54bb4bf8de3aaeb7c37ac9b3238e403cf998b32a6e8efc9bc0f8c6b7dd6c6f5",
+        "status": "uploaded"
+      },
+      "relative_path": "company/company_master.csv",
+      "retention_class": "producer_input",
+      "sha256": "f54bb4bf8de3aaeb7c37ac9b3238e403cf998b32a6e8efc9bc0f8c6b7dd6c6f5"
+    },
+    {
+      "bytes": 36440939,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/code/runr-producer-code-and-history.bundle",
+      "logical_role": "collector_code_history",
+      "off_host": {
+        "bytes": 36440939,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/code/runr-producer-code-and-history.bundle",
+        "sha256": "05138fd61556fa995a0c550e0f27a3f8eb0c6e583f4aa0ca92c2611514726e36",
+        "status": "uploaded"
+      },
+      "relative_path": "code/runr-producer-code-and-history.bundle",
+      "retention_class": "code_history",
+      "sha256": "05138fd61556fa995a0c550e0f27a3f8eb0c6e583f4aa0ca92c2611514726e36"
+    },
+    {
+      "bytes": 6476,
+      "key": "runr/acquisition/checkpoints/recovery/2026-09-19/RECOVERY_MANIFEST.md",
+      "logical_role": "recovery_evidence",
+      "off_host": {
+        "bytes": 6476,
+        "key": "runr/acquisition/checkpoints/recovery/2026-09-19/RECOVERY_MANIFEST.md",
+        "sha256": "a84da59a044b6d0ccc3b05665b7c56ad5cd941a3c24f4552cc8e0db5f580612c",
+        "status": "uploaded"
+      },
+      "relative_path": "RECOVERY_MANIFEST.md",
+      "retention_class": "historical_record",
+      "sha256": "a84da59a044b6d0ccc3b05665b7c56ad5cd941a3c24f4552cc8e0db5f580612c"
+    }
+  ],
+  "manifest_is_commit_record": true,
+  "publication_order": [
+    "assets",
+    "set_receipt"
+  ],
+  "published_at": "2026-09-19T20:17:55.164104Z",
+  "recovery_id": "2026-09-19",
+  "remote_prefix": "runr/acquisition/checkpoints",
+  "schema_version": "runr.acquisition.preservation-receipt.v1"
+}

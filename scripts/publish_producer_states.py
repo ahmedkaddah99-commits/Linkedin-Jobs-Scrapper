@@ -9,14 +9,18 @@ company as an independent target, and creates one explicit v2 publication.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Iterable, Iterator, Mapping
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic, sleep
 from urllib.parse import urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +31,7 @@ from backend.acquisition.producer_adapters import (
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
     UNKNOWN,
+    _observation_to_ingest_job,
     adapt_employer_job,
     adapt_linkedin_job,
     empty_observation_batch,
@@ -40,11 +45,288 @@ from backend.application.source_eligibility_manifest import (
 from backend.application.company_identity_canonicalization import (
     resolve_company_id as resolve_company_identity,
 )
+from backend.acquisition.job_publication_completeness import validate_job_for_publication
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
 COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRMED", "SATURATED_RECOVERED"})
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
+RUNTIME_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
+REGISTERED_PUBLICATION_POLICY_VERSIONS = frozenset({"publication_policy_v1", "publication_policy_v2"})
+PUBLICATION_POLICY_VERSION_ENV = "RUNR_PUBLICATION_POLICY_VERSION"
+APPROVED_PUBLICATION_POLICIES_ENV = "RUNR_APPROVED_PUBLICATION_POLICIES"
+
+TELEMETRY_SCHEMA_VERSION = "runr.producer.telemetry.v1"
+TELEMETRY_SOURCE_KEYS = frozenset(
+    {
+        "checkpoint_age_seconds",
+        "stale_checkpoint",
+        "publish_lag_seconds",
+        "last_cycle_id",
+        "last_publication_id",
+    }
+)
+DEFAULT_STALE_CHECKPOINT_SECONDS = 86400
+_SENIORITY_IN_TITLE = re.compile(
+    r"\b(senior|sr\.?|lead|principal|staff|junior|jr\.?|entry.level|intern|trainee|"
+    r"berufseinsteiger|werkstudent|praktikant|teamleit[eu]ng)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_WORKPLACE = re.compile(r"\b(remote|hybrid|on[- ]site|onsite|vor\s+ort)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class BackfillControls:
+    """Operator limits for one bounded producer-state backfill attempt."""
+
+    batch_size: int = 250
+    max_companies: int | None = None
+    rate_per_second: float = 0.0
+    timeout_seconds: float | None = None
+    max_failures: int = 0
+    dry_run: bool = False
+
+    def __post_init__(self) -> None:
+        if not 1 <= int(self.batch_size) <= 1000:
+            raise ValueError("batch_size must be between 1 and 1000")
+        if self.max_companies is not None and int(self.max_companies) < 1:
+            raise ValueError("max_companies must be positive")
+        if float(self.rate_per_second) < 0:
+            raise ValueError("rate_per_second must be non-negative")
+        if self.timeout_seconds is not None and float(self.timeout_seconds) <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if int(self.max_failures) < 0:
+            raise ValueError("max_failures must be non-negative")
+
+    @property
+    def limits(self) -> dict[str, int | float | None]:
+        return {
+            "batch_size": int(self.batch_size),
+            "max_companies": int(self.max_companies) if self.max_companies is not None else None,
+            "rate_per_second": float(self.rate_per_second),
+            "timeout_seconds": float(self.timeout_seconds) if self.timeout_seconds is not None else None,
+            "max_failures": int(self.max_failures),
+        }
+
+
+def _default_backfill_controls(*, dry_run: bool = False) -> BackfillControls:
+    def env_int(name: str, default: int) -> int:
+        raw = os.getenv(name, str(default)).strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    def env_float(name: str, default: float | None) -> float | None:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    return BackfillControls(
+        batch_size=env_int("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", 250),
+        rate_per_second=env_float("RUNR_PUBLISHER_RATE_PER_SECOND", 0.0) or 0.0,
+        timeout_seconds=env_float("RUNR_PUBLISHER_TIMEOUT_SECONDS", None),
+        max_failures=env_int("RUNR_PUBLISHER_MAX_FAILURES", 0),
+        dry_run=dry_run,
+    )
+
+
+def _receipt(
+    controls: BackfillControls,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    status: str,
+    failures: int = 0,
+    stop_reason: str = "",
+    eligibility: Mapping[str, int] | None = None,
+) -> dict[str, object]:
+    finished_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    result: dict[str, object] = {
+        "schema_version": "runr.producer.backfill-receipt.v1",
+        "dry_run": bool(controls.dry_run),
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": round(max(0.0, monotonic() - started_monotonic), 3),
+        "limits": controls.limits,
+        "failures": int(failures),
+        "stop_reason": stop_reason,
+        "resume": True,
+    }
+    if eligibility is not None:
+        result["eligibility"] = {
+            "eligible": int(eligibility.get("eligible") or 0),
+            "ineligible": int(eligibility.get("ineligible") or 0),
+        }
+    return result
+
+
+def _with_receipt(
+    result: dict[str, object],
+    controls: BackfillControls,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    failures: int = 0,
+    stop_reason: str = "",
+    eligibility: Mapping[str, int] | None = None,
+) -> dict[str, object]:
+    result["limits"] = controls.limits
+    result["failures"] = int(failures)
+    if stop_reason:
+        result["stop_reason"] = stop_reason
+    result["receipt"] = _receipt(
+        controls,
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        status=str(result.get("status") or "unknown"),
+        failures=failures,
+        stop_reason=stop_reason,
+        eligibility=eligibility,
+    )
+    return result
+
+
+def _preview_eligibility(
+    source_specs: Iterable[tuple[str, Mapping[str, Mapping[str, object]], Mapping[str, list[Mapping[str, object]]]]],
+    *,
+    cycle_id: str,
+    max_companies: int | None = None,
+) -> dict[str, int]:
+    """Classify source rows without opening or mutating the acquisition store."""
+
+    company_ids = {
+        company_id
+        for _source, companies, _groups in source_specs
+        for company_id in companies
+    }
+    eligible = 0
+    ineligible = 0
+    companies_seen = 0
+    for source, companies, groups in source_specs:
+        for company_id in companies:
+            if max_companies is not None and companies_seen >= max_companies:
+                return {"eligible": eligible, "ineligible": ineligible}
+            companies_seen += 1
+            for row in groups.get(company_id, []):
+                observation = (
+                    adapt_linkedin_job(row, cycle_id=cycle_id, scan_id=_text(row.get("company_scan_id")))
+                    if source == SOURCE_LINKEDIN
+                    else adapt_employer_job(row, cycle_id=cycle_id)
+                )
+                candidate = dict(observation.normalized_mapping)
+                candidate.update(_observation_to_ingest_job(observation))
+                result = validate_job_for_publication(
+                    candidate,
+                    company_registry=company_ids,
+                    require_application_destination=True,
+                )
+                if result.publishable:
+                    eligible += 1
+                else:
+                    ineligible += 1
+    return {"eligible": eligible, "ineligible": ineligible}
+def resolve_runtime_publication_policy(
+    requested_version: str | None = None,
+    *,
+    approved_versions: Iterable[str] = (),
+    rollback_to: str | None = None,
+) -> str:
+    """Resolve an explicit policy flag without implicitly relaxing publication."""
+
+    if requested_version and rollback_to:
+        raise ValueError("Choose a policy version or rollback target, not both.")
+    approved = {
+        item.strip()
+        for item in os.getenv(APPROVED_PUBLICATION_POLICIES_ENV, "").split(",")
+        if item.strip()
+    }
+    approved.update(str(item).strip() for item in approved_versions if str(item).strip())
+    requested = str(
+        rollback_to
+        or requested_version
+        or os.getenv(PUBLICATION_POLICY_VERSION_ENV, "")
+        or RUNTIME_PUBLICATION_POLICY_VERSION
+    ).strip()
+    if requested not in REGISTERED_PUBLICATION_POLICY_VERSIONS:
+        raise ValueError(f"Unknown publication policy: {requested}")
+    if requested != RUNTIME_PUBLICATION_POLICY_VERSION and requested not in approved and not rollback_to:
+        raise ValueError(
+            f"Publication policy {requested} requires owner approval or an explicit rollback target."
+        )
+    return requested
+
+
+def _resource_peaks() -> dict[str, float | int | None]:
+    peaks: dict[str, float | int | None] = {"max_rss_bytes": None, "cpu_seconds": None}
+    try:
+        import resource
+    except ImportError:
+        return peaks
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    if usage.ru_maxrss:
+        peaks["max_rss_bytes"] = int(usage.ru_maxrss) * 1024
+    peaks["cpu_seconds"] = round(float(usage.ru_utime) + float(usage.ru_stime), 3)
+    return peaks
+
+
+def _stale_checkpoint_seconds() -> int:
+    raw = os.getenv("RUNR_TELEMETRY_STALE_CHECKPOINT_SECONDS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return DEFAULT_STALE_CHECKPOINT_SECONDS
+        if value > 0:
+            return value
+    return DEFAULT_STALE_CHECKPOINT_SECONDS
+
+
+def _checkpoint_age_seconds(checkpoint: Mapping[str, object], now: str) -> float | None:
+    stamp = _text(checkpoint.get("updated_at"))
+    if not stamp:
+        return None
+    try:
+        updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        reference = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return max(0.0, (reference - updated).total_seconds())
+
+
+def _publisher_telemetry(
+    checkpoints: Mapping[str, Mapping[str, object]], now: str
+) -> dict[str, object]:
+    threshold = _stale_checkpoint_seconds()
+    sources: dict[str, object] = {}
+    for source, checkpoint in sorted(checkpoints.items()):
+        age = _checkpoint_age_seconds(checkpoint, now)
+        sources[source] = {
+            "checkpoint_age_seconds": round(age, 3) if age is not None else None,
+            "stale_checkpoint": age is None or age > threshold,
+            "publish_lag_seconds": (
+                round(age, 3)
+                if age is not None and bool(checkpoint.get("bootstrap_complete"))
+                else None
+            ),
+            "last_cycle_id": _text(checkpoint.get("last_cycle_id")),
+            "last_publication_id": _text(checkpoint.get("last_publication_id")),
+        }
+    return {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "stale_checkpoint_seconds": threshold,
+        "sources": sources,
+        "resource_peaks": _resource_peaks(),
+    }
 
 
 def _text(value: object) -> str:
@@ -87,86 +369,147 @@ def read_incremental_rows(
 
 
 def _ensure_publisher_checkpoint_table(store: SqliteAcquisitionStore) -> None:
-    def create(connection):
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS acquisition_publisher_checkpoints (
-                source TEXT PRIMARY KEY,
-                source_rowid INTEGER NOT NULL DEFAULT 0,
-                source_watermark TEXT NOT NULL DEFAULT '',
-                bootstrap_complete INTEGER NOT NULL DEFAULT 0,
-                last_cycle_id TEXT NOT NULL DEFAULT '',
-                last_publication_id TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
-            )"""
-        )
+    """Explicit preflight: the checkpoint schema is owned by migration
+    ``061_acquisition_publisher_checkpoints`` in the WS-5 registry, so this
+    fails fast instead of creating the table ad hoc."""
 
-    store._run_transaction(create)
+    store.require_publisher_checkpoint_table()
 
 
-def _publisher_checkpoint(store: SqliteAcquisitionStore, source: str) -> dict[str, object]:
-    def read(connection):
-        row = connection.execute(
-            "SELECT source,source_rowid,source_watermark,bootstrap_complete,last_cycle_id,last_publication_id,updated_at FROM acquisition_publisher_checkpoints WHERE source=?",
-            (source,),
-        ).fetchone()
-        if row is None:
-            return {
-                "source": source,
-                "source_rowid": 0,
-                "source_watermark": "",
-                "bootstrap_complete": False,
-                "last_cycle_id": "",
-                "last_publication_id": "",
-                "updated_at": "",
-            }
-        return {
-            "source": _text(row["source"]),
-            "source_rowid": int(row["source_rowid"] or 0),
-            "source_watermark": _text(row["source_watermark"]),
-            "bootstrap_complete": bool(int(row["bootstrap_complete"] or 0)),
-            "last_cycle_id": _text(row["last_cycle_id"]),
-            "last_publication_id": _text(row["last_publication_id"]),
-            "updated_at": _text(row["updated_at"]),
-        }
-
-    return store._run_transaction(read)
-
-
-def _save_publisher_checkpoint(
+def _crosswalk_already_applied(
     store: SqliteAcquisitionStore,
-    checkpoint: Mapping[str, object],
     *,
-    cycle_id: str,
-    publication_id: str,
-) -> None:
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    values = (
-        _text(checkpoint.get("source")),
-        int(checkpoint.get("source_rowid") or 0),
-        _text(checkpoint.get("source_watermark")),
-        int(bool(checkpoint.get("bootstrap_complete"))),
-        str(cycle_id),
-        str(publication_id),
-        now,
-    )
+    mapping: Mapping[str, str],
+    document: Mapping[str, object],
+) -> bool:
+    """Check the stored registry before repeating its expensive merge."""
 
-    def write(connection):
-        connection.execute(
-            """INSERT INTO acquisition_publisher_checkpoints(
-                source,source_rowid,source_watermark,bootstrap_complete,
-                last_cycle_id,last_publication_id,updated_at
-            ) VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(source) DO UPDATE SET
-                source_rowid=excluded.source_rowid,
-                source_watermark=excluded.source_watermark,
-                bootstrap_complete=excluded.bootstrap_complete,
-                last_cycle_id=excluded.last_cycle_id,
-                last_publication_id=excluded.last_publication_id,
-                updated_at=excluded.updated_at""",
-            values,
-        )
+    registry_sha = _text(document.get("registry_sha256"))
+    if not registry_sha or not mapping:
+        return False
+    report = document.get("report")
+    report = report if isinstance(report, Mapping) else {}
+    canonical_ids = {
+        _text(row.get("canonical_CompanyID") or row.get("canonical_company_id"))
+        for row in (report.get("canonical_rows") or [])
+        if isinstance(row, Mapping)
+    }
+    canonical_ids.discard("")
 
-    store._run_transaction(write)
+    def check(connection: sqlite3.Connection) -> bool:
+        stored = {
+            _text(row[0]): _text(row[1])
+            for row in connection.execute(
+                "SELECT source_identity_key, winner_company_id, provenance_json FROM company_identity_crosswalk"
+            )
+            if _decode(row[2], {}).get("registry_sha256") == registry_sha
+        }
+        if any(stored.get(key) != value for key, value in mapping.items()):
+            return False
+        if canonical_ids:
+            present = {
+                _text(row[0])
+                for row in connection.execute("SELECT company_id FROM canonical_companies")
+            }
+            if not canonical_ids.issubset(present):
+                return False
+        return True
+
+    return bool(store._run_transaction(check))
+
+
+def _verified_company_registry(manifest_path: Path) -> tuple[dict[str, dict[str, str]], str]:
+    """Load recently verified company facts beside the reviewed source manifest."""
+
+    path = Path(os.getenv("RUNR_PUBLISHER_COMPANY_REGISTRY") or manifest_path.with_name("company_registry_canonical.csv"))
+    if not path.is_file():
+        return {}, ""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    current_time = datetime.now(timezone.utc)
+    cutoff = current_time - timedelta(days=90)
+    verified: dict[str, dict[str, str]] = {}
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            company_id = _text(row.get("canonical_CompanyID"))
+            logo = _text(row.get("logo_url"))
+            try:
+                logo_url = urlsplit(logo)
+            except ValueError:
+                continue
+            if (
+                not company_id
+                or _text(row.get("enrichment_status")) != "succeeded"
+                or logo_url.scheme != "https"
+                or not logo_url.hostname
+            ):
+                continue
+            try:
+                enriched_at = datetime.fromisoformat(_text(row.get("last_enriched_at")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if enriched_at.tzinfo is None or not cutoff <= enriched_at <= current_time:
+                continue
+            facts = {
+                key: _text(row.get(key))
+                for key in ("industry", "description", "employee_count", "headquarters_display", "website_url")
+                if _text(row.get(key))
+            }
+            if facts:
+                verified[company_id] = {"logo_url": logo, "last_enriched_at": enriched_at.isoformat(), **facts}
+    return verified, digest
+
+
+def _explicit_workplace(value: str) -> str:
+    match = _EXPLICIT_WORKPLACE.search(value)
+    if match is None:
+        return ""
+    nearby = value[max(0, match.start() - 25):match.start()].casefold()
+    if re.search(r"\b(no|not|kein(?:e|en)?|nicht|without)\s+(?:\w+\s+){0,2}$", nearby):
+        return ""
+    return match.group(0)
+
+
+def _enrich_source_groups(
+    groups: Mapping[str, list[dict[str, object]]],
+    *,
+    verified_companies: Mapping[str, Mapping[str, str]],
+    registry_sha256: str,
+) -> dict[str, list[dict[str, object]]]:
+    enriched: dict[str, list[dict[str, object]]] = {}
+    for company_id, rows in groups.items():
+        company = verified_companies.get(company_id)
+        enriched_rows: list[dict[str, object]] = []
+        for original in rows:
+            row = dict(original)
+            evidence: dict[str, object] = {}
+            if company:
+                if not _text(row.get("company_logo") or row.get("logo_url")):
+                    row["company_logo"] = company["logo_url"]
+                if not row.get("company_enrichment"):
+                    row["company_enrichment"] = {
+                        "source": "verified_company_registry",
+                        "registry_sha256": registry_sha256,
+                        "verified_at": company["last_enriched_at"],
+                        "fields": {key: value for key, value in company.items() if key not in {"logo_url", "last_enriched_at"}},
+                    }
+                evidence["company_registry_sha256"] = registry_sha256
+            if not _text(row.get("seniority") or row.get("experience_level")):
+                match = _SENIORITY_IN_TITLE.search(_text(row.get("job_title") or row.get("title")))
+                if match:
+                    row["seniority"] = match.group(0)
+                    evidence["seniority_source"] = "explicit_job_title"
+            if not _text(row.get("workplace_type") or row.get("workplace_arrangement")):
+                for field in ("job_title", "title", "location", "location_raw", "description_text", "description"):
+                    value = _explicit_workplace(_text(row.get(field)))
+                    if value:
+                        row["workplace_type"] = value
+                        evidence["workplace_source"] = f"explicit_{field}"
+                        break
+            if evidence:
+                row["publication_enrichment_evidence"] = evidence
+            enriched_rows.append(row)
+        enriched[company_id] = enriched_rows
+    return enriched
 
 
 def _row_value(row: Mapping[str, object], key: str) -> object:
@@ -521,7 +864,12 @@ def _iter_employer_groups(
     yield from grouped.items()
 
 
-def _target(company: Mapping[str, object], source: str) -> dict[str, object]:
+def _target(
+    company: Mapping[str, object],
+    source: str,
+    *,
+    policy_version: str = "publication_policy_v1",
+) -> dict[str, object]:
     company_id = _text(company.get("canonical_company_id"))
     company_name = _text(company.get("canonical_company_name") or company.get("company_name")) or company_id
     source_label = "linkedin" if source == SOURCE_LINKEDIN else "employer"
@@ -539,7 +887,7 @@ def _target(company: Mapping[str, object], source: str) -> dict[str, object]:
         "connector": f"producer_{source_label}",
         "provider": source_label,
         "source_token": company_id,
-        "policy_version": "publication_policy_v1",
+        "policy_version": policy_version,
         "maturity_state": "proven",
         "enabled": True,
         "publication_enabled": True,
@@ -853,11 +1201,22 @@ def run_delivery(
     skip_status_only: bool = False,
     identity_crosswalk: Mapping[str, str] | None = None,
     identity_crosswalk_document: Mapping[str, object] | None = None,
+    controls: BackfillControls | None = None,
+    publication_policy: str | None = None,
+    rollback_policy: str | None = None,
 ) -> dict[str, object]:
     """Incrementally publish source changes without replaying whole catalogs."""
 
+    controls = controls or _default_backfill_controls()
+    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    started_monotonic = monotonic()
+    policy_version = resolve_runtime_publication_policy(
+        publication_policy,
+        rollback_to=rollback_policy,
+    )
     manifest = load_manifest(manifest_path)
     crosswalk = dict(identity_crosswalk or {})
+    verified_companies, company_registry_sha256 = _verified_company_registry(manifest_path)
     linkedin_companies = _manifest_companies(manifest, SOURCE_LINKEDIN, pilot_only=pilot_only, crosswalk=crosswalk)
     employer_companies = _manifest_companies(manifest, SOURCE_EMPLOYER, pilot_only=pilot_only, crosswalk=crosswalk)
     requested = {value.strip() for value in (company_ids or ()) if value.strip()}
@@ -865,22 +1224,27 @@ def run_delivery(
         linkedin_companies = {key: value for key, value in linkedin_companies.items() if key in requested}
         employer_companies = {key: value for key, value in employer_companies.items() if key in requested}
 
-    store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
-    _ensure_publisher_checkpoint_table(store)
+    store: SqliteAcquisitionStore | None = None
+    if not controls.dry_run:
+        store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+        _ensure_publisher_checkpoint_table(store)
     crosswalk_result: dict[str, object] = {}
-    if identity_crosswalk_document:
+    if identity_crosswalk_document and store is not None:
         crosswalk_report = identity_crosswalk_document.get("report")
         crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
-        crosswalk_result = store.apply_company_identity_crosswalk(
-            mapping_by_identity=crosswalk,
-            merge_receipts=crosswalk_report.get("merge_receipts") or [],
-            canonical_rows=crosswalk_report.get("canonical_rows") or [],
-            provenance={
-                "actor": "producer_state_publisher",
-                "schema_version": _text(identity_crosswalk_document.get("schema_version")),
-                "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256")),
-            },
-        )
+        if _crosswalk_already_applied(store, mapping=crosswalk, document=identity_crosswalk_document):
+            crosswalk_result = {"status": "already_applied", "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256"))}
+        else:
+            crosswalk_result = store.apply_company_identity_crosswalk(
+                mapping_by_identity=crosswalk,
+                merge_receipts=crosswalk_report.get("merge_receipts") or [],
+                canonical_rows=crosswalk_report.get("canonical_rows") or [],
+                provenance={
+                    "actor": "producer_state_publisher",
+                    "schema_version": _text(identity_crosswalk_document.get("schema_version")),
+                    "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256")),
+                },
+            )
 
     linkedin_org_to_canonical = {
         _text(source_company_id): company_id
@@ -888,10 +1252,20 @@ def run_delivery(
         for source_company_id in (company.get("linkedin_company_ids") or ())
         if _text(source_company_id)
     }
-    linkedin_checkpoint = _publisher_checkpoint(store, SOURCE_LINKEDIN)
-    employer_checkpoint = _publisher_checkpoint(store, SOURCE_EMPLOYER)
+    empty_checkpoint = {
+        "source_rowid": 0,
+        "source_watermark": "",
+        "bootstrap_complete": False,
+        "last_cycle_id": "",
+        "last_publication_id": "",
+    }
+    linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN) if store is not None else dict(empty_checkpoint)
+    employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER) if store is not None else dict(empty_checkpoint)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    batch_size = max(25, min(1000, int(os.getenv("RUNR_PUBLISHER_SOURCE_ROW_BATCH_SIZE", "250"))))
+    batch_size = controls.batch_size
+    telemetry = _publisher_telemetry(
+        {SOURCE_LINKEDIN: linkedin_checkpoint, SOURCE_EMPLOYER: employer_checkpoint}, now
+    )
     li_connection = _read_only_connection(linkedin_state)
     employer_connection = _read_only_connection(employer_state)
     try:
@@ -914,6 +1288,16 @@ def run_delivery(
             crosswalk=crosswalk,
             batch_size=batch_size,
             now=now,
+        )
+        linkedin_groups = _enrich_source_groups(
+            linkedin_groups,
+            verified_companies=verified_companies,
+            registry_sha256=company_registry_sha256,
+        )
+        employer_groups = _enrich_source_groups(
+            employer_groups,
+            verified_companies=verified_companies,
+            registry_sha256=company_registry_sha256,
         )
         li_source_ids = {
             _text(item.get("linkedin_company_id"))
@@ -939,49 +1323,116 @@ def run_delivery(
             "groups_with_jobs": len(linkedin_groups),
             "source_marker": linkedin_marker,
             "bootstrap_complete": bool(next_linkedin_checkpoint.get("bootstrap_complete")),
+            "verified_company_registry_sha256": company_registry_sha256,
         },
         SOURCE_EMPLOYER: {
             "companies_changed": len(employer_changed_ids),
             "groups_with_jobs": len(employer_groups),
             "source_marker": employer_marker,
             "bootstrap_complete": bool(next_employer_checkpoint.get("bootstrap_complete")),
+            "verified_company_registry_sha256": company_registry_sha256,
         },
     }
+    source_specs = (
+        (SOURCE_LINKEDIN, linkedin_companies, linkedin_groups),
+        (SOURCE_EMPLOYER, employer_companies, employer_groups),
+    )
+    if controls.dry_run:
+        eligibility = _preview_eligibility(
+            source_specs,
+            cycle_id="dry-run",
+            max_companies=controls.max_companies,
+        )
+        return _with_receipt(
+            {
+                "status": "dry_run",
+                "dry_run": True,
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "sources": source_metrics,
+                "identity_crosswalk": {},
+                "telemetry": telemetry,
+                "eligibility": eligibility,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            eligibility=eligibility,
+        )
     if not linkedin_changed and not employer_changed:
-        return {
-            "status": "no_changes",
-            "cycle_id": _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id")),
-            "publication_id": _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id")),
-            "manifest_id": _text(manifest.get("manifest_id")),
-            "manifest_hash": _text(manifest.get("manifest_hash")),
-            "source_version": source_version,
-            "sources": source_metrics,
-            "identity_crosswalk": crosswalk_result,
-        }
+        return _with_receipt(
+            {
+                "status": "no_changes",
+                "cycle_id": _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id")),
+                "publication_id": _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id")),
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "policy_version": policy_version,
+                "sources": source_metrics,
+                "identity_crosswalk": crosswalk_result,
+                "telemetry": telemetry,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
 
     changed_by_source = {
         SOURCE_LINKEDIN: linkedin_changed_ids,
         SOURCE_EMPLOYER: employer_changed_ids,
     }
+    deferred_companies = False
+    if controls.max_companies is not None:
+        remaining = controls.max_companies
+        bounded_changed_by_source: dict[str, set[str]] = {}
+        for source, company_ids_for_source in changed_by_source.items():
+            selected = set(sorted(company_ids_for_source)[:remaining])
+            bounded_changed_by_source[source] = selected
+            deferred_companies = deferred_companies or len(selected) < len(company_ids_for_source)
+            remaining -= len(selected)
+        changed_by_source = bounded_changed_by_source
     companies_by_source = {
         SOURCE_LINKEDIN: linkedin_companies,
         SOURCE_EMPLOYER: employer_companies,
     }
     targets = [
-        _target(companies_by_source[source][company_id], source)
+        _target(
+            companies_by_source[source][company_id],
+            source,
+            policy_version=policy_version,
+        )
         for source, company_ids_for_source in changed_by_source.items()
         for company_id in company_ids_for_source
         if company_id in companies_by_source[source]
     ]
     if not targets:
-        return {
-            "status": "no_changes",
-            "manifest_id": _text(manifest.get("manifest_id")),
-            "manifest_hash": _text(manifest.get("manifest_hash")),
-            "source_version": source_version,
-            "sources": source_metrics,
-            "identity_crosswalk": crosswalk_result,
-        }
+        # A bounded bootstrap chunk can contain only companies outside the
+        # selected cohort. Advance its durable cursors without creating an
+        # empty cycle or replacing the public publication head.
+        assert store is not None
+        previous_cycle_id = _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id"))
+        previous_publication_id = _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id"))
+        store.save_publisher_checkpoint(next_linkedin_checkpoint, cycle_id=previous_cycle_id, publication_id=previous_publication_id)
+        store.save_publisher_checkpoint(next_employer_checkpoint, cycle_id=previous_cycle_id, publication_id=previous_publication_id)
+        return _with_receipt(
+            {
+                "status": "no_changes",
+                "checkpoint_advanced": True,
+                "manifest_id": _text(manifest.get("manifest_id")),
+                "manifest_hash": _text(manifest.get("manifest_hash")),
+                "source_version": source_version,
+                "policy_version": policy_version,
+                "sources": source_metrics,
+                "identity_crosswalk": crosswalk_result,
+                "telemetry": telemetry,
+            },
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
+    assert store is not None
     store.ensure_targets(targets)
     marker = "|".join(
         [
@@ -993,6 +1444,7 @@ def run_delivery(
             _text(linkedin_checkpoint.get("source_watermark")),
             _text(employer_checkpoint.get("source_watermark")),
             source_version,
+            policy_version,
         ]
     )
     cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
@@ -1005,7 +1457,12 @@ def run_delivery(
         scope_key="producer_state",
     )
     if cycle is None:
-        return {"status": "already_running", "cycle_key": cycle_key}
+        return _with_receipt(
+            {"status": "already_running", "cycle_key": cycle_key, "telemetry": telemetry},
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+        )
     cycle_id = _text(cycle.get("cycle_id"))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)
@@ -1016,18 +1473,25 @@ def run_delivery(
         "manifest_id": _text(manifest.get("manifest_id")),
         "manifest_hash": _text(manifest.get("manifest_hash")),
         "source_version": source_version,
+        "policy_version": policy_version,
         "sources": source_metrics,
         "unresolved_observations": 0,
         "identity_crosswalk": crosswalk_result,
         "source_row_batch_size": batch_size,
+        "telemetry": telemetry,
     }
     partial = False
     valid_target_ids: list[str] = []
+    failures = 0
+    companies_attempted = 0
+    stop_reason = ""
+    stop_requested = False
+    next_allowed_delivery = 0.0
 
     def deliver_company(source: str, company_id: str) -> dict[str, object]:
         nonlocal partial
         company = companies_by_source[source][company_id]
-        target_id = _text(_target(company, source)["target_id"])
+        target_id = _text(_target(company, source, policy_version=policy_version)["target_id"])
         task_id = _text(cycle_task_ids.get(target_id)) or f"producer_task:{target_id}"
         raw_rows = (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, [])
         if source == SOURCE_LINKEDIN:
@@ -1097,20 +1561,76 @@ def run_delivery(
             for company_id in sorted(changed_ids):
                 if skip_status_only and not (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id):
                     continue
-                delivered = deliver_company(source, company_id)
+                if controls.max_companies is not None and companies_attempted >= controls.max_companies:
+                    stop_reason = "max_companies"
+                    stop_requested = True
+                    break
+                if controls.timeout_seconds is not None and monotonic() - started_monotonic >= controls.timeout_seconds:
+                    stop_reason = "timeout"
+                    stop_requested = True
+                    break
+                if controls.rate_per_second:
+                    wait_seconds = next_allowed_delivery - monotonic()
+                    if wait_seconds > 0:
+                        sleep(wait_seconds)
+                    next_allowed_delivery = monotonic() + (1.0 / controls.rate_per_second)
+                companies_attempted += 1
+                try:
+                    delivered = deliver_company(source, company_id)
+                except Exception as exc:
+                    failures += 1
+                    partial = True
+                    source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+                    source_metrics[source]["last_error"] = type(exc).__name__.casefold()
+                    if controls.max_failures == 0 or failures >= controls.max_failures:
+                        stop_reason = "max_failures"
+                        stop_requested = True
+                        break
+                    continue
                 source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
                 source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
                 if bool(delivered["failed"]):
                     source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
                 if not bool(delivered["closure_safe"]):
                     source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+            if stop_requested:
+                break
+        if not stop_requested and deferred_companies:
+            stop_reason = "max_companies"
+            stop_requested = True
+        if not stop_requested and failures:
+            stop_reason = "failures_observed"
+            stop_requested = True
+        if stop_requested:
+            store.complete_cycle(
+                cycle_id,
+                status="recovery_required",
+                error_code=stop_reason,
+                error_message="Backfill stopped before checkpoint advancement; resume is safe after operator review.",
+            )
+            metrics.update(
+                {
+                    "status": "stopped",
+                    "failures": failures,
+                    "stop_reason": stop_reason,
+                    "companies_attempted": companies_attempted,
+                }
+            )
+            return _with_receipt(
+                metrics,
+                controls,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                failures=failures,
+                stop_reason=stop_reason,
+            )
         publication_id = store.publish_valid_snapshot(
             cycle_id=cycle_id,
             valid_target_ids=valid_target_ids,
             origin="scheduled",
             created_by="producer_bridge",
             scheduled_run_id=cycle_id,
-            policy_version="publication_policy_v1",
+            policy_version=policy_version,
         )
         store.complete_cycle(
             cycle_id,
@@ -1119,8 +1639,8 @@ def run_delivery(
             error_code="partial_source_coverage" if partial else "",
             error_message="One or more source companies lacked closure-safe completeness evidence." if partial else "",
         )
-        _save_publisher_checkpoint(store, next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
-        _save_publisher_checkpoint(store, next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
+        store.save_publisher_checkpoint(next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
+        store.save_publisher_checkpoint(next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         metrics.update(
             {
                 "status": "degraded" if partial else "completed",
@@ -1128,7 +1648,13 @@ def run_delivery(
                 "report": store.get_cycle_report(cycle_id),
             }
         )
-        return metrics
+        return _with_receipt(
+            metrics,
+            controls,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            failures=failures,
+        )
     except BaseException as exc:
         store.complete_cycle(
             cycle_id,
@@ -1154,11 +1680,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--identity-crosswalk", type=Path, help="optional reviewed company_identity_crosswalk.json")
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--max-companies", type=int)
+    parser.add_argument("--rate-per-second", type=float)
+    parser.add_argument("--timeout-seconds", type=float)
+    parser.add_argument("--max-failures", type=int)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--publication-policy-version",
+        dest="publication_policy_version",
+        help="owner-approved policy version; defaults to the blocking runtime policy",
+    )
+    parser.add_argument(
+        "--rollback-policy-version",
+        dest="rollback_policy_version",
+        help="explicitly restore a registered prior policy without deleting data",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    defaults = _default_backfill_controls(dry_run=bool(args.dry_run))
+    controls = BackfillControls(
+        batch_size=args.batch_size if args.batch_size is not None else defaults.batch_size,
+        max_companies=args.max_companies,
+        rate_per_second=args.rate_per_second if args.rate_per_second is not None else defaults.rate_per_second,
+        timeout_seconds=args.timeout_seconds if args.timeout_seconds is not None else defaults.timeout_seconds,
+        max_failures=args.max_failures if args.max_failures is not None else defaults.max_failures,
+        dry_run=bool(args.dry_run),
+    )
     identity_crosswalk = {}
     identity_crosswalk_document: Mapping[str, object] | None = None
     if args.identity_crosswalk:
@@ -1182,6 +1733,9 @@ def main(argv: list[str] | None = None) -> int:
         skip_status_only=bool(args.skip_status_only),
         identity_crosswalk=identity_crosswalk,
         identity_crosswalk_document=identity_crosswalk_document,
+        controls=controls,
+        publication_policy=args.publication_policy_version,
+        rollback_policy=args.rollback_policy_version,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0

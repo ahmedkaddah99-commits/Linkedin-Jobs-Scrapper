@@ -459,6 +459,8 @@ def _normalize_job(connector: str, item: Mapping[str, Any], *, target_url: str, 
             raw_detail = f"https://jobs.smartrecruiters.com/{quote(company_slug, safe='')}/{quote(posting_id, safe='')}"
     if connector == "workday" and not _text(raw_detail):
         raw_detail = _first_value(item, ("jobPostingInfo.externalPath",))
+    if connector == "workday" and _text(raw_detail).startswith("/job/"):
+        raw_detail = target_url.split("?", 1)[0].rstrip("/") + _text(raw_detail)
     if connector == "personio" and not _text(raw_detail):
         position_id = _text(_first_value(item, ("id", "uuid", "positionId", "jobId")))
         if position_id:
@@ -481,6 +483,7 @@ def _normalize_job(connector: str, item: Mapping[str, Any], *, target_url: str, 
                 "jobDescription",
                 "job_description",
                 "jobDescriptions.description",
+                "jobPostingInfo.jobDescription",
                 "jobPostingInfo.description",
             ),
         )
@@ -821,7 +824,8 @@ def fetch_expansion_snapshot(
         page_payload: Any
         request_url = _request_url(normalized, target_url, offset=offset, page_size=bounded_page_size)
         request_method = "POST" if normalized == "workday" else "GET"
-        request_payload = {"appliedFacets": {}, "limit": min(bounded_page_size, 10), "offset": offset, "searchText": ""} if normalized == "workday" else None
+        search_text = dict(parse_qsl(urlsplit(target_url).query)).get("searchText", "")
+        request_payload = {"appliedFacets": {}, "limit": min(bounded_page_size, 10), "offset": offset, "searchText": search_text} if normalized == "workday" else None
         if fixture:
             if fixture_pages is not None:
                 if pages_fetched >= len(fixture_pages):
@@ -926,6 +930,31 @@ def fetch_expansion_snapshot(
                 )
                 continue
             try:
+                if normalized == "workday" and not fixture and len(request_log) < bounded_requests:
+                    external_path = _text(item.get("externalPath"))
+                    if external_path.startswith("/job/"):
+                        detail_url = request_url.rsplit("/jobs", 1)[0] + external_path
+                        try:
+                            detail_response = _safe_request(
+                                requests.get if requester is None else requester,
+                                detail_url,
+                                snapshot["request_limits"]["timeout_seconds"],
+                                method="GET",
+                                json_payload=None,
+                            )
+                            status_code = int(getattr(detail_response, "status_code", 0) or 0)
+                            request_log.append({"page": pages_fetched, "url": detail_url, "status_code": status_code,
+                                                "outcome": "success" if status_code < 400 else "failure"})
+                            if status_code < 400:
+                                detail_payload = detail_response.json()
+                                posting = detail_payload.get("jobPostingInfo", {}) if isinstance(detail_payload, Mapping) else {}
+                                if isinstance(posting, Mapping):
+                                    item = {**item, "jobPostingInfo": posting}
+                                    if posting.get("canApply") is True:
+                                        item["application_url"] = target_url.split("?", 1)[0].rstrip("/") + external_path + "/apply"
+                        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+                            request_log.append({"page": pages_fetched, "url": detail_url, "outcome": "failure",
+                                                "error_type": type(exc).__name__})
                 all_jobs.append(
                     _normalize_job(
                         normalized,

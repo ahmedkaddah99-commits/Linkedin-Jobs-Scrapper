@@ -7,9 +7,11 @@ const outputDirectory = resolve(`.output/${targetBrowser}-mv3`);
 const manifest = JSON.parse(await readFile(join(outputDirectory, "manifest.json"), "utf8"));
 const packageMetadata = JSON.parse(await readFile(resolve("package.json"), "utf8"));
 const reservedExtensionId = "najcdfohhfgbjpbokhmmekkahghfhegp";
-const expectedOptionalHostPermissions = [
-  "https://*.lever.co/*",
-  "https://boards.greenhouse.io/*",
+const expectedHostPermissions = [
+  "https://runr-api.onrender.com/*",
+  "https://www.linkedin.com/*",
+  "https://linkedin.com/*",
+  "https://*/*",
 ];
 
 function assert(condition, message) {
@@ -80,14 +82,12 @@ for (const permission of permissions) {
 }
 
 assert(
-  JSON.stringify(manifest.host_permissions || []) ===
-    JSON.stringify(["https://runr-api.onrender.com/*", "https://www.linkedin.com/*", "https://linkedin.com/*"]),
-  "Production host access must be limited to the first-party Runr API and LinkedIn connections origins.",
+  JSON.stringify(manifest.host_permissions || []) === JSON.stringify(expectedHostPermissions),
+  "Production host access must be the first-party Runr origins plus the broad application-portal grant.",
 );
 assert(
-  JSON.stringify([...(manifest.optional_host_permissions || [])].sort()) ===
-    JSON.stringify([...expectedOptionalHostPermissions].sort()),
-  "Production optional host permissions must be the declared portal patterns for Greenhouse and Lever.",
+  !(manifest.optional_host_permissions || []).length,
+  "Host access is granted at install; there must be no optional host permissions to prompt for.",
 );
 assert(!manifest.content_scripts?.length, "Page code must be injected after a user action.");
 assert(

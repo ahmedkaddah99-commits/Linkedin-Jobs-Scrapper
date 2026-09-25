@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -38,11 +38,17 @@ from backend.connectors.ats_expansions import EXPANSION_CONNECTORS
 from backend.connectors.ats_router import detect_ats, fetch_ats_snapshot
 from backend.connectors.company_career_discovery import (
     FetchResult,
+    build_source_inventory,
     canonicalize_url,
     detect_ats_type,
     discover_career_url,
+    domain_from_url,
     extract_career_links_from_html,
     requests_fetcher,
+)
+from backend.connectors.company_enrich_autocomplete import (
+    CompanyEnrichAutocompleteAdapter,
+    should_attempt_autocomplete,
 )
 from backend.config.job_seeker import load_project_dotenv
 from backend.connectors.generic_jsonld import fetch_generic_snapshot
@@ -99,6 +105,7 @@ EMPLOYER_FIELDS = [
     "canonical_company_id",
     "source_company_name",
     "source_company_url",
+    "company_domain_provenance",
     "source_type",
     "source_provider",
     "career_target_url",
@@ -280,6 +287,8 @@ class EmployerCompany:
     website_url: str
     linkedin_company_url: str = ""
     source_row_number: int = 0
+    website_provenance: dict[str, Any] = field(default_factory=dict)
+    verified_ats_url: str = ""
 
 
 class RequestAccounting:
@@ -434,17 +443,70 @@ class EmployerCollectionResult:
         return OUTCOME_BY_LEGACY_STATUS.get(self.status, "failed")
 
 
-def load_employer_companies(path: Path) -> tuple[list[EmployerCompany], dict[str, int]]:
+def load_employer_companies(
+    path: Path,
+    *,
+    autocomplete: Any | None = None,
+) -> tuple[list[EmployerCompany], dict[str, int]]:
     """Load website-bearing company rows with flexible cleaned-CSV columns."""
 
     companies: list[EmployerCompany] = []
-    stats = {"rows_read": 0, "rows_accepted": 0, "rows_rejected": 0}
+    stats = {
+        "rows_read": 0,
+        "rows_accepted": 0,
+        "rows_rejected": 0,
+    }
     seen_keys: set[tuple[str, str]] = set()
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for row_number, row in enumerate(reader, start=2):
             stats["rows_read"] += 1
             website = _source_url(_first_value(row, ("website_url", "company_website", "website", "url")))
+            website_provenance: dict[str, Any] = {}
+            needs_autocomplete = should_attempt_autocomplete(row)
+            if needs_autocomplete:
+                for key in (
+                    "rows_autocomplete_attempted",
+                    "rows_autocomplete_accepted",
+                    "rows_autocomplete_rejected",
+                    "rows_autocomplete_provider_errors",
+                ):
+                    stats.setdefault(key, 0)
+                # An ambiguous seed is never trusted just because the
+                # autocomplete provider is unavailable; fail closed until a
+                # validated replacement is selected.
+                website = ""
+            if needs_autocomplete and autocomplete is not None:
+                stats["rows_autocomplete_attempted"] += 1
+                try:
+                    decision = autocomplete.resolve_row(row)
+                except Exception:
+                    decision = None
+                decision_status = str(getattr(decision, "status", "provider_error") or "provider_error")
+                decision_domain = _text(getattr(decision, "domain", ""))
+                if decision_status.casefold() == "accepted" and decision_domain:
+                    website = _source_url(f"https://{decision_domain}")
+                    if website:
+                        stats["rows_autocomplete_accepted"] += 1
+                        website_provenance = dict(getattr(decision, "provenance", {}) or {})
+                        website_provenance.update(
+                            {
+                                "status": decision_status,
+                                "confidence": float(getattr(decision, "confidence", 0.0) or 0.0),
+                                "reason": _text(getattr(decision, "reason", "")),
+                            }
+                        )
+                    else:
+                        decision_status = "rejected"
+                if not website:
+                    stats["rows_autocomplete_rejected"] += 1
+                    if decision_status.casefold() == "provider_error":
+                        stats["rows_autocomplete_provider_errors"] += 1
+                    stats["rows_rejected"] += 1
+                    continue
+            elif needs_autocomplete:
+                stats["rows_rejected"] += 1
+                continue
             if not website:
                 stats["rows_rejected"] += 1
                 continue
@@ -456,6 +518,7 @@ def load_employer_companies(path: Path) -> tuple[list[EmployerCompany], dict[str
                 website_url=website,
                 linkedin_company_url=_source_url(_first_value(row, ("linkedin_company_url", "linkedin_url"))),
                 source_row_number=row_number,
+                website_provenance=website_provenance,
             )
             identity_key = (company.canonical_company_id, company.website_url)
             if identity_key in seen_keys:
@@ -611,6 +674,11 @@ def _annotate_job(
             "canonical_company_id": company.canonical_company_id,
             "source_company_name": company.company_name,
             "source_company_url": company.website_url,
+            "company_domain_provenance": json.dumps(
+                company.website_provenance, ensure_ascii=False, sort_keys=True
+            )
+            if company.website_provenance
+            else "",
             "source_type": "employer_site",
             "source_provider": provider or "generic_employer_site",
             "career_target_url": target_url,
@@ -862,6 +930,7 @@ def _coverage_target(
     snapshots: list[Mapping[str, Any]],
     accepted_jobs: int,
     extraction_methods: set[str],
+    duplicates_skipped: int = 0,
 ) -> tuple[dict[str, Any], list[str]]:
     coverage_snapshots = [
         snapshot for snapshot in snapshots if _text(snapshot.get("_source_kind")) != "discovery"
@@ -936,6 +1005,7 @@ def _coverage_target(
         "counts": {
             "jobs_observed": observed_jobs,
             "jobs_accepted": accepted_jobs,
+            "duplicates_skipped": duplicates_skipped,
             "requests": request_count,
             "pages": pages_fetched,
             "detail_failures": detail_failures,
@@ -985,6 +1055,7 @@ def _finalize_coverage(result: EmployerCollectionResult, target_outcomes: list[s
             }
         ),
         "discovered_targets": [target.get("url", "") for target in result.targets],
+        "company_domain_provenance": dict(result.company.website_provenance),
         "extraction_methods": sorted(
             {
                 method
@@ -1050,16 +1121,55 @@ def collect_company(
             return fallback
         return snapshot
 
-    discovery = discover_career_url(
-        homepage_url=company.website_url,
-        company_name=company.company_name,
-        fetch=fetcher,
-        request_timeout_seconds=limits.timeout_seconds,
-        shallow_crawl_pages=8,
-        use_rendered_fallback=False,
-        prefer_homepage_candidates=True,
-    )
-    candidates = _candidate_rows(discovery, limits)
+    if company.verified_ats_url:
+        # An operator-reviewed ATS target can be collected under the same
+        # request gate without spending the budget rediscovering its homepage.
+        discovery = None
+        candidates = [SimpleCandidate(company.verified_ats_url, "verified_ats_target", detect_ats_type(company.verified_ats_url))]
+        source_inventory: list[dict[str, Any]] = []
+    else:
+        discovery = discover_career_url(
+            homepage_url=company.website_url,
+            homepage_provenance=company.website_provenance,
+            company_name=company.company_name,
+            fetch=fetcher,
+            request_timeout_seconds=limits.timeout_seconds,
+            shallow_crawl_pages=8,
+            use_rendered_fallback=False,
+            prefer_homepage_candidates=True,
+        )
+        candidates = _candidate_rows(discovery, limits)
+        source_inventory = build_source_inventory(discovery)
+    inventory_by_url: dict[str, dict[str, Any]] = {
+        str(entry.get("url") or ""): entry for entry in source_inventory
+    }
+
+    def _inventory_entry(url: str, source_kind: str) -> dict[str, Any]:
+        entry = inventory_by_url.get(url)
+        if entry is None:
+            entry = {
+                "url": url,
+                "source_kind": source_kind,
+                "ats_type": "",
+                "host_policy": "",
+                "validation_status": "",
+                "confidence_score": 0.0,
+                "provenance": {},
+                "traversal_status": "discovered",
+                "deferred_reason": "",
+                "job_count": 0,
+                "duplicate_count": 0,
+                "target_status": "",
+            }
+            inventory_by_url[url] = entry
+            source_inventory.append(entry)
+        return entry
+
+    def _defer_source(url: str, source_kind: str, reason: str) -> None:
+        entry = _inventory_entry(url, source_kind)
+        entry["traversal_status"] = "deferred"
+        entry["deferred_reason"] = reason
+
     preloaded_browser_snapshots: dict[str, Mapping[str, Any]] = {}
     rendered_homepage_snapshot: Mapping[str, Any] | None = None
     candidates_from_rendered_discovery = False
@@ -1088,6 +1198,7 @@ def collect_company(
     if not candidates:
         result.failures.append({"stage": "discovery", "error": getattr(discovery, "crawl_status", "not_found")})
         _finalize_coverage(result, [])
+        result.coverage["source_inventory"] = source_inventory
         # Retain the historical checkpoint status while exposing the canonical
         # outcome in coverage/outcome for new consumers.
         result.status = "discovery_failed"
@@ -1095,6 +1206,9 @@ def collect_company(
 
     seen_keys: set[tuple[str, str, str, str]] = set()
     target_outcomes: list[str] = []
+    traversed_hosts: set[str] = set()
+    traversed_ats_tenants: set[tuple[str, str]] = set()
+    budget_exhausted = False
     for candidate_index, candidate in enumerate(candidates):
         target_url = _source_url(_text(getattr(candidate, "url", "")))
         if not target_url:
@@ -1104,138 +1218,176 @@ def collect_company(
             _text(getattr(candidate, "ats_type", "")) or detect_ats_type(target_url) or detect_ats(target_url) or ""
         )
         provider = detected_provider or "generic_employer_site"
+
+        # Source-union policy: an independent validated partition (a distinct
+        # host, or a distinct ATS tenant) is traversed even when an earlier
+        # source already produced a complete snapshot. A redundant same-host
+        # route is deferred with an explicit reason instead of re-fetched.
+        if budget_exhausted:
+            _defer_source(target_url, candidate_source, "request_budget_exhausted")
+            continue
+        candidate_host = domain_from_url(target_url)
+        candidate_tenant = _provider_tenant(target_url, provider) if detected_provider else ""
+        if (
+            candidate_host
+            and candidate_host in traversed_hosts
+            and not (candidate_tenant and (detected_provider, candidate_tenant) not in traversed_ats_tenants)
+        ):
+            _defer_source(target_url, candidate_source, "redundant_with_traversed_source")
+            continue
+
         snapshots: list[Mapping[str, Any]] = []
         direct_page: Any = None
-        if candidate_index == 0 and rendered_homepage_snapshot is not None:
-            snapshots.append(rendered_homepage_snapshot)
-        if detected_provider:
-            ats_snapshot = dict(fetch_ats_snapshot(
-                target_url,
-                detected_provider,
-                requester=getattr(fetcher, "requester", None),
-                timeout_seconds=limits.timeout_seconds,
-                max_pages=limits.max_pages,
-                max_requests=limits.max_pages,
-                enabled=detected_provider in EXPANSION_CONNECTORS,
-            ))
-            ats_snapshot.setdefault("_source_kind", "ats")
-            if not ats_snapshot.get("transport"):
-                ats_snapshot["transport"] = str(
-                    getattr(getattr(fetcher, "requester", None), "last_transport", "direct")
-                )
-            snapshots.append(ats_snapshot)
-        ats_snapshot_complete = bool(
-            detected_provider
-            and snapshots
-            and _snapshot_is_complete(snapshots[-1], source_kind="ats")
-        )
-        if not ats_snapshot_complete:
-            direct_page = fetcher(target_url)
-        if (not ats_snapshot_complete or direct_page is not None) and not (
-            candidates_from_rendered_discovery and direct_page is None
-        ):
-            direct_text = str(getattr(direct_page, "text", "") or "") if direct_page else ""
-            if direct_text:
-                embedded_jobs = extract_embedded_jobs(
-                    direct_text,
-                    _text(getattr(direct_page, "final_url", "")) or target_url,
-                )
-                if embedded_jobs:
-                    snapshots.append(
-                        {
-                            "jobs": embedded_jobs,
-                            "status": "completed",
-                            "complete_snapshot": True,
-                            "pagination_complete": True,
-                            "credible_evidence": True,
-                            "stop_reason": "embedded_payload_complete",
-                            "request_url": _text(getattr(direct_page, "requested_url", "")) or target_url,
-                            "resolved_url": _text(getattr(direct_page, "final_url", "")) or target_url,
-                            "transport": _text(getattr(direct_page, "transport", "direct")) or "direct",
-                        }
+        duplicate_jobs = 0
+        try:
+            if candidate_index == 0 and rendered_homepage_snapshot is not None:
+                snapshots.append(rendered_homepage_snapshot)
+            if detected_provider:
+                ats_snapshot = dict(fetch_ats_snapshot(
+                    target_url,
+                    detected_provider,
+                    requester=getattr(fetcher, "requester", None),
+                    timeout_seconds=limits.timeout_seconds,
+                    max_pages=limits.max_pages,
+                    max_requests=(limits.max_pages + limits.max_job_links) if company.verified_ats_url else limits.max_pages,
+                    enabled=detected_provider in EXPANSION_CONNECTORS,
+                ))
+                ats_snapshot.setdefault("_source_kind", "ats")
+                if not ats_snapshot.get("transport"):
+                    ats_snapshot["transport"] = str(
+                        getattr(getattr(fetcher, "requester", None), "last_transport", "direct")
                     )
-            generic_snapshot = dict(fetch_generic_snapshot(
-                target_url,
-                requester=getattr(fetcher, "requester", None),
-                max_job_links=limits.max_job_links,
-                timeout_seconds=limits.timeout_seconds,
-            ))
-            generic_snapshot.setdefault("_source_kind", "generic")
-            if generic_snapshot:
-                snapshots.append(generic_snapshot)
-
-        accepted_jobs = 0
-        extraction_methods: set[str] = set()
-        for snapshot in snapshots:
-            for raw_job in _jobs_with_source_metadata(snapshot):
-                if not _is_accepted_job_page(raw_job, provider):
-                    continue
-                row = _annotate_job(
-                    company,
-                    raw_job,
-                    target_url=target_url,
-                    target_source=candidate_source,
-                    provider=provider,
-                    snapshot=snapshot,
-                )
-                key = _job_key(row)
-                if not key[3] or key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                result.jobs.append(row)
-                accepted_jobs += 1
-                extraction_methods.add(_text(row.get("extraction_method")))
-
-        complete_snapshot_available = any(
-            _snapshot_is_complete(
-                snapshot,
-                source_kind=_text(snapshot.get("_source_kind")) or "generic",
+                snapshots.append(ats_snapshot)
+            ats_snapshot_complete = bool(
+                detected_provider
+                and snapshots
+                and _snapshot_is_complete(snapshots[-1], source_kind="ats")
             )
-            for snapshot in snapshots
-        )
-        if not complete_snapshot_available and (direct_page is not None or candidates_from_rendered_discovery):
-            rendered_snapshot = dict(preloaded_browser_snapshots.pop(target_url, None) or browser_snapshot(target_url))
-            rendered_snapshot.setdefault("_source_kind", "browser")
-            snapshots.append(rendered_snapshot)
-            for raw_job in _jobs_with_source_metadata(rendered_snapshot):
-                if not _is_accepted_job_page(raw_job, provider):
-                    continue
-                row = _annotate_job(
-                    company,
-                    raw_job,
-                    target_url=target_url,
-                    target_source=candidate_source,
-                    provider=provider,
-                    snapshot=rendered_snapshot,
-                )
-                key = _job_key(row)
-                if not key[3] or key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                result.jobs.append(row)
-                accepted_jobs += 1
-                extraction_methods.add(_text(row.get("extraction_method")))
-        target, _snapshot_outcomes = _coverage_target(
-            target_url=target_url,
-            provider=provider,
-            discovery_method=candidate_source,
-            snapshots=snapshots,
-            accepted_jobs=accepted_jobs,
-            extraction_methods=extraction_methods,
-        )
-        result.targets.append(target)
-        target_outcomes.append(target["status"])
-        for snapshot in snapshots:
-            for failure in snapshot.get("observation_failures") or []:
-                if isinstance(failure, Mapping):
-                    result.failures.append({"stage": "job_detail", **dict(failure)})
-            if snapshot.get("error"):
-                result.failures.append({"stage": "source", "url": target_url, "error": _text(snapshot.get("error"))})
+            if not ats_snapshot_complete and not (company.verified_ats_url and snapshots[-1].get("jobs")):
+                direct_page = fetcher(target_url)
+            if (not ats_snapshot_complete or direct_page is not None) and not (company.verified_ats_url and snapshots[-1].get("jobs")) and not (
+                candidates_from_rendered_discovery and direct_page is None
+            ):
+                direct_text = str(getattr(direct_page, "text", "") or "") if direct_page else ""
+                if direct_text:
+                    embedded_jobs = extract_embedded_jobs(
+                        direct_text,
+                        _text(getattr(direct_page, "final_url", "")) or target_url,
+                    )
+                    if embedded_jobs:
+                        snapshots.append(
+                            {
+                                "jobs": embedded_jobs,
+                                "status": "completed",
+                                "complete_snapshot": True,
+                                "pagination_complete": True,
+                                "credible_evidence": True,
+                                "stop_reason": "embedded_payload_complete",
+                                "request_url": _text(getattr(direct_page, "requested_url", "")) or target_url,
+                                "resolved_url": _text(getattr(direct_page, "final_url", "")) or target_url,
+                                "transport": _text(getattr(direct_page, "transport", "direct")) or "direct",
+                            }
+                        )
+                generic_snapshot = dict(fetch_generic_snapshot(
+                    target_url,
+                    requester=getattr(fetcher, "requester", None),
+                    max_job_links=limits.max_job_links,
+                    timeout_seconds=limits.timeout_seconds,
+                ))
+                generic_snapshot.setdefault("_source_kind", "generic")
+                if generic_snapshot:
+                    snapshots.append(generic_snapshot)
 
-        # A complete ATS/generic snapshot is authoritative for this company.
-        # Do not fan out to lower-ranked career links after it has established
-        # complete coverage; fallback remains available for incomplete sources.
-        if target["complete_snapshot"] and target["status"] in {"complete_with_jobs", "confirmed_zero"}:
+            accepted_jobs = 0
+            extraction_methods: set[str] = set()
+            for snapshot in snapshots:
+                for raw_job in _jobs_with_source_metadata(snapshot):
+                    if not _is_accepted_job_page(raw_job, provider):
+                        continue
+                    row = _annotate_job(
+                        company,
+                        raw_job,
+                        target_url=target_url,
+                        target_source=candidate_source,
+                        provider=provider,
+                        snapshot=snapshot,
+                    )
+                    key = _job_key(row)
+                    if not key[3] or key in seen_keys:
+                        if key[3]:
+                            duplicate_jobs += 1
+                        continue
+                    seen_keys.add(key)
+                    result.jobs.append(row)
+                    accepted_jobs += 1
+                    extraction_methods.add(_text(row.get("extraction_method")))
+
+            complete_snapshot_available = any(
+                _snapshot_is_complete(
+                    snapshot,
+                    source_kind=_text(snapshot.get("_source_kind")) or "generic",
+                )
+                for snapshot in snapshots
+            )
+            if not complete_snapshot_available and (direct_page is not None or candidates_from_rendered_discovery):
+                rendered_snapshot = dict(preloaded_browser_snapshots.pop(target_url, None) or browser_snapshot(target_url))
+                rendered_snapshot.setdefault("_source_kind", "browser")
+                snapshots.append(rendered_snapshot)
+                for raw_job in _jobs_with_source_metadata(rendered_snapshot):
+                    if not _is_accepted_job_page(raw_job, provider):
+                        continue
+                    row = _annotate_job(
+                        company,
+                        raw_job,
+                        target_url=target_url,
+                        target_source=candidate_source,
+                        provider=provider,
+                        snapshot=rendered_snapshot,
+                    )
+                    key = _job_key(row)
+                    if not key[3] or key in seen_keys:
+                        if key[3]:
+                            duplicate_jobs += 1
+                        continue
+                    seen_keys.add(key)
+                    result.jobs.append(row)
+                    accepted_jobs += 1
+                    extraction_methods.add(_text(row.get("extraction_method")))
+            target, _snapshot_outcomes = _coverage_target(
+                target_url=target_url,
+                provider=provider,
+                discovery_method=candidate_source,
+                snapshots=snapshots,
+                accepted_jobs=accepted_jobs,
+                extraction_methods=extraction_methods,
+                duplicates_skipped=duplicate_jobs,
+            )
+            result.targets.append(target)
+            target_outcomes.append(target["status"])
+            for snapshot in snapshots:
+                for failure in snapshot.get("observation_failures") or []:
+                    if isinstance(failure, Mapping):
+                        result.failures.append({"stage": "job_detail", **dict(failure)})
+                if snapshot.get("error"):
+                    result.failures.append({"stage": "source", "url": target_url, "error": _text(snapshot.get("error"))})
+
+            traversed_hosts.add(candidate_host)
+            if candidate_tenant:
+                traversed_ats_tenants.add((detected_provider, candidate_tenant))
+            inventory_entry = _inventory_entry(target_url, candidate_source)
+            inventory_entry["traversal_status"] = "traversed"
+            inventory_entry["job_count"] = accepted_jobs
+            inventory_entry["duplicate_count"] = duplicate_jobs
+            inventory_entry["target_status"] = target["status"]
+        except RequestBudgetExceeded:
+            # Budget exhaustion mid-source preserves the partial union progress;
+            # this source and every remaining candidate stay visible in the
+            # inventory with an explicit, retryable deferral reason.
+            budget_exhausted = True
+            result.failures.append(
+                {"stage": "source_traversal", "url": target_url, "reason": "request_budget_exhausted"}
+            )
+            _defer_source(target_url, candidate_source, "request_budget_exhausted")
             break
 
     _finalize_coverage(result, target_outcomes)
@@ -1255,6 +1407,33 @@ def collect_company(
         if ats_type:
             complementary_skipped.append({"url": url, "ats_type": ats_type})
     result.coverage["discovery"] = {"complementary_partitions_skipped": complementary_skipped}
+
+    # Persist the durable all-candidate source inventory and union accounting:
+    # no validated source disappears merely because another source was selected
+    # as the preferred traversal route.
+    plan_urls = {_source_url(_text(getattr(candidate, "url", ""))) for candidate in candidates}
+    for entry in source_inventory:
+        if entry["traversal_status"] == "traversed" or entry["deferred_reason"]:
+            continue
+        url = str(entry.get("url") or "")
+        if url not in plan_urls:
+            entry["traversal_status"] = "deferred"
+            entry["deferred_reason"] = "below_rank_cutoff"
+        elif budget_exhausted:
+            entry["traversal_status"] = "deferred"
+            entry["deferred_reason"] = "request_budget_exhausted"
+        else:
+            entry["traversal_status"] = "deferred"
+            entry["deferred_reason"] = "traversal_not_reached"
+    result.coverage["source_inventory"] = source_inventory
+    result.coverage["counts"].update(
+        {
+            "union_jobs": len(result.jobs),
+            "duplicates_skipped": sum(int(entry.get("duplicate_count") or 0) for entry in source_inventory),
+            "sources_traversed": sum(1 for entry in source_inventory if entry["traversal_status"] == "traversed"),
+            "sources_deferred": sum(1 for entry in source_inventory if entry["traversal_status"] == "deferred"),
+        }
+    )
     return result
 
 
@@ -1416,7 +1595,48 @@ class EmployerState:
             tuple(keys),
         ).fetchall()
         checkpoints = {str(row["company_key"]): str(row["next_scan_at"] or "") for row in rows}
-        return {key for key in keys if not checkpoints.get(key) or checkpoints[key] <= timestamp}
+        due = {key for key in keys if not checkpoints.get(key) or checkpoints[key] <= timestamp}
+        scheduled = [key for key in keys if key not in due]
+        if scheduled:
+            due.update(self._recheck_required_negative_keys(scheduled))
+        return due
+
+    def _recheck_required_negative_keys(self, scheduled_keys: list[str]) -> set[str]:
+        """Return scheduled no_jobs keys whose coverage evidence is unverified.
+
+        A persisted ``no_jobs`` row is only authoritative when its coverage
+        receipt is ``confirmed_complete``. Legacy negative rows with absent or
+        unverified evidence must be rechecked on resume even when their scan
+        schedule points to a later slot; state databases without a receipts
+        table have no evidence at all.
+        """
+
+        if not scheduled_keys:
+            return set()
+        placeholders = ",".join("?" for _ in scheduled_keys)
+        try:
+            rows = self.connection.execute(
+                f"SELECT company_key FROM companies WHERE status='no_jobs' AND company_key IN ({placeholders})",
+                tuple(scheduled_keys),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        negative_keys = {str(row["company_key"]) for row in rows}
+        if not negative_keys:
+            return set()
+        try:
+            receipt_rows = self.connection.execute(
+                f"SELECT company_key,classification FROM coverage_receipts WHERE company_key IN ({placeholders})",
+                tuple(scheduled_keys),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return negative_keys
+        confirmed = {
+            str(row["company_key"])
+            for row in receipt_rows
+            if str(row["classification"] or "unknown") == "confirmed_complete"
+        }
+        return negative_keys - confirmed
 
     def record_company_checkpoint(
         self,
@@ -1605,6 +1825,9 @@ class EmployerState:
                     error=attempt.get("error", ""),
                 )
                 for attempt in payload.get("attempts", [])
+            ],
+            source_inventory=[
+                dict(entry) for entry in payload.get("source_inventory", []) or [] if isinstance(entry, dict)
             ],
             persisted_job_count=payload.get("persisted_job_count", 0),
             terminal_classification=payload.get("terminal_classification", "unknown"),
@@ -1950,6 +2173,7 @@ def run_collection(
     state_dir: Path | None = None,
     require_existing_state: bool = False,
     company_id: str = "",
+    verified_ats_url: str = "",
     dry_run: bool = False,
     resume: bool = True,
     max_job_links: int = 25,
@@ -1965,11 +2189,23 @@ def run_collection(
     browser_concurrency: int = 1,
     account_concurrency: int = 4,
     per_origin_concurrency: int = 1,
+    autocomplete: Any | None = None,
 ) -> dict[str, Any]:
     load_project_dotenv()
-    companies, input_stats = load_employer_companies(input_csv)
+    autocomplete_adapter = autocomplete
+    if autocomplete_adapter is None and not dry_run:
+        autocomplete_adapter = CompanyEnrichAutocompleteAdapter.from_environment()
+    companies, input_stats = load_employer_companies(
+        input_csv,
+        autocomplete=autocomplete_adapter,
+    )
     if company_id:
         companies = [company for company in companies if company.canonical_company_id == company_id]
+    if verified_ats_url:
+        parsed_ats = urlsplit(verified_ats_url)
+        if not company_id or len(companies) != 1 or parsed_ats.scheme != "https" or not detect_ats_type(verified_ats_url):
+            raise ValueError("A verified HTTPS ATS target requires one exact eligible company ID.")
+        companies = [replace(companies[0], verified_ats_url=verified_ats_url)]
     selected = companies if limit <= 0 else companies[:limit]
     request_budget = max(0, int(max_requests)) if max_requests is not None else None
     accounting = RequestAccounting(max_attempts=request_budget)
@@ -2004,6 +2240,15 @@ def run_collection(
         "extraction_methods": {},
         "source_providers": {},
         "config": _redacted_config(),
+        "company_enrich_autocomplete": (
+            autocomplete_adapter.metrics
+            if autocomplete_adapter is not None and hasattr(autocomplete_adapter, "metrics")
+            else {
+                "requests": 0,
+                "zero_credit_intent": True,
+                "status": "disabled_for_dry_run" if dry_run else "not_configured",
+            }
+        ),
         "output_dir": str(output_dir),
         "dry_run": dry_run,
     }

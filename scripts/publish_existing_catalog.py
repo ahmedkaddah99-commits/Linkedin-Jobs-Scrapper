@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.database import connect_database
+from backend.acquisition.publication import RestorePublicationConfirmation
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
@@ -26,11 +27,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--created-by", default="catalog_recovery")
     parser.add_argument("--origin", default="system")
     parser.add_argument("--policy-version", default="publication_policy_v1")
+    parser.add_argument("--batch-size", type=int, default=1000)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--rollback-publication")
+    parser.add_argument("--expected-head-publication", default="")
+    parser.add_argument("--actor-user-id", default=os.getenv("RUNR_ACTOR_USER_ID", "catalog_recovery"))
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     database_path = args.data_dir / "backend.sqlite3"
     connection = connect_database(database_path)
     try:
@@ -60,11 +66,49 @@ def main() -> None:
     # The production schema is preflighted above. Avoid replaying every
     # migration over Turso for this one-shot recovery command.
     store = SqliteAcquisitionStore(database_path, initialize=False)
+    if args.rollback_publication:
+        if not args.expected_head_publication:
+            raise ValueError("--expected-head-publication is required for rollback")
+        restored_publication_id = store.restore_publication(
+            RestorePublicationConfirmation.from_values(
+                target_publication_id=args.rollback_publication,
+                expected_head_publication_id=args.expected_head_publication,
+                actor_user_id=args.actor_user_id,
+                confirmation="restore_publication",
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "restored",
+                    "publication_id": restored_publication_id,
+                    "target_publication_id": args.rollback_publication,
+                    "expected_head_publication_id": args.expected_head_publication,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return
+    if args.dry_run:
+        preview = store.publish_existing_catalog_snapshot(
+            created_by=args.created_by,
+            origin=args.origin,
+            policy_version=args.policy_version,
+            batch_size=args.batch_size,
+            dry_run=True,
+        )
+        assert isinstance(preview, dict)
+        preview["limits"] = {"batch_size": int(preview["batch_size"])}
+        print(json.dumps(preview, ensure_ascii=False, sort_keys=True))
+        return
     publication_id = store.publish_existing_catalog_snapshot(
         created_by=args.created_by,
         origin=args.origin,
         policy_version=args.policy_version,
+        batch_size=args.batch_size,
     )
+    assert isinstance(publication_id, str)
     with store._connect() as connection:
         head = connection.execute(
             """

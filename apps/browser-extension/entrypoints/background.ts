@@ -5,6 +5,7 @@ import {
   isFixtureInspectionMessage,
   isPackageExecutionMessage,
   isApplicationPackagePayload,
+  isProfilePackagePayload,
   ASSISTED_APPLY_PREPARATION_PROTOCOL,
   ASSISTED_APPLY_PREPARATION_MAX_AGE_MS,
   isDocumentUploadMessage,
@@ -58,6 +59,7 @@ import {
   writeTabPackage,
   writeTabState,
 } from "../src/state/tab-state";
+import { injectIntoMatchingTabs, reconcileAssistantPanelRegistration } from "../src/panel/script-registration";
 import {
   canActivateExactPreparationTab,
   canRetryPreparation,
@@ -69,6 +71,17 @@ import {
   type PreparationLocalRecord,
   type PreparationLocalStatus,
 } from "../src/preparation/local-session";
+
+const PANEL_PREFERENCES_KEY = "runr.assistedApply.preferences";
+const PANEL_COLLAPSE_KEY = "runr.assistedApply.panelCollapsed";
+
+type PanelBootstrapResponse = {
+  ok: true;
+  panelBootstrap: {
+    autoOpenOnApplicationPage: boolean;
+    collapsed: boolean;
+  };
+};
 
 const runtimeConfig = assistedApplyRuntimeConfig();
 const authStorage = new BrowserAuthStorage();
@@ -1017,6 +1030,20 @@ export default defineBackground(() => {
     console.warn("Runr Assisted Apply could not restrict extension storage access.");
   });
 
+  // The assistant panel is runtime-registered so it only runs on granted
+  // HTTPS origins and never becomes a manifest-declared content script.
+  void reconcileAssistantPanelRegistration().catch(() => {
+    console.warn("Runr Assisted Apply could not register the assistant panel content script.");
+  });
+  browser.permissions.onAdded.addListener(() => {
+    void reconcileAssistantPanelRegistration()
+      .then((matches) => injectIntoMatchingTabs(matches))
+      .catch(() => undefined);
+  });
+  browser.permissions.onRemoved.addListener(() => {
+    void reconcileAssistantPanelRegistration().catch(() => undefined);
+  });
+
   browser.action.onClicked.addListener(async (tab) => {
     if (tab.id == null) return;
     const state = await refreshTabState(tab);
@@ -1080,11 +1107,79 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(async (
     message: unknown,
     sender,
-  ): Promise<PanelResponse | undefined> => {
+  ): Promise<PanelResponse | PanelBootstrapResponse | undefined> => {
     if (message && typeof message === "object" &&
         (message as { type?: unknown }).type === "ASSISTED_APPLY_CONTENT_READY") {
       const tabId = sender.tab?.id;
       if (sender.id === browser.runtime.id && tabId != null) preparationReadyWaiters.get(tabId)?.();
+      return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_BOOTSTRAP") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const origin = String((message as { origin?: unknown }).origin || "");
+      const stored: Record<string, unknown> = await browser.storage.local
+        .get([PANEL_PREFERENCES_KEY, PANEL_COLLAPSE_KEY])
+        .catch(() => ({} as Record<string, unknown>));
+      const preferences = stored[PANEL_PREFERENCES_KEY] as { autoOpenOnApplicationPage?: unknown } | undefined;
+      const collapseByOrigin = stored[PANEL_COLLAPSE_KEY] as Record<string, boolean> | undefined;
+      return {
+        ok: true,
+        panelBootstrap: {
+          autoOpenOnApplicationPage: preferences?.autoOpenOnApplicationPage !== false,
+          collapsed: Boolean(origin && collapseByOrigin?.[origin]),
+        },
+      };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_SET_COLLAPSED") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const value = message as { origin?: unknown; collapsed?: unknown };
+      if (typeof value.origin !== "string" || typeof value.collapsed !== "boolean") return undefined;
+      const stored: Record<string, unknown> = await browser.storage.local
+        .get(PANEL_COLLAPSE_KEY)
+        .catch(() => ({} as Record<string, unknown>));
+      const collapseByOrigin = (stored[PANEL_COLLAPSE_KEY] as Record<string, boolean> | undefined) ?? {};
+      await browser.storage.local
+        .set({ [PANEL_COLLAPSE_KEY]: { ...collapseByOrigin, [value.origin]: value.collapsed } })
+        .catch(() => undefined);
+      return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_PROFILE") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      let token: string;
+      try {
+        token = await currentSessionToken();
+      } catch {
+        return { ok: false, error: "not_connected" };
+      }
+      try {
+        const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+        const payload = await api.request("/assisted-apply/extension/profile-package", "POST", {}, token);
+        if (!isProfilePackagePayload(payload)) return { ok: false, error: "profile_unavailable" };
+        return { ok: true, profilePackage: payload };
+      } catch {
+        return { ok: false, error: "profile_unavailable" };
+      }
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PAGE_DETECTED") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      await browser.sidePanel.setOptions({ tabId, path: "sidepanel.html", enabled: true }).catch(() => undefined);
+      return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        ["ASSISTED_APPLY_PANEL_PRIMARY_ACTION", "ASSISTED_APPLY_PANEL_OPEN_SETTINGS", "ASSISTED_APPLY_PANEL_REPORT"]
+          .includes(String((message as { type?: unknown }).type))) {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      await browser.sidePanel.setOptions({ tabId, path: "sidepanel.html", enabled: true }).catch(() => undefined);
+      await browser.sidePanel.open({ tabId }).catch(() => undefined);
       return { ok: true };
     }
     if (message && typeof message === "object" &&

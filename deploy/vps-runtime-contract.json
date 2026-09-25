@@ -62,6 +62,9 @@
         "/opt/runr/deploy/run-acquisition-publisher.sh"
       ],
       "state_restore_entrypoint": "/opt/runr/deploy/restore-acquisition-states.sh",
+      "backup_unit": "runr-acquisition-backup.service",
+      "backup_timer": "runr-acquisition-backup.timer",
+      "backup_entrypoint": "/opt/runr/.venv/bin/python scripts/acquisition_state_backup.py scheduled-backup",
       "active_state_root": "/srv/runr/state/active",
       "service_user": "runr-acquisition",
       "worker_role": "acquisition",
@@ -83,6 +86,10 @@
     "journald_runtime_max_use": "256M",
     "journald_max_retention": "14day",
     "mutable_state_in_git": false,
-    "browser_profiles_in_backup": false
+    "browser_profiles_in_backup": false,
+    "backup_local_generations_min": 3,
+    "backup_remote_generations_min": 7,
+    "backup_prune_requires_verified_off_host_receipt": true,
+    "backup_object_prefix": "runr/acquisition/checkpoints"
   }
 }

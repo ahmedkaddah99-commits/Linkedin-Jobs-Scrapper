@@ -20,6 +20,10 @@ include_single_source="${RUNR_ACQUISITION_INCLUDE_SINGLE_SOURCE:-1}"
 total_cap="${RUNR_ACQUISITION_MAX_REQUESTS:-110}"
 run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"
 
+# Ownership: this wrapper is invoked only by the LinkedIn or employer source
+# timer. A per-source flock skips overlap with exit 75; timeout 900 returns
+# 124 and the receipt records the failed run.
+
 if [ "$source_name" = "linkedin" ]; then
   state_dir="${RUNR_LINKEDIN_STATE_DIR:-$state_root/linkedin}"
   output_dir="$export_root/linkedin"
@@ -57,8 +61,22 @@ fi
 mkdir -p "$output_dir" "$receipt_root" "$lock_root"
 lock_file="$lock_root/$source_name.lock"
 exec 9>"$lock_file"
+
+emit_telemetry() {
+  reason="$1"
+  code="$2"
+  started="${3:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  finished="${4:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  commit="$(printf %s "${RUNR_SOURCE_VERSION:-${RUNR_RELEASE_COMMIT:-}}" | tr -d '"\\')"
+  printf '{"schema_version":"runr.producer.telemetry.v1","source":"%s","reason_code":"%s","exit_code":%s,"started_at":"%s","finished_at":"%s","release_commit":"%s"}\n' \
+    "$source_name" "$reason" "$code" "$started" "$finished" "$commit" \
+    > "$receipt_root/${source_name}-latest-telemetry.json"
+  cat "$receipt_root/${source_name}-latest-telemetry.json"
+}
+
 if ! flock -n 9; then
   echo "$source_name acquisition is already running" >&2
+  emit_telemetry lock_overlap 75
   exit 75
 fi
 
@@ -113,6 +131,18 @@ fi
 set -e
 
 if [ "$exit_code" -eq 0 ]; then status="succeeded"; fi
+
+if [ "$validation_code" -ne 0 ]; then
+  reason="validation_failed"
+elif [ "$exit_code" -eq 0 ]; then
+  reason="ok"
+elif [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
+  reason="stall_timeout"
+else
+  reason="failed"
+fi
+emit_telemetry "$reason" "$exit_code" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 cat "$metrics_path"
 "$python_bin" scripts/write_acquisition_receipt.py \
   --source "$source_name" \

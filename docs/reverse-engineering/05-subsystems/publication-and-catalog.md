@@ -14,7 +14,7 @@ The publisher is the only bridge from the two durable producer state DBs to the 
 
 | Capability | What it does | Main code |
 |---|---|---|
-| Incremental producer-state publication | Bounded rowid bootstrap + watermark incremental reads; only changed companies are re-delivered; durable per-source checkpoints | `scripts/publish_producer_states.py` (`run_delivery` L844, `_load_incremental_source` L226, checkpoint table L89–103) |
+| Incremental producer-state publication | Bounded rowid bootstrap + watermark incremental reads; only changed companies are re-delivered; durable per-source checkpoints | `scripts/publish_producer_states.py` (`run_delivery`, `_load_incremental_source`); checkpoint state via `SqliteAcquisitionStore.publisher_checkpoint`/`save_publisher_checkpoint`; schema via WS-5 migration `061_acquisition_publisher_checkpoints` |
 | Observation delivery | Adapts producer rows to `runr_source_observation_v1`, ingests per company as an independent target, batches ≤100, `send_final` closes a snapshot | `_deliver_group` L561–592; `backend/acquisition/producer_adapters.py:607` (`SqliteAcquisitionTransport`) |
 | Record-completeness gate | Deterministic, source-independent publishability verdict per canonical job with machine-readable reason codes | `backend/acquisition/job_publication_completeness.py` (`validate_job_for_publication` L594) |
 | Publication policies | v1 report-only (default), v2 blocking (opt-in, registered but **not used by the runtime publisher**) | `backend/acquisition/publication.py:34–45` |
@@ -51,7 +51,7 @@ Governing docs: `docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md` (contract for th
 | Item | Detail |
 |---|---|
 | Inputs | RC-005 eligibility manifest (hash + sidecar verified, `load_manifest`), two producer state DBs opened **read-only** (`_read_only_connection` L54, `mode=ro`), optional `company_identity_crosswalk.json` (`--identity-crosswalk`, parsed L1165–1173) |
-| Checkpoints | `acquisition_publisher_checkpoints` table created ad hoc in the data DB (L89–103): per-source `source_rowid`, `source_watermark`, `bootstrap_complete`, last cycle/publication IDs |
+| Checkpoints | `acquisition_publisher_checkpoints` — **schema owned by WS-5 migration `061_acquisition_publisher_checkpoints`** (append-only, `CREATE TABLE IF NOT EXISTS`); **persistence owned by `SqliteAcquisitionStore`** (`require_publisher_checkpoint_table` preflight, `publisher_checkpoint` read, `save_publisher_checkpoint` UPSERT); the publisher is the sole runtime writer. Key: `source` (PRIMARY KEY, one row per `linkedin`/`employer`); columns: `source_rowid`, `source_watermark`, `bootstrap_complete`, `last_cycle_id`, `last_publication_id`, `updated_at`. Lifecycle: saved only after a successful `publish_valid_snapshot` + `complete_cycle`; a failed run leaves rows untouched, so a rerun re-reads the same window (at-least-once, deduped by observation identity keys). |
 | Outputs | Cycle + per-company tasks + observations in `SqliteAcquisitionStore`; publication rows (`acquisition_publications`, `acquisition_publication_jobs`, `acquisition_publication_head`); JSON metrics on stdout → receipt; rejections in `acquisition_job_rejections` (L2311–2358) |
 | DB location | `$RUNR_DATA_DIR/backend.sqlite3` (publisher L868) or Turso per `DATABASE_BACKEND` (schema/migrations: WS-5 [../03-data/schema-and-migrations.md](../03-data/schema-and-migrations.md)) |
 | Consumers | WS-4 personalized Jobs service reads the catalog (`backend/application/personalized_jobs_service.py`); migration `060_publication_latest_observation_index` (WS-5) |
@@ -65,8 +65,8 @@ Governing docs: `docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md` (contract for th
 4. **Gate**: `publish_valid_snapshot` (store L2360) selects candidate canonical jobs (latest observation per job; includes jobs already in the previous head so publications are additive, L2463–2476), then `_publication_rows_with_completeness` (L2237) runs `validate_job_for_publication` with `require_application_destination=policy.missing_apply_is_blocker` (L2278–2283). Rejected rows persist to `acquisition_job_rejections` with reason codes (source `publication_completeness_gate`, L2343). Head update is compare-and-swap (`StalePublicationHeadError`, L2515–2536); audit event `publication_created` (L2537).
 5. **Easy Apply / display feed**: `REASON_EASY_APPLY_NOT_SUPPORTED` fires for any truthy `easy_apply_status` on LinkedIn records **in every publication mode, including display-first** (completeness L711–720; commit `a2c6fea7` "reject easy apply from display feed"). Job-detail/tracking/redirect/listing URLs are rejected destinations (L256–266, L696–704).
 6. **Source merging**: `merge_source_records` (`job_source_merging.py:197`) merges complementary observations only on explicit recorded relationships (`same_posting`, `duplicate`, `cross_source_match`, `repost`, `canonical_match`, L38–44); application destination precedence `dedicated_apply > embedded_apply > job_detail_with_apply > job_detail_only > redirect_apply` (L47–56); uncertain dedupe never publishes (docstring L11). Uncertainty is surfaced by the gate as `uncertain_dedupe_identity` / `unresolved_ownership_conflict` (completeness L653–662).
-7. **Policy versions**: `publication_policy_v1` = report_only, missing-apply not a blocker; `publication_policy_v2` = blocking, `missing_apply_is_blocker=True`, **opt-in only, registered for a future explicit promotion** (publication.py L29–45). The runtime incremental path passes **v1** (publisher L1113); only the dead `_run_delivery_legacy` path (not called by `main`) passes v2 (L823). So "completeness gate v2" is implemented but **not active** in the runtime publisher.
-8. **Combined CSV**: `build_master_jobs_catalog.py` concatenates both source exports into `master_jobs.csv` with `MASTER_FIELDS = union(LINKEDIN_CATALOG_FIELDS, LEGACY_LINKEDIN_FIELDS, EMPLOYER_FIELDS)` (L27–30); refuses missing inputs; both CSVs must be non-empty (cycle wrapper L40–49).
+7. **Policy versions**: `publication_policy_v1` = report_only, missing-apply not a blocker; `publication_policy_v2` = blocking, `missing_apply_is_blocker=True`. The runtime incremental publisher now passes **v2** (`scripts/publish_producer_states.py` `RUNTIME_PUBLICATION_POLICY_VERSION`); the display-first compatibility mode remains available for explicit recovery or audit paths that set `require_application_destination=False`.
+8. **Combined CSV**: `build_master_jobs_catalog.py` concatenates both source exports into `master_jobs.csv` with `MASTER_FIELDS = union(LINKEDIN_CATALOG_FIELDS, LEGACY_LINKEDIN_FIELDS, EMPLOYER_FIELDS)` (L27–30); refuses missing inputs; both CSVs must be non-empty (cycle wrapper L40–49). `LINKEDIN_CATALOG_FIELDS` now includes the blocking completeness fields (`seniority`, `company_logo`, `company_enrichment`) so they survive from the LinkedIn producer state into the CSV and DB projection.
 
 ## 6. Invariants, failure handling and recovery
 
@@ -77,8 +77,9 @@ Governing docs: `docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md` (contract for th
 | A publication either advances the head atomically or raises | CAS head (L2515–2536); whole publish inside `_run_transaction` |
 | Intermediate batches never authorize absence/closure; only `send_final` with a complete external-ID inventory closes a snapshot | transport (primary §5.3) |
 | Empty-snapshot closure preserved by default; `--skip-status-only` is the explicit recovery mode | publisher L1098–1099, help L1150–1154 |
-| Cycle failure → `recovery_required` + error code; checkpoints only saved after a successful publication | L1115–1139, L1122–1123 |
-| Checkpoint saved only after success → a crashed run re-reads the same window (at-least-once, deduped by idempotency keys) | L950–960 no-change path; L1122 |
+| Cycle failure → `recovery_required` + error code; checkpoints only saved after a successful publication | publisher `run_delivery` exception path + `save_publisher_checkpoint` call sites (post-`complete_cycle`) |
+| Checkpoint saved only after success → a crashed run re-reads the same window (at-least-once, deduped by idempotency keys); same-cycle replay is a no-op | publisher `run_delivery`; store replay guard (`ingest` skips already-observed `(target_id, cycle_id, external_job_id)`); proven by `test_crash_before_checkpoint_save_reruns_the_same_window_idempotently` |
+| Publisher never creates the checkpoint schema; it preflights and fails fast if migration `061_acquisition_publisher_checkpoints` has not run | `store.require_publisher_checkpoint_table` at the top of `run_delivery`; `RuntimeError` names the migration |
 | Combined CSV never built from one source | cycle wrapper; `_generation_id` raises on missing CSV |
 
 Recovery: `scripts/publish_existing_catalog.py` (schema preflight L40–61 then `publish_existing_catalog_snapshot`, origin `system`, created_by `catalog_recovery`); `--skip-status-only` publisher rerun; `scripts/reprocess_acquisition.py` rule replay (primary §4.3).
@@ -124,7 +125,7 @@ Never run the publisher against a real data dir outside an authorized host (it w
 
 | Capability | Classification |
 |---|---|
-| Incremental publisher entry + checkpointing | VERIFIED (scope: static full read of `scripts/publish_producer_states.py`; wrapper call verified in primary §3.1) |
+| Incremental publisher entry + checkpointing | VERIFIED (scope: static full read of `scripts/publish_producer_states.py`; wrapper call verified in primary §3.1; T31 moved checkpoint schema to WS-5 migration `061_acquisition_publisher_checkpoints` and persistence to `SqliteAcquisitionStore` methods, with fresh/upgrade/crash-retry coverage in `tests/test_database_migrations.py` and `tests/test_producer_state_delivery.py`) |
 | Observation transport + idempotency keys | VERIFIED (scope: static read of `producer_adapters.py`; primary §5.3) |
 | Record-completeness gate (`job_publication_completeness_v1`) | VERIFIED (scope: static full read; reason codes and status precedence traced) |
 | Easy Apply rejected in all publication modes | VERIFIED (scope: static; completeness L711–720, commit `a2c6fea7`) |
@@ -147,7 +148,7 @@ Never run the publisher against a real data dir outside an authorized host (it w
 |---|---|
 | **WS3-G7** | `publication_policy_v2` (blocking) is registered but never used by the runtime publisher; the only v2 call site is the dead legacy path. Decide promotion or removal. |
 | **WS3-G8** | `job_source_merging.merge_source_records` has no runtime call site in the publisher/store publication path at the baseline; cross-source merge is effectively observation-level only. Confirm intended integration or mark dormant. |
-| **WS3-G9** | `acquisition_publisher_checkpoints` is created ad hoc by the publisher (`publish_producer_states.py:89–103`), not by the WS-5 migration registry — schema drift risk if the store is created by another path. |
+| **WS3-G9** | CLOSED by T31: `acquisition_publisher_checkpoints` is now created only by WS-5 migration `061_acquisition_publisher_checkpoints` (append-only, idempotent for pre-existing ad hoc tables); the publisher preflights via `store.require_publisher_checkpoint_table` and fails fast instead of creating the table; persistence lives in `SqliteAcquisitionStore.publisher_checkpoint`/`save_publisher_checkpoint`. |
 | **WS3-G10** | `SqliteAcquisitionStore.apply_company_identity_crosswalk` (a destructive-in-projection, transactional operation) has no direct test file at the baseline (grep over `tests/` finds no reference). |
 | N-5 / C4 / C5 | Wrapper-level concerns carried in primary §10 (caps, live-network flag, timers; WS-7). |
 | T01 | Unmerged employer patch `6ea7f460` also touches delivery-side files; reference only (`UNMERGED (feature/admin-analytics-final-production @ ce3718b0)` branch context, patch on `temp/runr-employer-final`). |
@@ -169,5 +170,5 @@ Never run the publisher against a real data dir outside an authorized host (it w
 **(c) Gap/ticket candidates**
 1. WS3-G7: promote or delete `publication_policy_v2` (needs owner decision + audit against real stored records per publication.py L29–31).
 2. WS3-G8: wire or retire `merge_source_records` in the publication path.
-3. WS3-G9: move `acquisition_publisher_checkpoints` into the migration registry (coordinate WS-5).
+3. WS3-G9: ~~move `acquisition_publisher_checkpoints` into the migration registry (coordinate WS-5).~~ Done by T31 (migration `061_acquisition_publisher_checkpoints`).
 4. WS3-G10: add direct tests for `apply_company_identity_crosswalk`.

@@ -13,6 +13,7 @@ UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=RUNR_TELEMETRY_STALE_CHECKPOINT_SECONDS=86400
 ExecStart=/opt/runr/deploy/run-acquisition-publisher.sh
 CPUAccounting=true
 CPUQuota=200%
@@ -22,6 +23,8 @@ MemoryMax=6G
 TasksMax=256
 TimeoutStartSec=12h
 TimeoutStopSec=300
+# The wrapper's watchdog is the normal bound; this is the outer systemd bound.
+SuccessExitStatus=75
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

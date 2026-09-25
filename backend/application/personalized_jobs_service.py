@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -1323,6 +1324,7 @@ class PersonalizedJobsService:
 
         if self.store is None:
             return self._empty_feed(effective_filters, state="unavailable")
+        store_started = time.perf_counter()
         result = self.store.query_published_jobs(
             user_id,
             filters=effective_filters,
@@ -1331,6 +1333,7 @@ class PersonalizedJobsService:
             include_hidden=include_hidden,
             hidden_only=hidden_only,
         )
+        store_query_ms = round((time.perf_counter() - store_started) * 1000, 1)
         publication = result.get("publication")
         if publication is None:
             return self._empty_feed(effective_filters, state="unavailable")
@@ -1353,6 +1356,17 @@ class PersonalizedJobsService:
         job_ids = [str(row.get("canonical_job_id") or "") for row in page]
         dispositions = self.store.list_dispositions_for_jobs(user_id, job_ids)
         state = catalog_state if catalog_state in EVALUATION_STATES else "partial"
+        capabilities_started = time.perf_counter()
+        filter_capabilities = self.store.get_published_filter_capabilities()
+        capabilities_ms = round((time.perf_counter() - capabilities_started) * 1000, 1)
+
+        def _timings() -> dict[str, float]:
+            return {
+                "store_query_ms": store_query_ms,
+                "capabilities_ms": capabilities_ms,
+                "total_ms": round((time.perf_counter() - store_started) * 1000, 1),
+            }
+
         if card_view:
             jobs = [
                 _job_card_projection(
@@ -1372,7 +1386,8 @@ class PersonalizedJobsService:
                 "total": int(result.get("total") or 0),
                 "next_cursor": next_cursor or None,
                 "filters": effective_filters,
-                "filter_capabilities": self.store.get_published_filter_capabilities(),
+                "filter_capabilities": filter_capabilities,
+                "timings": _timings(),
                 "evaluation": {
                     "state": state,
                     "supported_states": sorted(EVALUATION_STATES),
@@ -1432,7 +1447,8 @@ class PersonalizedJobsService:
             "total": int(result.get("total") or 0),
             "next_cursor": next_cursor or None,
             "filters": effective_filters,
-            "filter_capabilities": self.store.get_published_filter_capabilities(),
+            "filter_capabilities": filter_capabilities,
+            "timings": _timings(),
             "evaluation": {
                 "state": state,
                 "supported_states": sorted(EVALUATION_STATES),

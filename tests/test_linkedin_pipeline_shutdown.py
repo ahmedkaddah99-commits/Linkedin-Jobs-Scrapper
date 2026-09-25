@@ -27,6 +27,11 @@ from scripts.master_linkedin_jobs_catalog import (
     WebshareProxy,
     WebshareTransport,
 )
+from scripts.run_manifested_linkedin import (
+    DryRunFixtureTransport,
+    build_dry_run_receipt,
+    load_fixture_companies,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -388,3 +393,119 @@ def test_budget_exhaustion_does_not_advance_bounded_cycle_cursor(tmp_path: Path)
     # per-company retry schedule; one failed cohort must not starve the rest.
     assert state.get_cursor() == 1
     state.close()
+
+
+def _run_fixture_dry_run(
+    tmp_path: Path,
+    *,
+    rows: list[dict[str, str]] | None = None,
+    max_requests: int = 25,
+    mode: str = "smoke",
+    transport: Any = None,
+    pipeline_enabled: bool = True,
+    now: object = None,
+) -> tuple[dict[str, object], dict[str, object], Any]:
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, rows or single_company_rows())
+    pagination = tmp_path / "pagination.json"
+    write_pagination_report(pagination)
+    fixture_transport = transport or DryRunFixtureTransport(
+        load_fixture_companies(source), max_requests=max_requests
+    )
+    config = RunnerConfig(
+        input_csv=source,
+        output_dir=tmp_path / "output",
+        pagination_report=pagination,
+        mode=mode,  # type: ignore[arg-type]
+        max_companies=1,
+        pipeline_enabled=pipeline_enabled,
+        detail_workers=2,
+    )
+    if now is None:
+        metrics = CatalogRunner(config, transport=fixture_transport).run()
+    else:
+        metrics = CatalogRunner(config, transport=fixture_transport, now=now).run()
+    receipt = build_dry_run_receipt(
+        metrics,
+        tmp_path / "output" / "master_linkedin_jobs_state.db",
+        {"max_requests": max_requests},
+    )
+    return metrics, receipt, fixture_transport
+
+
+def test_dry_run_receipt_distinguishes_the_five_job_classes(tmp_path: Path) -> None:
+    metrics, receipt, transport = _run_fixture_dry_run(tmp_path)
+
+    assert metrics["run_outcome"] == "COMPLETE"
+    assert receipt["schema_version"] == "linkedin_dry_run_receipt_v1"
+    assert receipt["dry_run"] is True
+    assert receipt["pipeline_executed"] is True
+    # fetched counts transport responses, not just successful ones.
+    assert receipt["fetched"] == metrics["requests"] == transport.request_count
+    # parsed counts search cards parsed, identity_resolved counts durable
+    # observations carrying canonical company identity, publishable applies
+    # the bounded completeness classification on top of identity.
+    assert receipt["parsed"] == metrics["valid_cards"] == 2
+    assert receipt["identity_resolved"] == 2
+    assert receipt["rejected"] == 0
+    assert receipt["publishable"] == 2
+    assert receipt["limits"]["max_requests"] == 25
+
+
+def test_dry_run_receipt_surfaces_detail_failure_classes_as_rejected(tmp_path: Path) -> None:
+    class FailingDetailFixture(DryRunFixtureTransport):
+        def _detail(self, url: str) -> ResponseEnvelope:
+            return ResponseEnvelope(503, "temporary detail failure", self.proxy_id, 0.0)
+
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, single_company_rows())
+    transport = FailingDetailFixture(load_fixture_companies(source), max_requests=25)
+    metrics, receipt, _ = _run_fixture_dry_run(tmp_path, rows=single_company_rows(), transport=transport)
+
+    assert metrics["run_outcome"] == "PARTIAL"
+    assert receipt["identity_resolved"] == 0
+    assert receipt["rejected_components"]["detail_failures"] == 2
+    assert receipt["rejected"] == 2
+    assert receipt["publishable"] == 0
+
+
+def test_dry_run_receipt_respects_explicit_request_budget(tmp_path: Path) -> None:
+    # Sequential mode makes the request order deterministic: both search
+    # pages complete inside the budget, then both detail attempts are refused.
+    metrics, receipt, transport = _run_fixture_dry_run(
+        tmp_path, max_requests=2, pipeline_enabled=False
+    )
+
+    assert metrics["run_outcome"] == "PARTIAL"
+    assert receipt["limits"]["max_requests"] == 2
+    # Two search pages are served inside the budget; both detail attempts are
+    # refused with request_budget_exhausted but still count as fetch attempts.
+    assert transport.request_count == 2
+    assert receipt["fetched"] == metrics["requests"] == 4
+    assert receipt["parsed"] == 2
+    assert receipt["rejected_components"]["detail_failures"] == 2
+    assert receipt["publishable"] == 0
+
+
+def test_load_fixture_companies_skips_rows_without_usable_identity(tmp_path: Path) -> None:
+    rows = single_company_rows() + [
+        {
+            "canonical_CompanyID": "C-002",
+            "company_name": "Bad",
+            "linkedin_company_url": "https://www.linkedin.com/company/bad",
+            "linkedin_slug": "bad",
+            "linkedin_company_id": "not-numeric",
+        },
+        {
+            "canonical_CompanyID": "C-003",
+            "company_name": "Missing URL",
+            "linkedin_company_url": "",
+            "linkedin_slug": "missing",
+            "linkedin_company_id": "24",
+        },
+    ]
+    source = tmp_path / "companies.csv"
+    write_source_csv(source, rows)
+    companies = load_fixture_companies(source)
+
+    assert [company["linkedin_company_id"] for company in companies] == ["22"]

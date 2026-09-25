@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   ADAPTER_SUBMISSION_CAPABILITY_FORBIDDEN,
@@ -52,6 +55,32 @@ describe("ATS detection and submission guardrail", () => {
     expect(ADAPTER_SUBMISSION_CAPABILITY_FORBIDDEN).toBe(true);
     expect(ATS_ADAPTER_CAPABILITIES).not.toContain("submit");
     expect(ATS_ADAPTER_CAPABILITIES).not.toContain("submitApplication");
+  });
+});
+
+describe("never-submit boundary gate", () => {
+  const scriptPath = path.resolve("scripts/verify-assisted-apply-boundary.mjs");
+
+  it("scans every extension execution surface including synthetic activation", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    for (const token of [
+      "apps/browser-extension/entrypoints/**",
+      "apps/browser-extension/src/**",
+      "packages/ats-core/src/**",
+      "dispatchEvent",
+      "MouseEvent",
+      "PointerEvent",
+      "KeyboardEvent",
+      "requestSubmit",
+      ".submit",
+    ]) {
+      expect(source).toContain(token);
+    }
+  });
+
+  it("passes on the current extension execution surfaces", () => {
+    const output = execFileSync(process.execPath, [scriptPath], { encoding: "utf8" });
+    expect(output).toContain("Verified never-submit boundary");
   });
 });
 

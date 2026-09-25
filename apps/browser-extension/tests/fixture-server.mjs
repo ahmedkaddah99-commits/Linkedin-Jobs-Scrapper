@@ -12,6 +12,12 @@ const fixturePaths = new Map([
   ["/runr-web-launch.html", join(currentDirectory, "fixtures", "runr-web-launch.html")],
   ["/same-origin-frame.html", join(currentDirectory, "fixtures", "same-origin-frame.html")],
   ["/cross-origin-frame.html", join(currentDirectory, "fixtures", "cross-origin-frame.html")],
+  // Served under the Avature candidate-portal route shapes so detection sees the
+  // same paths in the browser that the unit tests assert against.
+  ["/en_US/externaljobs/JobDetail/618402", join(currentDirectory, "fixtures", "avature-job-detail.html")],
+  ["/en_US/externaljobs/ApplicationMethods", join(currentDirectory, "fixtures", "avature-application-gateway.html")],
+  ["/en_US/externaljobs/Register", join(currentDirectory, "fixtures", "avature-register-form.html")],
+  ["/en_US/externaljobs/CountryQuestions", join(currentDirectory, "fixtures", "avature-final-step.html")],
 ]);
 const extensionOriginPattern = /^chrome-extension:\/\/([a-p]{32})$/u;
 
@@ -36,6 +42,7 @@ const counters = {
   revocations: 0,
   documentGrants: 0,
   documentDownloads: 0,
+  profilePackageReads: 0,
   telemetryEvents: 0,
   lastTelemetry: null,
   trackerConfirmations: 0,
@@ -244,6 +251,58 @@ const server = createServer(async (request, response) => {
       if (!record) return;
       counters.sessionReads += 1;
       json(response, 200, { session: session(record), preferences: preferences(record) }, origin);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/profile-package" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      await readJson(request);
+      counters.profilePackageReads += 1;
+      json(response, 200, {
+        schema_version: 1,
+        candidate: {
+          first_name: "Fixture",
+          last_name: "Candidate",
+          full_name: "Fixture Candidate",
+          email: "fixture.candidate@example.com",
+          phone: "+49 30 000000",
+          source: "confirmed_career_memory",
+          approved: true,
+          provenance: "career_profile:fixture",
+        },
+        answers: [
+          ["candidate.city", "City", "Erlangen"],
+          ["candidate.state", "State", "Bavaria"],
+          ["candidate.address", "Address", "1 Example Street"],
+          ["candidate.postal_code", "Postal code", "91052"],
+          ["candidate.country", "Country", "Germany"],
+          ["candidate.current_title", "Current title", "Platform Engineer"],
+          ["candidate.website", "Website", "https://example.com/candidate"],
+        ].map(([field_intent, label, proposed_value]) => ({
+          field_intent, label, proposed_value, source: "profile_verified", sensitivity: "standard",
+          scope: "global", confidence: 1, requires_review: false,
+          provenance: "career_profile:fixture", reasons: ["Sanitized fixture value."],
+        })),
+        experiences: [{
+          source_experience_id: "exp_fixture_1",
+          role_title: "Platform Engineer",
+          company: "Example Systems",
+          period: "December 2023 - July 2024",
+          location: "Berlin",
+          bullets: [{
+            bullet_id: "exp_fixture_1:description", text: "Built and ran deployment tooling.",
+            approved_text: "Built and ran deployment tooling.", source_experience_id: "exp_fixture_1",
+            provenance_id: "career_profile:fixture:exp_fixture_1", approved: true,
+          }],
+          generation_provenance: { source: "career_memory", profile_id: "fixture" },
+          provenance_confidence: "reduced",
+        }],
+        education: [{ institution: "Example University", degree: "BSc", period: "2017 - 2020", provenance: "career_profile:fixture", confirmed: true }],
+        skills: [{ value: "Python", provenance: "career_profile:fixture", confirmed: true }, { value: "Kubernetes", provenance: "career_profile:fixture", confirmed: true }],
+        languages: [],
+        warnings: [],
+      }, origin);
       return;
     }
 
