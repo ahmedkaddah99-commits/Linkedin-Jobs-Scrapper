@@ -3543,6 +3543,7 @@ def _collect_tracker_entries(
     include_cv_studio_seed: bool = False,
     include_full_details: bool = False,
     include_resource_details: bool = True,
+    include_full_resource_metadata: bool = False,
 ) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set.
 
@@ -3583,6 +3584,7 @@ def _collect_tracker_entries(
                 workspace_records=workspaces,
                 job_sets_by_run=job_sets_by_run,
                 artifacts_by_run=artifacts_by_run,
+                include_preview_profile=include_full_resource_metadata,
             )
         )
     else:
@@ -5788,7 +5790,10 @@ def _candidate_asset_download_descriptor(
 
 
 def _find_document_entry(application, user, document_id: str) -> dict:
-    for item in _collect_document_entries(application, user):
+    # This lookup serves one already-authorized document. Preserve its complete
+    # metadata so export filenames and ATS diagnostics can use fields that are
+    # intentionally omitted from the compact document-library listing.
+    for item in _collect_document_entries(application, user, include_preview_profile=True):
         if str(item.get("document_id") or "") == str(document_id or ""):
             return item
     raise KeyError(f"Document '{document_id}' not found.")

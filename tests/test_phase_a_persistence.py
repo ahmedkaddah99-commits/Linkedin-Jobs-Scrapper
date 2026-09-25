@@ -61,7 +61,13 @@ class PhaseAPersistenceTests(unittest.TestCase):
                 "title": "Operations Analyst",
                 "url": "https://boards.greenhouse.io/n26/jobs/fixture-job-1",
                 "location": "Berlin",
-                "description": "Fixture posting",
+                "description": "This is a detailed fixture posting that explains the Operations Analyst role, responsibilities, and expectations with enough text to satisfy the publication description length requirement.",
+                "seniority": "mid",
+                "employment_type": "full_time",
+                "workplace_arrangement": "hybrid",
+                "company_logo": "https://n26.example/logo.png",
+                "company_enrichment": "verified",
+                "source_ats": "greenhouse",
             }
             store.ingest_snapshot(
                 cycle_id=cycle_id,

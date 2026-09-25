@@ -140,6 +140,7 @@ class EmployerCoverageReceipt:
     connector_family: str = ""
     discovery_method: str = ""
     attempts: list[EndpointAttempt] = field(default_factory=list)
+    source_inventory: list[dict[str, Any]] = field(default_factory=list)
     persisted_job_count: int = 0
     terminal_classification: str = "unknown"
     reasons: list[str] = field(default_factory=list)
@@ -159,6 +160,7 @@ class EmployerCoverageReceipt:
             "connector_family": self.connector_family,
             "discovery_method": self.discovery_method,
             "attempts": [attempt.to_dict() for attempt in self.attempts],
+            "source_inventory": [dict(entry) for entry in self.source_inventory],
             "persisted_job_count": self.persisted_job_count,
             "terminal_classification": self.terminal_classification,
             "reasons": list(self.reasons),
@@ -286,6 +288,18 @@ def _failure_reasons(result: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
+def _source_inventory(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the durable all-candidate source inventory recorded by the collector."""
+
+    coverage = result.get("coverage") or {}
+    if not isinstance(coverage, Mapping):
+        return []
+    raw_inventory = coverage.get("source_inventory")
+    if not isinstance(raw_inventory, list):
+        return []
+    return [dict(entry) for entry in raw_inventory if isinstance(entry, Mapping)]
+
+
 def _reconciles(attempt: EndpointAttempt) -> bool:
     """Return True when any independent source total matches observations."""
 
@@ -370,6 +384,13 @@ def build_coverage_receipt(
     attempts = _extract_attempts(result)
     classification = _classify(result, attempts)
     reasons = _failure_reasons(result)
+    inventory = _source_inventory(result)
+    source_union = {
+        "union_jobs": len(result.get("jobs") or []),
+        "duplicates_skipped": sum(int(entry.get("duplicate_count") or 0) for entry in inventory),
+        "sources_traversed": sum(1 for entry in inventory if entry.get("traversal_status") == "traversed"),
+        "sources_deferred": sum(1 for entry in inventory if entry.get("traversal_status") == "deferred"),
+    }
     endpoint_used = ""
     connector_family = ""
     discovery_method = ""
@@ -393,6 +414,7 @@ def build_coverage_receipt(
             coverage.get("recheck_policy", {}).get("recheck_required")
         ) if isinstance(coverage.get("recheck_policy"), Mapping) else True,
         "request_budget_exhausted": bool(coverage.get("request_budget_exhausted")),
+        "source_union": source_union,
     }
     return EmployerCoverageReceipt(
         company_id=company_id,
@@ -404,6 +426,7 @@ def build_coverage_receipt(
         connector_family=connector_family,
         discovery_method=discovery_method,
         attempts=attempts,
+        source_inventory=inventory,
         persisted_job_count=len(result.get("jobs") or []),
         terminal_classification=classification,
         reasons=reasons,

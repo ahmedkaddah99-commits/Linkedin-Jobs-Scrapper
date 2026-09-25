@@ -3,6 +3,7 @@
 export type DeclarativeAction =
   | { type: "fill_text" | "fill_rich_text"; fieldId: string; value: string }
   | { type: "select_combobox_option"; fieldId: string; value: string; optionSelector: string; acceptedStateSelector?: string }
+  | { type: "select_enhanced_options"; fieldId: string; values: string[] }
   | { type: "select"; fieldId: string; value: string }
   | { type: "set_date"; fieldId: string; value: string; monthFieldId?: string; yearFieldId?: string; datePickerSelector?: string }
   | { type: "set_checkbox" | "set_radio"; fieldId: string; checked: boolean }
@@ -18,7 +19,12 @@ export type DeclarativeAction =
 
 export type DeclarativePlan = {
   schemaVersion: 1;
-  adapter: "greenhouse" | "lever";
+  /**
+   * Provider identifier. Widened from the original Greenhouse/Lever union so
+   * provider-neutral planning can target any portal; the two named adapters
+   * remain valid values and their behavior is unchanged.
+   */
+  adapter: string;
   actions: DeclarativeAction[];
 };
 
@@ -33,8 +39,8 @@ export type ActionExecution =
   | { status: "rejected"; actionType: string; reason: string };
 
 const actionTypes = new Set([
-  "fill_text", "fill_rich_text", "select_combobox_option", "select", "set_date", "set_checkbox", "set_radio",
-  "add_repeatable_section", "upload_document", "propose_intermediate_navigation",
+  "fill_text", "fill_rich_text", "select_combobox_option", "select_enhanced_options", "select", "set_date",
+  "set_checkbox", "set_radio", "add_repeatable_section", "upload_document", "propose_intermediate_navigation",
 ]);
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -59,6 +65,10 @@ export function isDeclarativeAction(value: unknown): value is DeclarativeAction 
       typeof value.optionSelector === "string" && value.optionSelector.length > 0 &&
       (value.acceptedStateSelector === undefined || typeof value.acceptedStateSelector === "string");
   }
+  if (value.type === "select_enhanced_options") {
+    return typeof value.fieldId === "string" && Array.isArray(value.values) &&
+      value.values.length > 0 && value.values.every((item) => typeof item === "string" && item.length > 0);
+  }
   if (["set_checkbox", "set_radio"].includes(value.type)) {
     return typeof value.fieldId === "string" && typeof value.checked === "boolean";
   }
@@ -77,7 +87,11 @@ export function isDeclarativeAction(value: unknown): value is DeclarativeAction 
 }
 
 export function isDeclarativePlan(value: unknown): value is DeclarativePlan {
-  return record(value) && value.schemaVersion === 1 && (value.adapter === "greenhouse" || value.adapter === "lever") &&
+  // The adapter is validated by shape rather than against a fixed list so new
+  // providers do not require editing this module. It must still be a plain
+  // lowercase identifier, so a plan cannot smuggle arbitrary text through.
+  return record(value) && value.schemaVersion === 1 &&
+    typeof value.adapter === "string" && /^[a-z][a-z0-9_]{1,31}$/u.test(value.adapter) &&
     Array.isArray(value.actions) && value.actions.every(isDeclarativeAction);
 }
 
@@ -317,6 +331,267 @@ export async function executeComboboxOptionAction(
   return { status: "applied", actionType: action.type };
 }
 
+export type EnhancedSelectionExecution = ActionExecution & {
+  /** Values confirmed selected by reading the control back. */
+  applied?: string[];
+  /** Values the control did not offer or did not retain. */
+  rejected?: string[];
+};
+
+function normalizedText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim().toLowerCase();
+}
+
+/** Finds the listbox a combobox drives, whether declared or adjacent. */
+function relatedListbox(document: Document, control: Element): Element | null {
+  const controls = control.getAttribute("aria-controls") || control.getAttribute("aria-owns");
+  if (controls) {
+    const declared = document.getElementById(controls);
+    if (declared) return declared;
+  }
+  const sibling = control.parentElement?.querySelector("[role='listbox']");
+  if (sibling && sibling !== control) return sibling;
+  return control.getAttribute("role") === "listbox" ? control : null;
+}
+
+function optionElements(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("[role='option']"))
+    .filter((option) => option.getAttribute("aria-disabled") !== "true" && !option.hasAttribute("disabled"));
+}
+
+/**
+ * An option can be identified by its visible text or by its declared value, and
+ * widgets disagree about which carries the human label. Both are compared, so a
+ * list rendering "Germany" behind `data-value="DE"` still matches "Germany".
+ */
+function optionIdentifiers(option: Element): string[] {
+  return [normalizedText(option.textContent || ""), normalizedText(option.getAttribute("data-value") || "")]
+    .filter((value) => value.length > 0);
+}
+
+function optionText(option: Element): string {
+  return optionIdentifiers(option)[0] ?? "";
+}
+
+function optionMatches(option: Element, wanted: string): boolean {
+  return optionIdentifiers(option).includes(wanted);
+}
+
+/** True when the control visibly reflects the value after selection. */
+function selectionRetained(control: Element, listbox: Element | null, value: string): boolean {
+  const wanted = normalizedText(value);
+  if (listbox) {
+    const chosen = optionElements(listbox).some(
+      (option) => option.getAttribute("aria-selected") === "true" && optionMatches(option, wanted),
+    );
+    if (chosen) return true;
+  }
+  const container = control.parentElement ?? control;
+  const chipText = normalizedText(container.textContent || "");
+  if (chipText.includes(wanted)) return true;
+  const inner = control.querySelector("input") ?? (control instanceof HTMLInputElement ? control : null);
+  return Boolean(inner && normalizedText(inner.value).includes(wanted));
+}
+
+/**
+ * Operates enhanced list controls: native multi-selects, ARIA comboboxes, and
+ * searchable selects that filter as you type.
+ *
+ * Every value is verified by reading the control back after selection. A value
+ * the control never offered, or accepted and then dropped, is reported rejected
+ * rather than counted as applied ??? the panel routes those to review.
+ */
+export async function executeEnhancedSelection(
+  document: Document,
+  action: Extract<DeclarativeAction, { type: "select_enhanced_options" }>,
+  resolve: (fieldId: string) => Element | null = (fieldId) => document.getElementById(fieldId),
+): Promise<EnhancedSelectionExecution> {
+  const control = resolveControl(document, action.fieldId, resolve);
+  if (!control) {
+    return { status: "unresolved", actionType: action.type, reason: "The enhanced control is unavailable." };
+  }
+  if (control.tagName === "BUTTON" || (control instanceof HTMLInputElement && ["submit", "button", "image", "reset"].includes(control.type))) {
+    return { status: "rejected", actionType: action.type, reason: "Terminal or button controls are never executable." };
+  }
+
+  const applied: string[] = [];
+  const rejected: string[] = [];
+
+  // Native selects need no interaction choreography.
+  if (control instanceof HTMLSelectElement) {
+    (control as HTMLElement).focus();
+    for (const value of action.values) {
+      const wanted = normalizedText(value);
+      const option = Array.from(control.options).find(
+        (item) => item.value === value || normalizedText(item.label || item.textContent || "") === wanted,
+      );
+      if (!option) {
+        rejected.push(value);
+        continue;
+      }
+      if (control.multiple) option.selected = true;
+      else setProperty(control, "value", option.value);
+      applied.push(value);
+    }
+    emitFrameworkEvents(control);
+    (control as HTMLElement).blur();
+    const confirmed = applied.filter((value) => {
+      const wanted = normalizedText(value);
+      return Array.from(control.selectedOptions).some(
+        (item) => item.value === value || normalizedText(item.label || item.textContent || "") === wanted,
+      );
+    });
+    const dropped = applied.filter((value) => !confirmed.includes(value));
+    rejected.push(...dropped);
+    return confirmed.length === action.values.length
+      ? { status: "applied", actionType: action.type, applied: confirmed, rejected }
+      : confirmed.length > 0
+        ? { status: "needs_attention", actionType: action.type, reason: "Some values were not accepted by the control.", applied: confirmed, rejected }
+        : { status: "unresolved", actionType: action.type, reason: "The control did not accept any of the values.", applied: [], rejected };
+  }
+
+  const listbox = relatedListbox(document, control);
+  const inner = control.querySelector<HTMLInputElement>("input");
+
+  for (const value of action.values) {
+    (control as HTMLElement).focus();
+    // Activation is never synthesized: focus plus typed input is what opens
+    // most searchable widgets, and any widget that only opens on a real
+    // pointer event is reported unresolved rather than clicked. Option choice
+    // is the one classified non-terminal interaction (AA-216).
+
+    if (inner) {
+      setProperty(inner, "value", value);
+      emitFrameworkEvents(inner);
+    }
+
+    const searchRoot = relatedListbox(document, control) ?? listbox ?? document;
+    const wanted = normalizedText(value);
+    const pick = (): HTMLElement | null => {
+      const options = optionElements(searchRoot);
+      const exact = options.filter((option) => optionMatches(option, wanted));
+      if (exact.length === 1) return exact[0]!;
+      const starts = options.filter((option) => optionText(option).startsWith(wanted));
+      return starts.length === 1 ? starts[0]! : null;
+    };
+
+    let option = pick();
+    if (!option) {
+      // Options frequently arrive asynchronously after typing.
+      option = await new Promise<HTMLElement | null>((resolveOption) => {
+        const observer = new MutationObserver(() => {
+          const candidate = pick();
+          if (!candidate) return;
+          observer.disconnect();
+          clearTimeout(timer);
+          resolveOption(candidate);
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        const timer = setTimeout(() => { observer.disconnect(); resolveOption(null); }, 1_500);
+      });
+    }
+
+    if (!option) {
+      rejected.push(value);
+      continue;
+    }
+    option.click();
+    await Promise.resolve();
+
+    if (selectionRetained(control, relatedListbox(document, control) ?? listbox, value)) applied.push(value);
+    else rejected.push(value);
+  }
+
+  (control as HTMLElement).blur();
+
+  if (applied.length === action.values.length) {
+    return { status: "applied", actionType: action.type, applied, rejected };
+  }
+  if (applied.length > 0) {
+    return { status: "needs_attention", actionType: action.type, reason: "Some values were not accepted by the control.", applied, rejected };
+  }
+  return { status: "unresolved", actionType: action.type, reason: "The control did not expose matching options.", applied, rejected };
+}
+
+/** Wording used by "add another row" affordances in repeated sections. */
+const ADD_ROW_PATTERNS: ReadonlyArray<RegExp> = [
+  /\badd\s+another\b/iu,
+  /\badd\s+(?:more|new|another\s+)?(?:experience|education|position|role|school|qualification)\b/iu,
+  /\badd\b/iu,
+  /\bweitere[ns]?\s+hinzuf/iu,
+];
+
+/** Wording that must never be mistaken for an add-row control. */
+const NOT_ADD_ROW: ReadonlyArray<RegExp> = [
+  /\bsubmit\b/iu, /\bremove\b/iu, /\bdelete\b/iu, /\bcontinue\b/iu, /\bnext\b/iu, /\bsave\b/iu, /\bapply\b/iu,
+];
+
+export type AddRowExecution = ActionExecution & {
+  /** Number of repeat containers present after the attempt. */
+  rowCount?: number;
+};
+
+/**
+ * Classifies the add-row control of a repeated section without activating it.
+ *
+ * The control is found by reading button text inside the section; terminal and
+ * destructive wording is excluded outright, and ambiguous sections are refused
+ * rather than guessed. Runr never dispatches a click on a page control, so a
+ * single identified candidate is reported `needs_attention` for a trusted user
+ * activation instead of being operated by code.
+ */
+export function executeAddRepeatedRow(
+  document: Document,
+  sectionRoot: Element,
+  repeatSelector = "[data-repeat], [data-repeat-index], fieldset",
+): AddRowExecution {
+  const countRows = () => sectionRoot.querySelectorAll(repeatSelector).length;
+  const before = countRows();
+
+  const candidates = Array.from(sectionRoot.querySelectorAll<HTMLElement>("button, a[role='button'], [data-repeat-add]"))
+    .filter((element) => !(element as HTMLButtonElement).disabled)
+    .filter((element) => {
+      const label = (element.getAttribute("aria-label") || element.textContent || "").replace(/\s+/gu, " ").trim();
+      if (!label) return Boolean(element.getAttribute("data-repeat-add"));
+      if (NOT_ADD_ROW.some((pattern) => pattern.test(label))) return false;
+      return ADD_ROW_PATTERNS.some((pattern) => pattern.test(label));
+    });
+
+  if (candidates.length === 0) {
+    return { status: "unresolved", actionType: "add_repeatable_section", reason: "This section has no add-row control.", rowCount: before };
+  }
+  if (candidates.length > 1) {
+    return { status: "unresolved", actionType: "add_repeatable_section", reason: "More than one add-row control was found.", rowCount: before };
+  }
+
+  const candidate = candidates[0]!;
+  const label = (candidate.getAttribute("aria-label") || candidate.textContent || "").replace(/\s+/gu, " ").trim();
+  return {
+    status: "needs_attention",
+    actionType: "add_repeatable_section",
+    reason: `Add-row control identified ("${label}"); row creation waits for a trusted user activation.`,
+    rowCount: before,
+  };
+}
+
+/**
+ * Confirms a row was actually created after a trusted user activates the
+ * add-row control. Reading the page back is what separates "the row exists"
+ * from "an activation was sent": a count that did not grow is reported
+ * unresolved rather than assumed to have worked.
+ */
+export function verifyRepeatedRowGrowth(
+  before: number,
+  sectionRoot: Element,
+  repeatSelector = "[data-repeat], [data-repeat-index], fieldset",
+): AddRowExecution {
+  const after = sectionRoot.querySelectorAll(repeatSelector).length;
+  if (after <= before) {
+    return { status: "unresolved", actionType: "add_repeatable_section", reason: "The page did not add a row.", rowCount: after };
+  }
+  return { status: "applied", actionType: "add_repeatable_section", rowCount: after };
+}
+
 export function executeDeclarativeAction(
   document: Document,
   action: unknown,
@@ -330,7 +605,10 @@ export function executeDeclarativeAction(
       ? { status: "needs_attention", actionType: action.type, reason: "Post-transition verification is required before navigation." }
       : { status: "needs_attention", actionType: action.type, reason: authorization.reason };
   }
-  if (action.type === "add_repeatable_section" || action.type === "upload_document") {
+  if (action.type === "add_repeatable_section" || action.type === "upload_document" ||
+      action.type === "select_enhanced_options") {
+    // These need the asynchronous executors; the synchronous entry point cannot
+    // await them, so it reports rather than half-applying.
     return { status: "needs_attention", actionType: action.type, reason: "This action requires the adapter-specific controlled executor." };
   }
   return executeNativeValueAction(document, action);

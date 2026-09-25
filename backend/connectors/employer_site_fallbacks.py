@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from typing import Any, Callable
@@ -24,6 +25,7 @@ MAX_EMBEDDED_BYTES = 2_000_000
 MAX_JSON_DEPTH = 8
 MAX_JSON_NODES = 10_000
 MAX_BROWSER_RESPONSE_BYTES = 2_000_000
+MAX_BROWSER_RETRY_ATTEMPTS = 3
 JOB_PATH_MARKERS = (
     "/job/",
     "/jobs/",
@@ -315,27 +317,53 @@ def _browser_failure(target_url: str, status: str, error: str) -> dict[str, Any]
     }
 
 
-def fetch_browser_snapshot(
-    target_url: str,
-    *,
-    max_job_links: int = 25,
-    timeout_seconds: int = 25,
-    max_requests: int = 10,
-    proxy_url: str = "",
-    request_guard: Callable[[str, str], Any] | None = None,
-    browser_process_guard: Callable[[str], Any] | None = None,
-) -> dict[str, Any]:
-    """Fetch one rendered page and same-origin JSON/XHR responses safely."""
+def _proxy_launch_options(proxy_url: str) -> dict[str, Any]:
+    launch_options: dict[str, Any] = {"headless": True}
+    if proxy_url:
+        parsed_proxy = urlsplit(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
+        proxy_host = parsed_proxy.hostname or ""
+        if ":" in proxy_host:
+            proxy_host = f"[{proxy_host}]"
+        proxy_port = f":{parsed_proxy.port}" if parsed_proxy.port is not None else ""
+        proxy = {"server": f"{parsed_proxy.scheme}://{proxy_host}{proxy_port}"}
+        if parsed_proxy.username is not None:
+            proxy["username"] = unquote(parsed_proxy.username)
+        if parsed_proxy.password is not None:
+            proxy["password"] = unquote(parsed_proxy.password)
+        launch_options["proxy"] = proxy
+    return launch_options
 
-    if sync_playwright is None:
-        return _browser_failure(target_url, "browser_unavailable", "playwright_not_installed")
-    timeout_ms = max(1_000, min(120_000, int(timeout_seconds) * 1_000))
-    response_limit = max(1, min(100, int(max_requests)))
+
+def _collect_from_page(
+    page: Any,
+    *,
+    target_url: str,
+    timeout_ms: int,
+    response_limit: int,
+    max_job_links: int,
+    request_guard: Callable[[str, str], Any] | None,
+) -> dict[str, Any]:
+    """Navigate one page and collect bounded same-origin observations.
+
+    Returns a raw mapping (``jobs``, ``browser_request_count``,
+    ``request_limit_reached``, ``rendered_html``, ``challenge``, ``timed_out``,
+    ``error``) that callers finalize into a public snapshot dict.
+    """
+
     jobs: list[dict[str, Any]] = []
     seen: set[str] = set()
-    response_count = 0
     browser_request_count = 0
+    response_count = 0
     request_limit_reached = False
+    raw: dict[str, Any] = {
+        "jobs": jobs,
+        "browser_request_count": 0,
+        "request_limit_reached": False,
+        "rendered_html": "",
+        "challenge": "",
+        "timed_out": False,
+        "error": "",
+    }
 
     def add_jobs(items: Iterable[Mapping[str, Any]]) -> None:
         for job in items:
@@ -344,125 +372,145 @@ def fetch_browser_snapshot(
                 seen.add(identity)
                 jobs.append(dict(job))
 
-    process_guard = browser_process_guard(target_url) if browser_process_guard else nullcontext()
+    def handle_route(route: Any) -> None:
+        nonlocal browser_request_count, request_limit_reached
+        request = route.request
+        request_url = _text(getattr(request, "url", ""))
+        request_type = _text(getattr(request, "resource_type", ""))
+        if request_url.startswith(("http://", "https://")):
+            if browser_request_count >= response_limit:
+                request_limit_reached = True
+                route.abort()
+                return
+            browser_request_count += 1
+            if request_guard:
+                with request_guard(
+                    request_url,
+                    "browser_navigation" if request_type == "document" else "browser_request",
+                ):
+                    route.continue_()
+            else:
+                route.continue_()
+            return
+        route.continue_()
+
+    def handle_response(response: Any) -> None:
+        nonlocal response_count
+        if response_count >= response_limit:
+            return
+        response_url = _text(getattr(response, "url", ""))
+        if not response_url or not _same_origin_or_subdomain(response_url, target_url):
+            return
+        response_type = _text(getattr(getattr(response, "request", None), "resource_type", ""))
+        headers = getattr(response, "headers", {}) or {}
+        content_type = (
+            _text(headers.get("content-type", "")).casefold()
+            if isinstance(headers, Mapping)
+            else ""
+        )
+        if response_type not in {"xhr", "fetch"} and "json" not in content_type:
+            return
+        response_count += 1
+        try:
+            body_reader = getattr(response, "body", None)
+            if callable(body_reader):
+                body = body_reader()
+                if len(body) > MAX_BROWSER_RESPONSE_BYTES:
+                    return
+                payload = json.loads(body.decode("utf-8", errors="replace"))
+            else:
+                payload = response.json()
+        except (AttributeError, TypeError, ValueError, OSError):
+            return
+        add_jobs(
+            extract_payload_jobs(
+                payload,
+                response_url,
+                format_name="xhr",
+                source_endpoint=response_url,
+            )
+        )
+
     try:
-        with process_guard:
-            with sync_playwright() as playwright:
-                launch_options: dict[str, Any] = {"headless": True}
-                if proxy_url:
-                    parsed_proxy = urlsplit(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
-                    proxy_host = parsed_proxy.hostname or ""
-                    if ":" in proxy_host:
-                        proxy_host = f"[{proxy_host}]"
-                    proxy_port = f":{parsed_proxy.port}" if parsed_proxy.port is not None else ""
-                    proxy = {"server": f"{parsed_proxy.scheme}://{proxy_host}{proxy_port}"}
-                    if parsed_proxy.username is not None:
-                        proxy["username"] = unquote(parsed_proxy.username)
-                    if parsed_proxy.password is not None:
-                        proxy["password"] = unquote(parsed_proxy.password)
-                    launch_options["proxy"] = proxy
-                browser = playwright.chromium.launch(**launch_options)
-                try:
-                    context = browser.new_context()
-                    page = context.new_page()
-
-                    def handle_route(route: Any) -> None:
-                        nonlocal browser_request_count, request_limit_reached
-                        request = route.request
-                        request_url = _text(getattr(request, "url", ""))
-                        request_type = _text(getattr(request, "resource_type", ""))
-                        if request_url.startswith(("http://", "https://")):
-                            if browser_request_count >= response_limit:
-                                request_limit_reached = True
-                                route.abort()
-                                return
-                            browser_request_count += 1
-                            if request_guard:
-                                with request_guard(
-                                    request_url,
-                                    "browser_navigation" if request_type == "document" else "browser_request",
-                                ):
-                                    route.continue_()
-                            else:
-                                route.continue_()
-                            return
-                        route.continue_()
-
-                    def handle_response(response: Any) -> None:
-                        nonlocal response_count
-                        if response_count >= response_limit:
-                            return
-                        response_url = _text(getattr(response, "url", ""))
-                        if not response_url or not _same_origin_or_subdomain(response_url, target_url):
-                            return
-                        response_type = _text(getattr(getattr(response, "request", None), "resource_type", ""))
-                        headers = getattr(response, "headers", {}) or {}
-                        content_type = (
-                            _text(headers.get("content-type", "")).casefold()
-                            if isinstance(headers, Mapping)
-                            else ""
-                        )
-                        if response_type not in {"xhr", "fetch"} and "json" not in content_type:
-                            return
-                        response_count += 1
-                        try:
-                            body_reader = getattr(response, "body", None)
-                            if callable(body_reader):
-                                body = body_reader()
-                                if len(body) > MAX_BROWSER_RESPONSE_BYTES:
-                                    return
-                                payload = json.loads(body.decode("utf-8", errors="replace"))
-                            else:
-                                payload = response.json()
-                        except (AttributeError, TypeError, ValueError, OSError):
-                            return
-                        add_jobs(
-                            extract_payload_jobs(
-                                payload,
-                                response_url,
-                                format_name="xhr",
-                                source_endpoint=response_url,
-                            )
-                        )
-
-                    # Older/offline Playwright doubles may expose response
-                    # events without route interception. Real Playwright
-                    # pages support ``route``; keep the response-only path
-                    # usable for those bounded fixtures.
-                    route = getattr(page, "route", None)
-                    if callable(route):
-                        route("**/*", handle_route)
-                    page.on("response", handle_response)
-                    page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                    page.wait_for_timeout(min(2_000, max(250, timeout_ms // 4)))
-                    rendered_html = page.content()
-                    challenge = _challenge_marker(rendered_html)
-                    if challenge:
-                        return {
-                            **_browser_failure(target_url, "blocked", challenge),
-                            "rendered_html": rendered_html[:MAX_EMBEDDED_BYTES],
-                            "requests_made": browser_request_count,
-                            "pages_fetched": 1,
-                        }
-                    add_jobs(extract_embedded_jobs(rendered_html, target_url))
-                    add_jobs(_job_links_from_rendered_html(rendered_html, target_url, max_job_links=max_job_links))
-                finally:
-                    browser.close()
+        # Older/offline Playwright doubles may expose response
+        # events without route interception. Real Playwright
+        # pages support ``route``; keep the response-only path
+        # usable for those bounded fixtures.
+        route = getattr(page, "route", None)
+        if callable(route):
+            route("**/*", handle_route)
+        page.on("response", handle_response)
+        page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_timeout(min(2_000, max(250, timeout_ms // 4)))
+        rendered_html = page.content()
+        challenge = _challenge_marker(rendered_html)
+        if challenge:
+            raw.update(
+                {
+                    "browser_request_count": browser_request_count,
+                    "request_limit_reached": request_limit_reached,
+                    "rendered_html": rendered_html[:MAX_EMBEDDED_BYTES],
+                    "challenge": challenge,
+                }
+            )
+            return raw
+        add_jobs(extract_embedded_jobs(rendered_html, target_url))
+        add_jobs(_job_links_from_rendered_html(rendered_html, target_url, max_job_links=max_job_links))
+        raw.update(
+            {
+                "browser_request_count": browser_request_count,
+                "request_limit_reached": request_limit_reached,
+                "rendered_html": rendered_html,
+            }
+        )
+        return raw
     except PlaywrightTimeoutError:
+        raw.update(
+            {
+                "browser_request_count": browser_request_count,
+                "request_limit_reached": request_limit_reached,
+                "timed_out": True,
+                "error": "timeout",
+            }
+        )
+        return raw
+    except Exception as exc:  # pragma: no cover - provider/browser-specific failures
+        raw.update(
+            {
+                "browser_request_count": browser_request_count,
+                "request_limit_reached": request_limit_reached,
+                "error": type(exc).__name__,
+            }
+        )
+        return raw
+
+
+def _finalize_snapshot(raw: Mapping[str, Any], *, target_url: str) -> dict[str, Any]:
+    jobs = list(raw.get("jobs") or [])
+    browser_request_count = int(raw.get("browser_request_count") or 0)
+    request_limit_reached = bool(raw.get("request_limit_reached"))
+    rendered_html = str(raw.get("rendered_html") or "")
+    if raw.get("challenge"):
+        return {
+            **_browser_failure(target_url, "blocked", str(raw["challenge"])),
+            "rendered_html": rendered_html[:MAX_EMBEDDED_BYTES],
+            "requests_made": browser_request_count,
+            "pages_fetched": 1,
+        }
+    if raw.get("timed_out"):
         return {
             **_browser_failure(target_url, "partial" if jobs else "browser_failed", "timeout"),
             "jobs": jobs,
             "requests_made": browser_request_count,
             "credible_evidence": bool(jobs),
         }
-    except Exception as exc:  # pragma: no cover - provider/browser-specific failures
+    if raw.get("error"):
         return {
-            **_browser_failure(target_url, "partial" if jobs else "browser_failed", type(exc).__name__),
+            **_browser_failure(target_url, "partial" if jobs else "browser_failed", str(raw["error"])),
             "jobs": jobs,
             "requests_made": browser_request_count,
             "credible_evidence": bool(jobs),
         }
-
     return {
         "jobs": jobs,
         "status": "partial" if request_limit_reached else "completed",
@@ -482,4 +530,183 @@ def fetch_browser_snapshot(
     }
 
 
-__all__ = ["extract_embedded_jobs", "extract_payload_jobs", "fetch_browser_snapshot"]
+class ReusableBrowser:
+    """One bounded Chromium process reused across fetches.
+
+    Playwright's sync API is not thread-safe, so one instance holds an internal
+    lock and serves at most one navigation at a time. The browser process is
+    launched lazily on the first fetch and survives timeouts and failures, so
+    sequential fetches do not pay process startup again; callers must invoke
+    :meth:`close` when the collection run ends. Each fetch performs at most one
+    launch, so process creation stays bounded.
+    """
+
+    def __init__(self, *, proxy_url: str = "") -> None:
+        self._proxy_url = proxy_url
+        self._lock = threading.Lock()
+        self._launches = 0
+        self._playwright_cm: Any = None
+        self._browser: Any = None
+
+    @property
+    def launch_count(self) -> int:
+        return self._launches
+
+    def is_running(self) -> bool:
+        return self._browser is not None
+
+    def fetch(
+        self,
+        target_url: str,
+        *,
+        max_job_links: int = 25,
+        timeout_seconds: int = 25,
+        max_requests: int = 10,
+        request_guard: Callable[[str, str], Any] | None = None,
+        browser_process_guard: Callable[[str], Any] | None = None,
+        retry_attempts: int = 0,
+    ) -> dict[str, Any]:
+        """Fetch one target through the reused browser process."""
+
+        if sync_playwright is None:
+            return _browser_failure(target_url, "browser_unavailable", "playwright_not_installed")
+        timeout_ms = max(1_000, min(120_000, int(timeout_seconds) * 1_000))
+        response_limit = max(1, min(100, int(max_requests)))
+        retries_left = max(0, min(MAX_BROWSER_RETRY_ATTEMPTS, int(retry_attempts)))
+        with self._lock:
+            guard = browser_process_guard(target_url) if browser_process_guard else nullcontext()
+            with guard:
+                while True:
+                    raw = self._fetch_once(
+                        target_url,
+                        timeout_ms=timeout_ms,
+                        response_limit=response_limit,
+                        max_job_links=max_job_links,
+                        request_guard=request_guard,
+                    )
+                    if (
+                        raw.get("timed_out")
+                        and not raw.get("jobs")
+                        and retries_left > 0
+                    ):
+                        retries_left -= 1
+                        continue
+                    return _finalize_snapshot(raw, target_url=target_url)
+
+    def _fetch_once(
+        self,
+        target_url: str,
+        *,
+        timeout_ms: int,
+        response_limit: int,
+        max_job_links: int,
+        request_guard: Callable[[str, str], Any] | None,
+    ) -> dict[str, Any]:
+        try:
+            self._ensure_browser()
+            context = self._browser.new_context()
+            page = context.new_page()
+        except Exception as exc:  # dead or unusable browser: relaunch next fetch
+            self._teardown()
+            return {
+                "jobs": [],
+                "browser_request_count": 0,
+                "request_limit_reached": False,
+                "rendered_html": "",
+                "challenge": "",
+                "timed_out": False,
+                "error": type(exc).__name__,
+            }
+        try:
+            return _collect_from_page(
+                page,
+                target_url=target_url,
+                timeout_ms=timeout_ms,
+                response_limit=response_limit,
+                max_job_links=max_job_links,
+                request_guard=request_guard,
+            )
+        finally:
+            _close_quietly(page, "close")
+            _close_quietly(context, "close")
+
+    def _ensure_browser(self) -> None:
+        if self._browser is not None:
+            return
+        self._playwright_cm = sync_playwright()
+        playwright = self._playwright_cm.__enter__()
+        try:
+            self._browser = playwright.chromium.launch(**_proxy_launch_options(self._proxy_url))
+        except BaseException:
+            self._teardown()
+            raise
+        self._launches += 1
+
+    def _teardown(self) -> None:
+        browser, self._browser = self._browser, None
+        context_manager, self._playwright_cm = self._playwright_cm, None
+        if browser is not None:
+            _close_quietly(browser, "close")
+        if context_manager is not None:
+            try:
+                context_manager.__exit__(None, None, None)
+            except Exception:  # pragma: no cover - playwright shutdown detail
+                pass
+
+    def close(self) -> None:
+        """Shut down the reused browser process."""
+
+        with self._lock:
+            self._teardown()
+
+
+def _close_quietly(resource: Any, method: str) -> None:
+    closer = getattr(resource, method, None)
+    if not callable(closer):
+        return
+    try:
+        closer()
+    except Exception:  # pragma: no cover - playwright teardown detail
+        pass
+
+
+def fetch_browser_snapshot(
+    target_url: str,
+    *,
+    max_job_links: int = 25,
+    timeout_seconds: int = 25,
+    max_requests: int = 10,
+    proxy_url: str = "",
+    request_guard: Callable[[str, str], Any] | None = None,
+    browser_process_guard: Callable[[str], Any] | None = None,
+    retry_attempts: int = 0,
+    browser_session: ReusableBrowser | None = None,
+) -> dict[str, Any]:
+    """Fetch one rendered page and same-origin JSON/XHR responses safely.
+
+    Pass ``browser_session`` to reuse one Chromium process across calls;
+    without it, a throwaway session launches and closes for this call only.
+    """
+
+    session = browser_session if browser_session is not None else ReusableBrowser(proxy_url=proxy_url)
+    try:
+        return session.fetch(
+            target_url,
+            max_job_links=max_job_links,
+            timeout_seconds=timeout_seconds,
+            max_requests=max_requests,
+            request_guard=request_guard,
+            browser_process_guard=browser_process_guard,
+            retry_attempts=retry_attempts,
+        )
+    finally:
+        if browser_session is None:
+            session.close()
+
+
+__all__ = [
+    "ReusableBrowser",
+    "extract_embedded_jobs",
+    "extract_payload_jobs",
+    "fetch_browser_snapshot",
+]

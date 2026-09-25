@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+
+import pytest
 from types import SimpleNamespace
 from pathlib import Path
 
+import backend.connectors.employer_site_fallbacks as _fallbacks
 from scripts.master_employer_jobs_catalog import (
     CollectorLimits,
     EmployerCollectionResult,
@@ -117,9 +121,12 @@ def test_complete_empty_ats_snapshot_confirms_zero_without_browser_fallback(monk
     assert result.targets[0]["stop_reason"] == "pagination_complete"
 
 
-def test_complete_authoritative_target_stops_candidate_fanout(monkeypatch) -> None:
+def test_complete_authoritative_target_still_traverses_independent_source(monkeypatch) -> None:
     import scripts.master_employer_jobs_catalog as catalog
 
+    # T56 source-union contract: a complete authoritative ATS snapshot no longer
+    # stops candidate fan-out; the independent main career site is still
+    # traversed and its jobs are unioned with the ATS jobs.
     first_url = "https://boards.greenhouse.io/company"
     second_url = "https://company.example/careers"
     monkeypatch.setattr(
@@ -159,14 +166,34 @@ def test_complete_authoritative_target_stops_candidate_fanout(monkeypatch) -> No
     monkeypatch.setattr(
         catalog,
         "fetch_generic_snapshot",
-        lambda url, **_: (_ for _ in ()).throw(AssertionError(f"unexpected candidate: {url}")),
+        lambda url, **_: {
+            "jobs": [
+                {
+                    "job_id": "careers-1",
+                    "title": "Office Manager",
+                    "job_detail_url": "https://company.example/jobs/office-manager",
+                    "description": "Join our team in Hamburg, Germany.",
+                    "location": "Hamburg, Germany",
+                    "source_raw_payload": {"format": "html"},
+                }
+            ],
+            "status": "completed",
+            "complete_snapshot": True,
+            "pagination_complete": True,
+            "request_url": url,
+            "resolved_url": url,
+        },
     )
 
-    result = collect_company(_company(), lambda _: (_ for _ in ()).throw(AssertionError()), CollectorLimits(max_targets=2))
+    result = collect_company(_company(), lambda _: None, CollectorLimits(max_targets=2))
 
     assert ats_calls == [first_url]
+    assert {target["url"] for target in result.targets} == {first_url, second_url}
     assert result.outcome == "complete_with_jobs"
-    assert len(result.jobs) == 1
+    assert len(result.jobs) == 2
+    inventory = {entry["url"]: entry for entry in result.coverage["source_inventory"]}
+    assert inventory[first_url]["traversal_status"] == "traversed"
+    assert inventory[second_url]["traversal_status"] == "traversed"
 
 
 def test_request_budget_is_a_partial_outcome_and_is_checkpointed(tmp_path: Path, monkeypatch) -> None:
@@ -387,3 +414,593 @@ def test_uncertain_recheck_preserves_prior_job_observation(tmp_path: Path) -> No
         assert state.jobs()[0] == prior_job
     finally:
         state.close()
+
+
+class _ScriptedBrowser:
+    """Fake Chromium browser whose pages fail until configured failures drain.
+
+    ``goto_failures_left`` raises a Playwright timeout before any observation
+    is harvested; ``timeout_failures_left`` raises after harvesting, so tests
+    can pin both the retry path (no jobs yet) and partial-failure preservation
+    (jobs already observed).
+    """
+
+    def __init__(self, goto_failures: int, timeout_failures: int, launches: list[int]) -> None:
+        self.goto_failures_left = goto_failures
+        self.timeout_failures_left = timeout_failures
+        self.launches = launches
+
+    def new_context(self) -> "_ScriptedContext":
+        return _ScriptedContext(self)
+
+    def close(self) -> None:
+        return None
+
+
+class _ScriptedContext:
+    def __init__(self, browser: _ScriptedBrowser) -> None:
+        self._browser = browser
+
+    def new_page(self) -> "_ScriptedPage":
+        return _ScriptedPage(self._browser)
+
+    def close(self) -> None:
+        return None
+
+
+class _ScriptedPage:
+    def __init__(self, browser: _ScriptedBrowser) -> None:
+        self._browser = browser
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event: str, callback: object) -> None:
+        self.handlers[event] = callback
+
+    def route(self, _pattern: object, callback: object) -> None:
+        self.route_callback = callback
+
+    def goto(self, *_args: object, **_kwargs: object) -> None:
+        if self._browser.goto_failures_left > 0:
+            self._browser.goto_failures_left -= 1
+            raise _fallbacks.PlaywrightTimeoutError("fixture timeout")
+        self.route_callback(
+            SimpleNamespace(
+                request=SimpleNamespace(url="https://acme.example/careers", resource_type="document"),
+                continue_=lambda: None,
+                abort=lambda: None,
+            )
+        )
+        response = SimpleNamespace(
+            url="https://acme.example/api/jobs",
+            headers={"content-type": "application/json"},
+            request=SimpleNamespace(resource_type="xhr"),
+            json=lambda: {"jobs": [{"id": "xhr-1", "title": "Backend Engineer", "url": "/jobs/xhr-1"}]},
+        )
+        self.handlers["response"](response)
+
+    def wait_for_timeout(self, *_args: object) -> None:
+        if self._browser.timeout_failures_left > 0:
+            self._browser.timeout_failures_left -= 1
+            raise _fallbacks.PlaywrightTimeoutError("fixture timeout")
+
+    def content(self) -> str:
+        return '<html><h1>Backend Engineer</h1><script type="application/json">{"jobs":[]}</script></html>'
+
+
+class _ScriptedChromium:
+    def __init__(self, goto_failures: int, timeout_failures: int, launches: list[int]) -> None:
+        self._goto_failures = goto_failures
+        self._timeout_failures = timeout_failures
+        self._launches = launches
+
+    def launch(self, **_kwargs: object) -> _ScriptedBrowser:
+        self._launches.append(1)
+        return _ScriptedBrowser(self._goto_failures, self._timeout_failures, self._launches)
+
+
+class _ScriptedPlaywright:
+    def __init__(self, goto_failures: int, timeout_failures: int, launches: list[int]) -> None:
+        self.chromium = _ScriptedChromium(goto_failures, timeout_failures, launches)
+
+    def __enter__(self) -> "_ScriptedPlaywright":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+def _scripted_playwright_factory(goto_failures: int, timeout_failures: int, launches: list[int]):
+    return lambda: _ScriptedPlaywright(goto_failures, timeout_failures, launches)
+
+
+def test_reusable_browser_reuses_one_process_and_retries_within_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launches: list[int] = []
+    monkeypatch.setattr(
+        _fallbacks,
+        "sync_playwright",
+        _scripted_playwright_factory(goto_failures=1, timeout_failures=0, launches=launches),
+    )
+    session = _fallbacks.ReusableBrowser()
+    try:
+        first = session.fetch(
+            "https://acme.example/careers",
+            timeout_seconds=5,
+            max_requests=5,
+            retry_attempts=1,
+        )
+        second = session.fetch("https://acme.example/careers", timeout_seconds=5, max_requests=5)
+    finally:
+        launch_count = session.launch_count
+        session.close()
+
+    assert first["status"] == "completed"
+    assert first["pages_fetched"] == 1
+    assert second["status"] == "completed"
+    assert launch_count == 1
+    assert not session.is_running()
+
+
+def test_reusable_browser_timeout_without_retry_reports_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launches: list[int] = []
+    monkeypatch.setattr(
+        _fallbacks,
+        "sync_playwright",
+        _scripted_playwright_factory(goto_failures=0, timeout_failures=1, launches=launches),
+    )
+    session = _fallbacks.ReusableBrowser()
+    try:
+        result = session.fetch(
+            "https://acme.example/careers",
+            timeout_seconds=5,
+            max_requests=5,
+            retry_attempts=2,
+        )
+    finally:
+        session.close()
+
+    assert result["status"] == "partial"
+    assert result["error"] == "timeout"
+    assert len(result["jobs"]) == 1
+    assert result["credible_evidence"] is True
+    assert session.launch_count == 1
+
+
+def test_dry_run_receipt_classifies_durable_jobs_without_collection(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import build_dry_run_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\n"
+        "ok-co,OK Co,https://ok.example\n"
+        "bad-co,Bad Co,https://bad.example\n",
+        encoding="utf-8",
+    )
+    accepted_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "job-1",
+        "source_job_url": "https://ok.example/jobs/1",
+        "title": "Engineer",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    duplicate_job = {**accepted_job, "source_provider": "ats_api", "source_job_id": "dup-ats"}
+    rejected_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "no-title",
+        "source_job_url": "https://ok.example/about",
+        "source_raw_payload": {"format": "static"},
+    }
+    failed_job = {
+        "canonical_company_id": "bad-co",
+        "source_provider": "generic",
+        "source_job_id": "bad-1",
+        "source_job_url": "https://bad.example/jobs/1",
+        "title": "Bad Co Engineer",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="ok-co",
+                    company_name="OK Co",
+                    website_url="https://ok.example",
+                ),
+                jobs=[accepted_job, duplicate_job, rejected_job],
+                status="completed",
+                outcome="complete_with_jobs",
+            )
+        )
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="bad-co",
+                    company_name="Bad Co",
+                    website_url="https://bad.example",
+                ),
+                jobs=[failed_job],
+                status="failed",
+                outcome="source_failed",
+            )
+        )
+    finally:
+        state.close()
+
+    receipt = build_dry_run_receipt(
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        pilot_only=True,
+        duration_budget_seconds=10,
+    )
+
+    assert receipt["job_receipt"] == {
+        "discovered": 4,
+        "accepted": 1,
+        "rejected": 1,
+        "deduplicated": 1,
+        "failed": 1,
+    }
+    assert receipt["state_present"] is True
+    assert receipt["cohort_companies"] == 2
+    assert receipt["duration_budget_exhausted"] is False
+    assert receipt["company_status_counts"] == {"completed": 1, "failed": 1}
+    assert Path(receipt["receipt_path"]).is_file()
+
+
+def test_dry_run_receipt_reports_zero_jobs_when_state_is_absent(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import build_dry_run_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+        encoding="utf-8",
+    )
+
+    receipt = build_dry_run_receipt(
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        pilot_only=True,
+        duration_budget_seconds=10,
+    )
+
+    assert receipt["state_present"] is False
+    assert receipt["job_receipt"] == {
+        "discovered": 0,
+        "accepted": 0,
+        "rejected": 0,
+        "deduplicated": 0,
+        "failed": 0,
+    }
+
+
+def test_main_dry_run_receipt_flag_produces_bounded_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "fixture-manifest", "manifest_hash": "fixture-hash"}
+    output_dir = tmp_path / "exports" / "employer"
+    staged = output_dir / ".manifest_inputs" / "fixture-manifest-employer.csv"
+
+    def fake_materialize(_manifest, _source, path, **_kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+            encoding="utf-8",
+        )
+        return {"rows": 1}
+
+    monkeypatch.setattr(
+        wrapper,
+        "require_eligibility_manifest",
+        lambda *_args, **_kwargs: (manifest, [{"task_key": "fixture"}]),
+    )
+    monkeypatch.setattr(wrapper, "materialize_source_input", fake_materialize)
+
+    exit_code = wrapper.main(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--dry-run-receipt",
+        ]
+    )
+
+    assert exit_code == 0
+    receipt = (output_dir / "employer_dry_run_receipt.json").is_file()
+    assert receipt is True
+
+
+def test_low_yield_attribution_maps_each_failure_class() -> None:
+    from scripts.run_manifested_employer import LOW_YIELD_CLASSES, attribute_low_yield
+
+    attribution = attribute_low_yield(
+        discovery_reason_codes={"no_career_target_found": 1, "career_url_found": 3},
+        target_stop_reasons={"challenge_page": 2, "request_budget_exhausted": 1},
+        company_status_counts={"collector_error": 1, "discovery_failed": 2, "source_failed": 1},
+        jobs_missing_title=1,
+        jobs_missing_location=2,
+        jobs_missing_target_url=1,
+    )
+
+    assert list(attribution["classes"].keys()) == list(LOW_YIELD_CLASSES)
+    assert attribution["classes"]["missing_url"] == 4
+    assert attribution["classes"]["provider_blocking"] == 3
+    assert attribution["classes"]["data_quality"] == 3
+    assert attribution["classes"]["code_failure"] == 2
+    assert attribution["reason_codes"]["missing_url"] == [
+        "company_status:discovery_failed",
+        "discovery:no_career_target_found",
+        "job:target_url_missing",
+    ]
+    assert attribution["reason_codes"]["provider_blocking"] == [
+        "company_status:source_failed",
+        "target:challenge_page",
+    ]
+    assert "discovery:career_url_found" not in attribution["reason_codes"].get("code_failure", [])
+    assert attribution["attributed"] is True
+
+
+def test_attribute_low_yield_reports_nothing_for_healthy_runs() -> None:
+    from scripts.run_manifested_employer import attribute_low_yield
+
+    attribution = attribute_low_yield(
+        discovery_reason_codes={"career_url_found": 4},
+        target_stop_reasons={"pagination_complete": 4},
+        company_status_counts={"completed": 4},
+    )
+
+    assert attribution["classes"] == {
+        "data_quality": 0,
+        "missing_url": 0,
+        "provider_blocking": 0,
+        "code_failure": 0,
+    }
+    assert attribution["reason_codes"] == {}
+    assert attribution["attributed"] is False
+
+
+def test_benchmark_receipt_evaluates_durable_cohort_and_attributes_low_yield(
+    tmp_path: Path,
+) -> None:
+    from scripts.run_manifested_employer import build_employer_benchmark_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+        encoding="utf-8",
+    )
+    first_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "job-1",
+        "source_job_url": "https://ok.example/jobs/1",
+        "title": "Engineer One",
+        "location": "Berlin, Germany",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    duplicate_job = {**first_job, "source_provider": "ats_api", "source_job_id": "dup-ats"}
+    second_job = {**first_job, "source_job_id": "job-2", "source_job_url": "https://ok.example/jobs/2", "title": "Engineer Two"}
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="ok-co",
+                    company_name="OK Co",
+                    website_url="https://ok.example",
+                ),
+                jobs=[first_job, duplicate_job, second_job],
+                status="completed",
+                outcome="complete_with_jobs",
+            )
+        )
+    finally:
+        state.close()
+
+    receipt = build_employer_benchmark_receipt(
+        mode="dry_run_benchmark",
+        metrics={},
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        profile="local-dry-run",
+        accepted_source="employer-durable-state",
+        approval_status="approved",
+        per_host_requests=10,
+        window_seconds=300,
+        elapsed_seconds=1.0,
+        timeout_seconds=30,
+    )
+
+    assert receipt["state_present"] is True
+    assert receipt["cohort_companies"] == 1
+    counts = receipt["counts"]
+    assert counts["discovered"] == 3
+    assert counts["parsed"] == 2
+    assert counts["complete"] == 2
+    assert counts["accepted"] == 2
+    assert counts["published"] == 0
+    assert counts["duplicate"] == 1
+    assert counts["failed"] == 0
+    assert receipt["per_host_observed"] == {}
+    assert receipt["per_host_limits"] == {"max_requests_per_host": 10, "enforced": False}
+    assert receipt["contract_evaluation"]["status"] == "PASS"
+    assert receipt["low_yield_attribution"]["attributed"] is False
+    assert Path(receipt["receipt_path"]).is_file()
+
+
+def test_benchmark_receipt_zeroes_unsourced_accepted_counts(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import build_employer_benchmark_receipt
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    staged = tmp_path / "staged.csv"
+    staged.write_text(
+        "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+        encoding="utf-8",
+    )
+    accepted_job = {
+        "canonical_company_id": "ok-co",
+        "source_provider": "generic",
+        "source_job_id": "job-1",
+        "source_job_url": "https://ok.example/jobs/1",
+        "title": "Engineer",
+        "location": "Berlin, Germany",
+        "source_raw_payload": {"format": "json-ld"},
+    }
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=EmployerCompany(
+                    canonical_company_id="ok-co",
+                    company_name="OK Co",
+                    website_url="https://ok.example",
+                ),
+                jobs=[accepted_job],
+                status="completed",
+                outcome="complete_with_jobs",
+            )
+        )
+    finally:
+        state.close()
+
+    receipt = build_employer_benchmark_receipt(
+        mode="dry_run_benchmark",
+        metrics={},
+        manifest={"manifest_id": "fixture-manifest", "manifest_hash": "hash"},
+        staged_input=staged,
+        output_dir=output_dir,
+        state_dir=None,
+        profile="local-dry-run",
+        accepted_source="",
+        approval_status="not-required",
+        per_host_requests=10,
+        window_seconds=300,
+        elapsed_seconds=1.0,
+        timeout_seconds=30,
+    )
+
+    assert receipt["counts"]["accepted"] == 0
+    assert receipt["counts"]["published"] == 0
+    assert receipt["contract_evaluation"]["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in receipt["contract_evaluation"]["reason_codes"]
+
+
+def test_main_benchmark_receipt_flag_writes_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "fixture-manifest", "manifest_hash": "fixture-hash"}
+    output_dir = tmp_path / "exports" / "employer"
+    staged = output_dir / ".manifest_inputs" / "fixture-manifest-employer.csv"
+
+    def fake_materialize(_manifest, _source, path, **_kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+            encoding="utf-8",
+        )
+        return {"rows": 1}
+
+    monkeypatch.setattr(
+        wrapper,
+        "require_eligibility_manifest",
+        lambda *_args, **_kwargs: (manifest, [{"task_key": "fixture"}]),
+    )
+    monkeypatch.setattr(wrapper, "materialize_source_input", fake_materialize)
+
+    exit_code = wrapper.main(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--benchmark-receipt",
+            "--benchmark-accepted-source",
+            "employer-durable-state",
+        ]
+    )
+
+    assert exit_code == 0
+    receipt_path = output_dir / "employer_benchmark_receipt.json"
+    assert receipt_path.is_file()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["mode"] == "dry_run_benchmark"
+    assert receipt["benchmark_revision"] == "T38"
+    assert receipt["window_seconds"] == 300
+    assert receipt["state_present"] is False
+    assert receipt["counts"]["discovered"] == 0
+
+
+def test_main_benchmark_fixture_flag_runs_offline_benchmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "fixture-manifest", "manifest_hash": "fixture-hash"}
+    output_dir = tmp_path / "exports" / "employer"
+    staged = output_dir / ".manifest_inputs" / "fixture-manifest-employer.csv"
+
+    def fake_materialize(_manifest, _source, path, **_kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "canonical_CompanyID,company_name,website_url\nok-co,OK Co,https://ok.example\n",
+            encoding="utf-8",
+        )
+        return {"rows": 1}
+
+    monkeypatch.setattr(
+        wrapper,
+        "require_eligibility_manifest",
+        lambda *_args, **_kwargs: (manifest, [{"task_key": "fixture"}]),
+    )
+    monkeypatch.setattr(wrapper, "materialize_source_input", fake_materialize)
+
+    exit_code = wrapper.main(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(output_dir),
+            "--benchmark-fixture",
+            "--benchmark-accepted-source",
+            "employer-durable-state",
+            "--benchmark-approval",
+            "approved",
+        ]
+    )
+
+    assert exit_code == 0
+    receipt_path = output_dir / "employer_fixture_benchmark_receipt.json"
+    assert receipt_path.is_file()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["mode"] == "fixture_benchmark"
+    assert receipt["contract_evaluation"]["status"] == "PASS"
+    assert sorted(receipt["stages"]) == sorted(
+        [
+            "career_discovery",
+            "ats_routing",
+            "parsing",
+            "identity",
+            "completeness",
+            "dedupe",
+            "delivery",
+        ]
+    )

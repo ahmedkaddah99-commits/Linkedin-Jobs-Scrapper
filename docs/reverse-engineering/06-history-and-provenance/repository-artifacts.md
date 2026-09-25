@@ -303,4 +303,12 @@ All cross-cutting gaps (C1–C10, U1–U13, T01–T14) are tracked centrally in 
 |---|---|---|---|---|---|
 | ws-11-docs-artifacts | Docs corpus and repository artifacts | `docs/**` (excl. `RUNR_PRODUCTION_COMPLETION_HANDOFF.md`), root `*.md`/`*.json` (excl. `RELEASE_LEDGER.md`, `package.json`, `package-lock.json`), `test CV/**`, `test-CV/**`, `screenshots/**`, `user_config/**` (tracked only), `.agents/**`, `.cline/**`, `.codex/**`, `image.png`, `.backend_api_std{err,out}.log`, `.gitignore`, `.gitattributes` | `docs/reverse-engineering/06-history-and-provenance/repository-artifacts.md` | none | WS-11 |
 
+## RUN-43 / T43 current worktree disposition (2026-09-19)
+
+The current-state cleanup audit is recorded in `C:\Users\ahmed\AppData\Local\RunrAutomation\audits\RUN-43\scope-manifest.json`. The primary checkout and all worktrees under `C:\Users\ahmed\AppData\Local\RunrAutomation\worktrees\` were classified as KEEP. Nine explicitly approved non-AppData worktrees were removed individually with `git worktree remove --force`; no branch ref was deleted. The active RUN-31/T32 worktree was retained as an explicit exception because that issue is In Progress.
+
+The protected acquisition inputs remained present with unchanged pre/post SHA-256 values. The protected backend and LinkedIn/company-enrichment SQLite files remained present and returned `ok` in read-only `PRAGMA quick_check` verification. The canonical `.venv\Scripts\python.exe` reports Python 3.12.7, and all current worktrees expose it through junctions to the canonical environment. No credentials, payload rows, or customer documents were copied into this history record.
+
+The shared checkout was not edited by T43. It is currently on `deployment/render-turso-r2` at `9212ce6a87e63c33de6b33f1c740d0c19cae6499`; this is recorded as external state relative to the T43 baseline `405c70e7dbc3bc4853d39a46b88358e5d23c4f45`. T43 changed no product source files and created no implementation commit.
+
 **(c) Gap/ticket candidates:** WS11-G1…WS11-G5 above (§10); the ten active clean-slate tickets T01/T03/T04/T05/T06/T08/T10/T11/T12/T14 in [known-gaps.md](known-gaps.md) §4, three of which are WS-11's directly (T05, T06, T10).

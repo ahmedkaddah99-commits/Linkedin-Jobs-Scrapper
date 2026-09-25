@@ -46,3 +46,9 @@ The 2026-09-14 clean-slate closure (external evidence: `clean-slate-2026-09-13/c
 ## 7. What remains open
 
 Every open item above resolves to one of the active backlog candidates in `RUNR_REVERSE_ENGINEERING_2026-09-10/clean-slate-2026-09-13/linear-ticket-candidates.md` (T01, T03–T06, T08, T10–T12, T14, plus the Phase-3-added T16–T24). None of the branch-provenance facts in this doc are themselves open questions — where a fact could not be verified (for example, whether `temp/opencode-b-collectors`'s sibling `codex/*`/`recovery/*`/`phase-*` branches were individually re-checked against the baseline), it is recorded as UNKNOWN in [known-gaps.md](known-gaps.md) rather than implied here.
+
+## RUN-43 / T43 worktree registry disposition (2026-09-19)
+
+T43 removed the nine approved non-AppData worktree directories from the current Git registry while retaining their local branch refs. The primary checkout, nine AppData Runr worktrees including the RUN-43 implementation worktree, and the active RUN-31/T32 worktree remain registered. The RUN-31/T32 exception is retained because its Linear issue is In Progress and its worktree is an active implementation surface.
+
+This disposition is operational cleanup evidence, not a branch merge or deployment. The primary checkout advanced externally from the T43 pre-delete observation `9b47874832140631ab2476cf680539fcdd9d82f0` to `9212ce6a87e63c33de6b33f1c740d0c19cae6499`; T43 did not reset, revert, stage, or commit the shared checkout. The complete per-path inventory and branch-retention checks are held in the local T43 audit manifest.

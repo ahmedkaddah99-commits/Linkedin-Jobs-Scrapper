@@ -17,6 +17,7 @@ from backend.domain import normalize_candidate_asset_descriptor
 _CREATE_PACKAGE_KEYS = {"job", "answers", "documents", "warnings"}
 _PREPARE_PACKAGE_KEYS = {"run_id", "job_id", "document_ids", "confirm_standard_profile"}
 _BIND_PACKAGE_KEYS = {"binding_id"}
+_PROFILE_PACKAGE_KEYS: set[str] = set()
 _DOCUMENT_GRANT_KEYS = {"package_id", "document_id", "adapter", "upload_field_intent"}
 _CORRECTION_KEYS = {"package_id", "field_intent", "corrected_value", "scope"}
 _EXACT_STANDARD_ANSWER_KEYS = {"package_id", "question_label", "answer_value"}
@@ -71,6 +72,15 @@ def register_routes(registry: RouteRegistry) -> None:
         _get_package_for_extension_post,
         auth_required=False,
         name="assisted_apply.extension.packages.post",
+    )
+    # A body-bearing POST preserves the exact extension Origin during browser
+    # session verification. Extension GET requests may omit Origin.
+    registry.exact(
+        "POST",
+        ("assisted-apply", "extension", "profile-package"),
+        _get_profile_package_for_extension,
+        auth_required=False,
+        name="assisted_apply.extension.profile_package.post",
     )
     registry.exact(
         "POST",
@@ -668,6 +678,34 @@ def _get_package_for_extension_post(context: ApiRouteContext) -> None:
     if not package_id:
         raise ValueError("package_id is required.")
     _send_package_for_extension(context, package_id, bind_launched=True)
+
+
+def _get_profile_package_for_extension(context: ApiRouteContext) -> None:
+    """Return only the candidate's confirmed facts for provider-neutral filling."""
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
+    _read_strict_object(
+        context,
+        allowed_keys=_PROFILE_PACKAGE_KEYS,
+        label="profile package",
+    )
+    candidate, answers, experiences, education, skills, languages, warnings = _profile_package_sections(
+        context,
+        user,
+    )
+    context.send_json(
+        {
+            "schema_version": 1,
+            "candidate": candidate,
+            "answers": answers,
+            "experiences": experiences,
+            "education": education,
+            "skills": skills,
+            "languages": languages,
+            "warnings": warnings,
+        },
+        status=HTTPStatus.OK,
+    )
 
 
 def _send_package_for_extension(

@@ -191,7 +191,55 @@ def test_merge_receipts_current_generation_wins_and_preserves_history() -> None:
     assert merge_receipts(partial, newer_complete) is newer_complete
 
 
-def test_state_persists_and_retrieves_receipt(tmp_path: Path) -> None:
+def test_receipt_persists_source_inventory_and_union_stats() -> None:
+    inventory = [
+        {
+            "url": "https://acme.example/careers",
+            "source_kind": "homepage_link",
+            "ats_type": "",
+            "host_policy": "same_company_host",
+            "validation_status": "policy_validated",
+            "confidence_score": 0.6,
+            "provenance": {"page_url": "https://acme.example"},
+            "traversal_status": "traversed",
+            "deferred_reason": "",
+            "job_count": 1,
+            "duplicate_count": 1,
+            "target_status": "complete_with_jobs",
+        },
+        {
+            "url": "https://jobs.lever.co/acme",
+            "source_kind": "homepage_link",
+            "ats_type": "lever",
+            "host_policy": "recognized_ats:lever",
+            "validation_status": "policy_validated",
+            "confidence_score": 0.9,
+            "provenance": {},
+            "traversal_status": "deferred",
+            "deferred_reason": "request_budget_exhausted",
+            "job_count": 0,
+            "duplicate_count": 0,
+            "target_status": "",
+        },
+    ]
+    result = _complete_ats_result(
+        [{"job_id": "42", "title": "Engineer", "job_detail_url": "https://boards.greenhouse.io/company/jobs/42"}]
+    )
+    result["coverage"]["source_inventory"] = inventory
+
+    receipt = build_coverage_receipt(result)
+
+    assert receipt.source_inventory == inventory
+    assert receipt.completeness_evidence["source_union"] == {
+        "union_jobs": 1,
+        "duplicates_skipped": 1,
+        "sources_traversed": 1,
+        "sources_deferred": 1,
+    }
+    assert json.loads(receipt.to_json())["source_inventory"] == inventory
+
+
+def test_state_persists_and_retrieves_receipt_with_source_inventory(tmp_path: Path) -> None:
     state = EmployerState(tmp_path / "state.db")
     try:
         result = EmployerCollectionResult(
@@ -216,6 +264,22 @@ def test_state_persists_and_retrieves_receipt(tmp_path: Path) -> None:
                 "outcome": "complete_with_jobs",
                 "completeness_evidence": {"complete_snapshot": True},
                 "recheck_policy": {"recheck_required": False},
+                "source_inventory": [
+                    {
+                        "url": "https://boards.greenhouse.io/company",
+                        "source_kind": "homepage_link",
+                        "ats_type": "greenhouse",
+                        "host_policy": "recognized_ats:greenhouse",
+                        "validation_status": "policy_validated",
+                        "confidence_score": 0.9,
+                        "provenance": {},
+                        "traversal_status": "traversed",
+                        "deferred_reason": "",
+                        "job_count": 1,
+                        "duplicate_count": 0,
+                        "target_status": "complete_with_jobs",
+                    }
+                ],
             },
         )
         state.save(result, generation_id="gen-1", source_version="v1")
@@ -226,6 +290,8 @@ def test_state_persists_and_retrieves_receipt(tmp_path: Path) -> None:
     assert receipt is not None
     assert receipt.terminal_classification == "confirmed_complete"
     assert receipt.attempts[0].connector_family == "ats_native"
+    assert receipt.source_inventory[0]["url"] == "https://boards.greenhouse.io/company"
+    assert receipt.source_inventory[0]["traversal_status"] == "traversed"
 
 
 def test_run_collection_saves_receipts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

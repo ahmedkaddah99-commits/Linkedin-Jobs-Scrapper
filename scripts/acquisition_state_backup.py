@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -42,6 +43,19 @@ DEFAULT_REMOTE_PREFIX = "runr/acquisition/checkpoints"
 DEFAULT_LOCAL_RETENTION = 3
 DEFAULT_REMOTE_RETENTION = 7
 DEFAULT_FREE_SPACE_RESERVE = 64 * 1024 * 1024
+MINIMUM_RETAINED_GENERATIONS = 2
+RECOVERY_MANIFEST_SCHEMA_VERSION = "runr.acquisition.recovery-manifest.v1"
+PRESERVATION_RECEIPT_SCHEMA_VERSION = "runr.acquisition.preservation-receipt.v1"
+RECOVERY_SET_RECEIPT_FILENAME = "preservation-receipt.json"
+RECOVERY_ASSET_CONTENT_TYPES = {
+    ".db": "application/vnd.sqlite3",
+    ".sqlite3": "application/vnd.sqlite3",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".bundle": "application/x-git-bundle",
+    ".md": "text/markdown",
+}
 
 ROLE_CONFIG: dict[str, dict[str, Any]] = {
     "linkedin": {
@@ -988,6 +1002,301 @@ def prune_local_checkpoints(
     return [str(item) for item in removable]
 
 
+def _recovery_asset_key(*, prefix: str, recovery_id: str, relative_path: str) -> str:
+    safe_relative = _safe_remote_prefix(relative_path)
+    return f"{_safe_remote_prefix(prefix)}/recovery/{_safe_component(recovery_id, label='recovery_id')}/{safe_relative}"
+
+
+def load_recovery_manifest(path: str | Path) -> dict[str, Any]:
+    """Load and validate the versioned off-host preservation manifest."""
+
+    manifest_path = Path(path).expanduser().resolve()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CheckpointError(f"invalid recovery preservation manifest: {manifest_path}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != RECOVERY_MANIFEST_SCHEMA_VERSION:
+        raise CheckpointError("unsupported recovery preservation manifest schema")
+    recovery_id = _safe_component(str(manifest.get("recovery_id") or ""), label="recovery_id")
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or not assets:
+        raise CheckpointError("recovery preservation manifest has no assets")
+    seen: set[str] = set()
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise CheckpointError("recovery manifest asset must be an object")
+        relative_path = str(asset.get("relative_path") or "").replace("\\", "/").strip("/")
+        if not relative_path or any(part in {"", ".", ".."} for part in relative_path.split("/")):
+            raise CheckpointError(f"asset relative_path must be a safe relative path: {relative_path!r}")
+        if relative_path in seen:
+            raise CheckpointError(f"duplicate recovery manifest asset: {relative_path}")
+        seen.add(relative_path)
+        _validate_digest(str(asset.get("sha256") or ""), label=f"{relative_path}.sha256")
+        if int(asset.get("bytes") or -1) <= 0:
+            raise CheckpointError(f"asset byte count must be positive: {relative_path}")
+        if not str(asset.get("logical_role") or "").strip():
+            raise CheckpointError(f"asset logical_role is required: {relative_path}")
+        if not str(asset.get("retention_class") or "").strip():
+            raise CheckpointError(f"asset retention_class is required: {relative_path}")
+        for source_revision in asset.get("source_revisions") or {}:
+            if not str(source_revision).strip() or str(source_revision).strip() != str(source_revision):
+                raise ValueError(f"asset source revision ref must be a non-empty trimmed string: {source_revision!r}")
+    return manifest
+
+
+def _read_recovery_asset(recovery_root: str | Path, asset: Mapping[str, Any]) -> tuple[Path, str]:
+    relative_path = str(asset["relative_path"]).replace("\\", "/")
+    local_path = Path(recovery_root).expanduser().resolve() / relative_path
+    if not local_path.is_file():
+        raise CheckpointError(f"recovered asset is missing: {local_path}")
+    observed_bytes = int(local_path.stat().st_size)
+    if observed_bytes != int(asset["bytes"]):
+        raise CheckpointError(
+            f"recovered asset byte count drift: {relative_path}: expected {asset['bytes']}, got {observed_bytes}"
+        )
+    observed_digest = _sha256_file(local_path)
+    expected_digest = _validate_digest(str(asset["sha256"]), label=f"{relative_path}.sha256")
+    if observed_digest != expected_digest:
+        raise CheckpointError(
+            f"recovered asset SHA-256 drift: {relative_path}: expected {expected_digest}, got {observed_digest}"
+        )
+    return local_path, observed_digest
+
+
+def preserve_recovery_set(
+    manifest_path: str | Path,
+    remote: RemoteStore,
+    *,
+    recovery_root: str | Path,
+    remote_prefix: str = DEFAULT_REMOTE_PREFIX,
+    clock: Callable[[], str] = _utc_now,
+) -> dict[str, Any]:
+    """Upload every recovered asset off-host and write a local set receipt.
+
+    Each asset is a separate immutable object named with its SHA-256 in the
+    object metadata.  A failed upload leaves no receipt, so a partially
+    preserved set is never acknowledged as complete.
+    """
+
+    manifest = load_recovery_manifest(manifest_path)
+    recovery_id = _safe_component(str(manifest["recovery_id"]), label="recovery_id")
+    prefix = _safe_remote_prefix(remote_prefix or manifest.get("remote_prefix") or DEFAULT_REMOTE_PREFIX)
+    assets: list[dict[str, Any]] = []
+    for asset in manifest["assets"]:
+        local_path, digest = _read_recovery_asset(recovery_root, asset)
+        key = _recovery_asset_key(prefix=prefix, recovery_id=recovery_id, relative_path=asset["relative_path"])
+        suffix = local_path.suffix.lower()
+        receipt = remote.put_file(
+            local_path,
+            key,
+            metadata={
+                "sha256": digest,
+                "recovery-id": recovery_id,
+                "logical-role": str(asset["logical_role"]),
+            },
+            content_type=RECOVERY_ASSET_CONTENT_TYPES.get(suffix, "application/octet-stream"),
+        )
+        assets.append(
+            {
+                "relative_path": asset["relative_path"],
+                "key": key,
+                "bytes": int(asset["bytes"]),
+                "sha256": digest,
+                "logical_role": asset["logical_role"],
+                "retention_class": asset["retention_class"],
+                "off_host": dict(receipt),
+            }
+        )
+    set_receipt = {
+        "schema_version": PRESERVATION_RECEIPT_SCHEMA_VERSION,
+        "recovery_id": recovery_id,
+        "published_at": clock(),
+        "remote_prefix": prefix,
+        "publication_order": ["assets", "set_receipt"],
+        "assets": assets,
+        "manifest_is_commit_record": True,
+    }
+    receipt_path = Path(manifest_path).expanduser().resolve().parent / RECOVERY_SET_RECEIPT_FILENAME
+    _atomic_write_json(receipt_path, set_receipt)
+    return set_receipt
+
+
+def _verify_sqlite_asset(path: Path, asset: Mapping[str, Any]) -> dict[str, Any]:
+    connection = _readonly_connection(path)
+    try:
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        if integrity != "ok":
+            raise RemoteStoreError(f"restored SQLite integrity check failed: {path}: {integrity}")
+        expected_tables = sorted(str(table) for table in (asset.get("sqlite_tables") or []))
+        tables = sorted(
+            str(row[0])
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        )
+        if expected_tables and tables != expected_tables:
+            raise RemoteStoreError(f"restored SQLite schema mismatch: {path}: expected {expected_tables}, got {tables}")
+        row_counts: dict[str, int] = {}
+        for table, expected_count in sorted((asset.get("sqlite_row_counts") or {}).items()):
+            observed = int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+            if observed != int(expected_count):
+                raise RemoteStoreError(
+                    f"restored SQLite row count mismatch: {path}: {table}: expected {expected_count}, got {observed}"
+                )
+            row_counts[table] = observed
+        return {"integrity_check": integrity, "tables": tables, "row_counts": row_counts}
+    finally:
+        connection.close()
+
+
+def _verify_git_bundle(path: Path) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["git", "bundle", "verify", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RemoteStoreError("git is required to verify the preserved code bundle") from exc
+    if completed.returncode != 0:
+        raise RemoteStoreError(f"git bundle verify failed: {completed.stderr.strip()}")
+    return {"git_bundle_verify": "ok", "stdout_tail": completed.stdout.strip().splitlines()[-4:]}
+
+
+def verify_remote_recovery_set(
+    manifest_path: str | Path,
+    remote: RemoteStore,
+    *,
+    remote_prefix: str = "",
+    download_dir: str | Path | None = None,
+    clock: Callable[[], str] = _utc_now,
+) -> dict[str, Any]:
+    """Verify every preserved asset off-host without touching active state.
+
+    HEAD verification checks the remote byte count and SHA-256 metadata for
+    every asset.  When ``download_dir`` is supplied, every asset is also
+    downloaded into a fresh isolated directory and re-verified locally; SQLite
+    assets additionally run integrity, schema and row-count checks, and Git
+    bundle assets run ``git bundle verify``.
+    """
+
+    manifest = load_recovery_manifest(manifest_path)
+    recovery_id = _safe_component(str(manifest["recovery_id"]), label="recovery_id")
+    prefix = _safe_remote_prefix(remote_prefix or manifest.get("remote_prefix") or DEFAULT_REMOTE_PREFIX)
+    results: list[dict[str, Any]] = []
+    isolated_root: Path | None = None
+    if download_dir is not None:
+        isolated_root = Path(download_dir).expanduser().resolve()
+        if isolated_root.exists():
+            raise CheckpointError(f"isolated verification directory already exists; refusing overwrite: {isolated_root}")
+        isolated_root.parent.mkdir(parents=True, exist_ok=True)
+        isolated_root.mkdir()
+    try:
+        for asset in manifest["assets"]:
+            key = _recovery_asset_key(prefix=prefix, recovery_id=recovery_id, relative_path=asset["relative_path"])
+            digest = _validate_digest(str(asset["sha256"]), label=f"{asset['relative_path']}.sha256")
+            observed = remote.head_file(key)
+            if observed is None:
+                raise RemoteStoreError(f"preserved asset is missing off-host: {key}")
+            observed_metadata = {str(k).lower(): str(v) for k, v in (observed.get("Metadata") or {}).items()}
+            head_ok = int(observed.get("ContentLength") or -1) == int(asset["bytes"]) and observed_metadata.get("sha256") == digest
+            result: dict[str, Any] = {
+                "relative_path": asset["relative_path"],
+                "key": key,
+                "bytes": int(asset["bytes"]),
+                "sha256": digest,
+                "head_verification": "ok" if head_ok else "mismatch",
+            }
+            if not head_ok:
+                raise RemoteStoreError(f"off-host HEAD verification failed: {key}")
+            if isolated_root is not None:
+                destination = isolated_root / str(asset["relative_path"]).replace("/", os.sep)
+                remote.get_file(key, destination)
+                observed_digest = _sha256_file(destination)
+                if observed_digest != digest:
+                    raise RemoteStoreError(f"downloaded asset SHA-256 mismatch: {key}")
+                result["download_sha256"] = observed_digest
+                if destination.suffix == ".bundle":
+                    result["bundle"] = _verify_git_bundle(destination)
+                if asset.get("sqlite_row_counts") or asset.get("sqlite_tables"):
+                    result["sqlite"] = _verify_sqlite_asset(destination, asset)
+            results.append(result)
+        return {
+            "schema_version": PRESERVATION_RECEIPT_SCHEMA_VERSION,
+            "recovery_id": recovery_id,
+            "verified_at": clock(),
+            "remote_prefix": prefix,
+            "isolated_download_root": str(isolated_root) if isolated_root else "",
+            "assets": results,
+        }
+    except BaseException:
+        if isolated_root is not None and isolated_root.exists():
+            shutil.rmtree(isolated_root, ignore_errors=True)
+        raise
+
+
+def scheduled_backup(
+    *,
+    role: str,
+    source_db: str | Path,
+    checkpoint_root: str | Path,
+    data_manifest: str | Path,
+    source_version: str,
+    release_commit: str = "",
+    remote_prefix: str = DEFAULT_REMOTE_PREFIX,
+    local_keep: int = DEFAULT_LOCAL_RETENTION,
+    remote_keep: int = DEFAULT_REMOTE_RETENTION,
+    free_space_reserve_bytes: int = DEFAULT_FREE_SPACE_RESERVE,
+    upload: bool = False,
+    remote: RemoteStore | None = None,
+    clock: Callable[[], str] = _utc_now,
+) -> dict[str, Any]:
+    """Create one scheduled, uploaded and pruned acquisition checkpoint.
+
+    The committed data-manifest file is hashed into the checkpoint manifest so
+    every scheduled generation records the exact validated input contract it
+    covers.  The database object is uploaded before the manifest object, and
+    local pruning only removes generations whose off-host receipt exists.
+    """
+
+    if role not in ROLE_CONFIG:
+        raise ValueError(f"unsupported acquisition state role: {role}")
+    local_generations = max(MINIMUM_RETAINED_GENERATIONS, int(local_keep))
+    remote_generations = max(MINIMUM_RETAINED_GENERATIONS, int(remote_keep))
+    manifest_path = Path(data_manifest).expanduser().resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"acquisition data manifest not found: {manifest_path}")
+    manifest_sha256 = _sha256_file(manifest_path)
+    cycle_id = f"backup-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    checkpoint_manifest = create_checkpoint(
+        role=role,
+        source_db=source_db,
+        checkpoint_root=checkpoint_root,
+        source_version=source_version,
+        release_commit=release_commit,
+        manifest_id=manifest_path.name,
+        manifest_sha256=manifest_sha256,
+        cycle_id=cycle_id,
+        shard_id=f"{role}-scheduled",
+        high_water_marks={},
+        remote_prefix=remote_prefix,
+        local_retention_generations=local_generations,
+        remote_retention_generations=remote_generations,
+        free_space_reserve_bytes=free_space_reserve_bytes,
+    )
+    result: dict[str, Any] = {"checkpoint": checkpoint_manifest, "input_manifest_sha256": manifest_sha256}
+    if upload:
+        checkpoint_dir = Path(checkpoint_root).expanduser().resolve() / role / str(checkpoint_manifest["checkpoint_id"])
+        result["off_host"] = preserve_checkpoint_off_host(
+            checkpoint_dir,
+            remote if remote is not None else S3CompatibleRemoteStore.from_environment(),
+        )
+    pruned = prune_local_checkpoints(checkpoint_root, role=role, keep=local_generations, apply=True)
+    result["pruned_local_generations"] = pruned
+    result["retained_local_generations_minimum"] = local_generations
+    return result
+
+
 def _parse_high_water(values: list[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     for value in values:
@@ -1038,6 +1347,36 @@ def _parser() -> argparse.ArgumentParser:
     prune.add_argument("--role", choices=tuple(ROLE_CONFIG), required=True)
     prune.add_argument("--keep", type=int, default=DEFAULT_LOCAL_RETENTION)
     prune.add_argument("--apply", action="store_true")
+    scheduled = subparsers.add_parser(
+        "scheduled-backup",
+        help="create, upload and prune one scheduled acquisition checkpoint",
+    )
+    scheduled.add_argument("--role", choices=tuple(ROLE_CONFIG), required=True)
+    scheduled.add_argument("--source-db", type=Path, required=True)
+    scheduled.add_argument("--checkpoint-root", type=Path, required=True)
+    scheduled.add_argument("--data-manifest", type=Path, required=True)
+    scheduled.add_argument("--source-version", required=True)
+    scheduled.add_argument("--release-commit", default="")
+    scheduled.add_argument("--remote-prefix", default=DEFAULT_REMOTE_PREFIX)
+    scheduled.add_argument("--local-keep", type=int, default=DEFAULT_LOCAL_RETENTION)
+    scheduled.add_argument("--remote-keep", type=int, default=DEFAULT_REMOTE_RETENTION)
+    scheduled.add_argument("--free-space-reserve-bytes", type=int, default=DEFAULT_FREE_SPACE_RESERVE)
+    scheduled.add_argument("--upload", action="store_true")
+    preserve_set = subparsers.add_parser(
+        "preserve-recovery-set",
+        help="upload every recovered asset from the versioned preservation manifest",
+    )
+    preserve_set.add_argument("--manifest", type=Path, required=True)
+    preserve_set.add_argument("--recovery-root", type=Path, required=True)
+    preserve_set.add_argument("--remote-prefix", default="")
+    preserve_set.add_argument("--upload", action="store_true")
+    verify_set = subparsers.add_parser(
+        "verify-recovery-set",
+        help="verify every preserved asset off-host (optionally with an isolated restore drill)",
+    )
+    verify_set.add_argument("--manifest", type=Path, required=True)
+    verify_set.add_argument("--remote-prefix", default="")
+    verify_set.add_argument("--download-dir", type=Path)
     return parser
 
 
@@ -1083,6 +1422,42 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "prune":
             print(json.dumps({"apply": bool(args.apply), "removed": prune_local_checkpoints(args.checkpoint_root, role=args.role, keep=args.keep, apply=args.apply)}, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
+        if args.command == "scheduled-backup":
+            result = scheduled_backup(
+                role=args.role,
+                source_db=args.source_db,
+                checkpoint_root=args.checkpoint_root,
+                data_manifest=args.data_manifest,
+                source_version=args.source_version,
+                release_commit=args.release_commit,
+                remote_prefix=args.remote_prefix,
+                local_keep=args.local_keep,
+                remote_keep=args.remote_keep,
+                free_space_reserve_bytes=args.free_space_reserve_bytes,
+                upload=args.upload,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if args.command == "preserve-recovery-set":
+            manifest_path = Path(args.manifest).expanduser().resolve()
+            if not args.upload:
+                load_recovery_manifest(manifest_path)
+                recovery_root = Path(args.recovery_root).expanduser().resolve()
+                for asset in load_recovery_manifest(manifest_path)["assets"]:
+                    _read_recovery_asset(recovery_root, asset)
+                print(json.dumps({"manifest": str(manifest_path), "validated_assets": len(load_recovery_manifest(manifest_path)["assets"]), "upload": False}, ensure_ascii=False))
+                return 0
+            print(json.dumps(preserve_recovery_set(manifest_path, S3CompatibleRemoteStore.from_environment(), recovery_root=args.recovery_root, remote_prefix=args.remote_prefix), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if args.command == "verify-recovery-set":
+            report = verify_remote_recovery_set(
+                Path(args.manifest).expanduser().resolve(),
+                S3CompatibleRemoteStore.from_environment(),
+                remote_prefix=args.remote_prefix,
+                download_dir=args.download_dir,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
     except (CheckpointError, OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(f"acquisition checkpoint failed: {exc}", file=sys.stderr)
         return 2
@@ -1097,16 +1472,21 @@ __all__ = [
     "CheckpointError",
     "LeaseFenced",
     "OwnershipConflict",
+    "RECOVERY_MANIFEST_SCHEMA_VERSION",
     "ROLE_CONFIG",
     "RemoteStoreError",
     "SingleWriterLease",
     "StateLease",
     "S3CompatibleRemoteStore",
     "create_checkpoint",
+    "load_recovery_manifest",
     "main",
     "preserve_checkpoint_off_host",
+    "preserve_recovery_set",
     "prune_local_checkpoints",
     "restore_checkpoint",
     "restore_remote_checkpoint",
+    "scheduled_backup",
     "validate_checkpoint",
+    "verify_remote_recovery_set",
 ]

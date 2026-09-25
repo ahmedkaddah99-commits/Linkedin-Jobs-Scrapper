@@ -210,7 +210,12 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         entry = next(
                             (
                                 item
-                                for item in _collect_tracker_entries(application, user, include_full_details=True)
+                                for item in _collect_tracker_entries(
+                                    application,
+                                    user,
+                                    include_full_details=True,
+                                    include_full_resource_metadata=True,
+                                )
                                 if str(item.get("review_id") or "") == review_id
                             ),
                             None,

@@ -201,7 +201,7 @@ class PhaseBCatalogTests(unittest.TestCase):
             self.assertEqual(versions, 3)
             self.assertEqual(relationships, 1)
 
-    def test_phase_b_validation_route_is_admin_only_and_never_a_user_route(self):
+    def test_retired_phase_b_validation_routes_are_absent(self):
         registry = build_route_registry()
         application = Mock()
         handler = _Handler({"validation_key": "fixture"})
@@ -212,8 +212,8 @@ class PhaseBCatalogTests(unittest.TestCase):
             segments=("admin", "acquisition", "targets", "n26_greenhouse", "validate"),
             query={},
         )
-        self.assertTrue(registry.dispatch(context, auth_required=True))
-        application.validate_phase_b_target.assert_called_once_with("n26_greenhouse", validation_key="fixture")
+        self.assertFalse(registry.dispatch(context, auth_required=True))
+        application.validate_phase_b_target.assert_not_called()
         self.assertFalse(
             registry.dispatch(
                 ApiRouteContext(

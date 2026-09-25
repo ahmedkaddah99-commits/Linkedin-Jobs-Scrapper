@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from backend.database.connection import DatabaseConfigurationError, validate_release_provenance
+from backend.repositories.sqlite_migrations import current_migration_head
 from backend.deployment.release_contract import (
     RELEASE_CONTRACT_VERSION,
     ReleaseMetadata,
@@ -42,6 +46,14 @@ def test_release_metadata_uses_render_commit_without_claiming_unknown_values(mon
     assert json.loads(metadata.to_json())["schema_version"] == "runr.release.v1"
 
 
+def test_release_metadata_defaults_to_the_code_derived_migration_head(monkeypatch) -> None:
+    monkeypatch.delenv("RUNR_MIGRATION_HEAD", raising=False)
+
+    metadata = ReleaseMetadata.from_environment(service="worker")
+
+    assert metadata.migration_head == current_migration_head()
+
+
 def test_previous_and_current_images_share_the_declared_contract() -> None:
     assert are_release_contracts_compatible("runr-contract-v1", "runr-contract-v1")
     assert not are_release_contracts_compatible("runr-contract-v0", "runr-contract-v1")
@@ -73,3 +85,44 @@ def test_render_and_ci_select_distinct_api_and_worker_images() -> None:
     assert "buildFilter:" in render
     assert "Dockerfile.api" in ci
     assert "Dockerfile.worker" in ci
+
+
+def test_render_declares_the_code_derived_migration_head_for_api_and_worker() -> None:
+    render = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    expected_head = current_migration_head()
+
+    assert render.count(f"value: {expected_head}") == 2
+    assert "value: 058_customer_task_queue" not in render
+
+
+def test_startup_entrypoint_validates_release_provenance_before_emitting_metadata() -> None:
+    start = (ROOT / "deploy" / "start.sh").read_text(encoding="utf-8")
+
+    assert "validate_release_provenance" in start
+    assert "backend.database.connection" in start
+    assert "export RUNR_MIGRATION_HEAD=" in start
+
+
+def test_release_provenance_validator_rejects_an_incompatible_migration_head() -> None:
+    with pytest.raises(DatabaseConfigurationError, match="migration head"):
+        validate_release_provenance(configured_migration_head="058_customer_task_queue")
+
+
+def test_release_provenance_validator_rejects_conflicting_known_revisions() -> None:
+    with pytest.raises(DatabaseConfigurationError, match="commit"):
+        validate_release_provenance(release_commit="abc123", runtime_commit="def456")
+
+
+def test_release_provenance_validator_ignores_placeholder_revisions() -> None:
+    expected_head = current_migration_head()
+
+    assert (
+        validate_release_provenance(
+            release_branch="unknown",
+            runtime_branch="deployment/render-turso-r2",
+            release_commit="unset",
+            runtime_commit="abc123",
+            configured_migration_head=expected_head,
+        )
+        == expected_head
+    )
