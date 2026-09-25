@@ -1408,9 +1408,18 @@ def run_delivery(
         if company_id in companies_by_source[source]
     ]
     if not targets:
+        # A bounded bootstrap chunk can contain only companies outside the
+        # selected cohort. Advance its durable cursors without creating an
+        # empty cycle or replacing the public publication head.
+        assert store is not None
+        previous_cycle_id = _text(linkedin_checkpoint.get("last_cycle_id") or employer_checkpoint.get("last_cycle_id"))
+        previous_publication_id = _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id"))
+        store.save_publisher_checkpoint(next_linkedin_checkpoint, cycle_id=previous_cycle_id, publication_id=previous_publication_id)
+        store.save_publisher_checkpoint(next_employer_checkpoint, cycle_id=previous_cycle_id, publication_id=previous_publication_id)
         return _with_receipt(
             {
                 "status": "no_changes",
+                "checkpoint_advanced": True,
                 "manifest_id": _text(manifest.get("manifest_id")),
                 "manifest_hash": _text(manifest.get("manifest_hash")),
                 "source_version": source_version,
