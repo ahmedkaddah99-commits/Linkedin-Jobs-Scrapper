@@ -49,8 +49,8 @@
       "format": "utf-8-sig CSV",
       "rows": 17601,
       "columns": 118,
-      "bytes": 18807047,
-      "sha256": "7f416ec6ebbcb936a42061ef0adaa07e4a6c04d2959d0eb579779126682440d9",
+      "bytes": 18807044,
+      "sha256": "b8b8512c0669cf57754a2783ed3e9e9b341fa4a0b7abcd3db9a7cfc91cd3dce0",
       "committed_in_git": true,
       "restore_separately": false,
       "startup_validation": "exact SHA-256, 118-column contract, and required eligibility columns"
