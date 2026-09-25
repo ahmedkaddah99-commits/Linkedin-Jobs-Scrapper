@@ -11,11 +11,32 @@ from scripts.publish_producer_states import (
     RUNTIME_PUBLICATION_POLICY_VERSION,
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
+    _crosswalk_already_applied,
     _target,
     run_delivery,
 )
 
 import pytest
+
+
+def test_publisher_skips_only_an_exact_applied_crosswalk(tmp_path):
+    store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
+    document = {
+        "registry_sha256": "reviewed-registry",
+        "report": {"canonical_rows": [{"canonical_CompanyID": "company-1", "company_name": "Company"}]},
+    }
+    mapping = {"old-company:legacy-1": "company-1"}
+
+    assert not _crosswalk_already_applied(store, mapping=mapping, document=document)
+    store.apply_company_identity_crosswalk(
+        mapping_by_identity=mapping,
+        canonical_rows=document["report"]["canonical_rows"],
+        provenance={"registry_sha256": document["registry_sha256"]},
+    )
+    assert _crosswalk_already_applied(store, mapping=mapping, document=document)
+    assert not _crosswalk_already_applied(
+        store, mapping={"old-company:legacy-1": "company-2"}, document=document
+    )
 
 
 def test_producer_targets_record_the_selected_policy_version():

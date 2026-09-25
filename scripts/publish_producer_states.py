@@ -368,6 +368,48 @@ def _ensure_publisher_checkpoint_table(store: SqliteAcquisitionStore) -> None:
     store.require_publisher_checkpoint_table()
 
 
+def _crosswalk_already_applied(
+    store: SqliteAcquisitionStore,
+    *,
+    mapping: Mapping[str, str],
+    document: Mapping[str, object],
+) -> bool:
+    """Check the stored registry before repeating its expensive merge."""
+
+    registry_sha = _text(document.get("registry_sha256"))
+    if not registry_sha or not mapping:
+        return False
+    report = document.get("report")
+    report = report if isinstance(report, Mapping) else {}
+    canonical_ids = {
+        _text(row.get("canonical_CompanyID") or row.get("canonical_company_id"))
+        for row in (report.get("canonical_rows") or [])
+        if isinstance(row, Mapping)
+    }
+    canonical_ids.discard("")
+
+    def check(connection: sqlite3.Connection) -> bool:
+        stored = {
+            _text(row[0]): _text(row[1])
+            for row in connection.execute(
+                "SELECT source_identity_key, winner_company_id, provenance_json FROM company_identity_crosswalk"
+            )
+            if _decode(row[2], {}).get("registry_sha256") == registry_sha
+        }
+        if any(stored.get(key) != value for key, value in mapping.items()):
+            return False
+        if canonical_ids:
+            present = {
+                _text(row[0])
+                for row in connection.execute("SELECT company_id FROM canonical_companies")
+            }
+            if not canonical_ids.issubset(present):
+                return False
+        return True
+
+    return bool(store._run_transaction(check))
+
+
 def _row_value(row: Mapping[str, object], key: str) -> object:
     try:
         return row[key]
@@ -1087,16 +1129,19 @@ def run_delivery(
     if identity_crosswalk_document and store is not None:
         crosswalk_report = identity_crosswalk_document.get("report")
         crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
-        crosswalk_result = store.apply_company_identity_crosswalk(
-            mapping_by_identity=crosswalk,
-            merge_receipts=crosswalk_report.get("merge_receipts") or [],
-            canonical_rows=crosswalk_report.get("canonical_rows") or [],
-            provenance={
-                "actor": "producer_state_publisher",
-                "schema_version": _text(identity_crosswalk_document.get("schema_version")),
-                "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256")),
-            },
-        )
+        if _crosswalk_already_applied(store, mapping=crosswalk, document=identity_crosswalk_document):
+            crosswalk_result = {"status": "already_applied", "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256"))}
+        else:
+            crosswalk_result = store.apply_company_identity_crosswalk(
+                mapping_by_identity=crosswalk,
+                merge_receipts=crosswalk_report.get("merge_receipts") or [],
+                canonical_rows=crosswalk_report.get("canonical_rows") or [],
+                provenance={
+                    "actor": "producer_state_publisher",
+                    "schema_version": _text(identity_crosswalk_document.get("schema_version")),
+                    "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256")),
+                },
+            )
 
     linkedin_org_to_canonical = {
         _text(source_company_id): company_id
