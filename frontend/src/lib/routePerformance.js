@@ -13,8 +13,8 @@ export const ROUTE_INVENTORY = Object.freeze([
   { name: "career-evidence", path: /^\/career-evidence$/, useful: "main h4, main .text-error" },
   { name: "career-evidence-detail", path: /^\/career-evidence\/[^/]+$/, useful: "main h1" },
   { name: "career-assets", path: /^\/career-assets$/, useful: "main section article" },
-  { name: "refer", path: /^\/(?:refer|referrals)$/, useful: ".referral-list__body .referral-contact, .referral-list__body .referral-empty, .referral-list__body .referral-feedback--error" },
-  { name: "settings", path: /^\/settings$/, useful: "main .grid .space-y-8, main .text-error" },
+  { name: "refer", path: /^\/(?:refer|referrals)$/, useful: ".referral-list__body .referral-contact, main .referral-empty, .referral-feedback--error" },
+  { name: "settings", path: /^\/settings$/, useful: "main h2, main .text-error" },
 ]);
 
 export function routeForPath(pathname) {
@@ -31,13 +31,14 @@ export function routeReadyState(route, root) {
   if (!useful) {
     if (route.name === "career-evidence" && main.textContent?.includes("No career profiles yet.")) return "empty";
     if (route.name === "career-assets" && main.textContent?.includes("No assets match these filters")) return "empty";
+    if (route.name === "refer" && main.textContent?.includes("No personal contacts saved yet.")) return "empty";
     return null;
   }
   const text = String(useful.textContent || "");
   if (/\bLoading\b/i.test(text)) return null;
   if (useful.tagName === "H1" && /unavailable|could not/i.test(text)) return "error";
   if (useful.matches(".jobs-catalog-state--failure, .documents-table-message--error, .referral-feedback--error, .text-error")) return "error";
-  if (/^(No |There are no |Nothing )/i.test(text.trim()) || useful.matches(".documents-empty-state, .jobs-empty")) return "empty";
+  if (/^(No |There are no |Nothing )/i.test(text.trim()) || useful.matches(".documents-empty-state, .jobs-empty, .referral-empty")) return "empty";
   return "content";
 }
 

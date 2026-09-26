@@ -61,6 +61,7 @@ test("critical real-mode routes reach a useful card or empty state within the pr
     const times = samples.map((sample) => sample.durationMs);
     const summary = { route, samples, p50: quantile(times, 0.5), p75: quantile(times, 0.75), p95: quantile(times, 0.95) };
     results.push(summary);
+    console.log(`route-readiness-sample ${JSON.stringify(summary)}`);
     expect(summary.p95, `${route}: readiness regression; inspect route-performance.json`).toBeLessThan(5000);
   }
   const report = { project: testInfo.project.name, results };
