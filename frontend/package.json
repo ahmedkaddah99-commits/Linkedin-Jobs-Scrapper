@@ -8,7 +8,8 @@
     "test": "node --test \"src/**/*.test.js\"",
     "test:production-build": "npm run build && node --test scripts/production-build.test.mjs",
     "test:e2e": "playwright test",
-    "check": "npm run test && eslint src --max-warnings=0 && vite build",
+    "test:route-readiness": "playwright install --with-deps chromium && playwright test e2e/route-performance.spec.ts --retries=1",
+    "check": "npm run test && eslint src --max-warnings=0 && vite build && npm run test:route-readiness",
     "build": "node scripts/write-release-metadata.mjs && vite build",
     "preview": "vite preview"
   },
