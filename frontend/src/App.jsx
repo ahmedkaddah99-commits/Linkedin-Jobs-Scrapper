@@ -6,7 +6,7 @@ import ConnectionPanel from "./components/ConnectionPanel";
 import UpgradeModal from "./components/UpgradeModal";
 import { SessionProvider, useSession } from "./context/SessionContext";
 import MarketingSite from "./pages/MarketingSite";
-import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
+import { QUOTA_EXCEEDED_EVENT, markJobsPhase } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { personalizedJobsDataMode, personalizedJobsExperienceEnabled } from "./lib/personalizedJobsConfig";
 import { hasAuthenticatedSession } from "./lib/sessionState";
@@ -169,15 +169,23 @@ function AuthenticatedApp() {
   const { status, user } = useSession();
   const hasSession = hasAuthenticatedSession(status, user);
   const lastTrackedPageRef = useRef("");
+  const routeChunkMarkedRef = useRef(false);
   const userId = String(user?.user_id || user?.email || "").trim();
 
   useEffect(() => {
     if (!personalizedJobsExperienceEnabled || !location.pathname.startsWith("/jobs")) return undefined;
+    // The route chunk is marked when its import resolves, whichever of this
+    // effect or the route render resolves the shared module first. Mode is
+    // cold on the first resolution of a page load and warm afterwards.
+    void import("./pages/PersonalizedJobsPage").then(() => {
+      const mode = routeChunkMarkedRef.current ? "warm" : "cold";
+      routeChunkMarkedRef.current = true;
+      markJobsPhase("route-chunk", { mode });
+    });
     const preload = () => {
       if (personalizedJobsDataMode !== "real") {
         void import("./pages/PersonalizedOnboardingPage");
       }
-      void import("./pages/PersonalizedJobsPage");
       void import("./pages/HiddenJobsPage");
       void import("./pages/PersonalizedJobDetailPage");
     };

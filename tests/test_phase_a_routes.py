@@ -25,7 +25,7 @@ class _Handler:
 
 
 class PhaseARouteTests(unittest.TestCase):
-    def test_read_catalog_is_read_only_and_admin_reports_are_protected_routes(self):
+    def test_read_catalog_is_read_only_and_retired_admin_reports_are_absent(self):
         registry = build_route_registry()
         handler = _Handler()
         application = Mock()
@@ -47,7 +47,6 @@ class PhaseARouteTests(unittest.TestCase):
         application.run_due_acquisition.assert_not_called()
         self.assertEqual(handler.payload[1]["freshness"], "unpublished")
 
-        application.list_acquisition_cycles.return_value = []
         admin_context = ApiRouteContext(
             application=application,
             handler=handler,
@@ -55,9 +54,9 @@ class PhaseARouteTests(unittest.TestCase):
             segments=("admin", "acquisition", "cycles"),
             query={},
         )
-        self.assertTrue(registry.dispatch(admin_context, auth_required=True))
-        self.assertEqual(handler.admin_calls, 1)
-        self.assertEqual(handler.payload, (200, {"cycles": []}))
+        self.assertFalse(registry.dispatch(admin_context, auth_required=True))
+        self.assertEqual(handler.admin_calls, 0)
+        application.list_acquisition_cycles.assert_not_called()
 
         self.assertFalse(registry.dispatch(catalog_context, auth_required=False))
 
@@ -77,8 +76,7 @@ class PhaseARouteTests(unittest.TestCase):
             segments=("admin", "acquisition", "recover"),
             query={},
         )
-        with self.assertRaises(PermissionError):
-            registry.dispatch(recovery_context, auth_required=True)
+        self.assertFalse(registry.dispatch(recovery_context, auth_required=True))
         application.recover_acquisition_cycle.assert_not_called()
 
         for method, segments in (
@@ -96,15 +94,7 @@ class PhaseARouteTests(unittest.TestCase):
                 segments=segments,
                 query={},
             )
-            if segments[0] == "admin":
-                try:
-                    handled = registry.dispatch(context, auth_required=True)
-                except PermissionError:
-                    pass
-                else:
-                    self.assertFalse(handled)
-            else:
-                self.assertFalse(registry.dispatch(context, auth_required=True))
+            self.assertFalse(registry.dispatch(context, auth_required=True))
 
         self.assertEqual(application.method_calls, [])
 

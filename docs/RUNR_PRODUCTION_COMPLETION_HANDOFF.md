@@ -94,3 +94,25 @@ An authorized bounded R2 write/read/delete readiness probe passed in 2,380.29 ms
 - Producer state reaches the shared catalog through the single canonical normalization/publication bridge; no disconnected public table was introduced.
 - Partial and failed source outcomes remain retryable and do not erase the other source or close postings without explicit completeness evidence.
 - Admin dashboard/data/analytics backend and frontend surfaces were removed; customer billing/settings/account/webhook surfaces remain.
+
+## T30 release provenance reconciliation (2026-09-21)
+
+Batch integration update (2026-09-22): T31 appended migration
+`061_acquisition_publisher_checkpoints`; the Render API and worker declarations
+now match that registry head. The following T30 account records its earlier
+`060` implementation state and is not a current live deployment claim.
+
+At T30 implementation, the migration registry ended at
+`060_publication_latest_observation_index`. The Render API and worker
+declarations are aligned to that code-derived head, and `deploy/start.sh`
+fails before role startup when a configured head or known release branch/commit
+disagrees with the repository/runtime metadata.
+
+The revisions in this handoff remain documentary: the recorded Render and VPS
+runtime revision is `5dfdd1066d8bcba4a958f3d95e98dc6b7dbe8553`, while the T30
+implementation dependency is integrated on `predeployment/render-turso-r2` at
+`abd670407a8389a57d95d67bc909baa67e6237b9`. No current live Render/VPS
+revision or applied Turso head is asserted here. T26's remaining operator-host
+visibility work is a release dependency. The missing observed checkpoint table
+is a downstream T31 schema/ownership decision; T30 does not add a competing
+migration for it.

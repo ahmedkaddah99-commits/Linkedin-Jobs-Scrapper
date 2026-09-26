@@ -24,15 +24,18 @@ import csv
 import json
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.acquisition.job_publication_completeness import (
+    REQUIRED_COMPANY_FIELDS,
+    REQUIRED_JOB_FIELDS,
     STATUSES,
     CompletenessResult,
     validate_job_for_publication,
@@ -98,6 +101,234 @@ def _pct(numerator: int, denominator: int) -> float:
     return round(100.0 * numerator / denominator, 2) if denominator else 0.0
 
 
+@dataclass(frozen=True)
+class PublicationExperiment:
+    """A frozen, offline-only candidate policy for counterfactual audits."""
+
+    experiment_id: str
+    description: str
+    min_description_chars: int = 80
+    stale_after_days: int = 90
+
+
+PUBLICATION_EXPERIMENTS = {
+    "description_threshold_60": PublicationExperiment(
+        experiment_id="description_threshold_60",
+        description="Lower the description threshold to 60 meaningful characters.",
+        min_description_chars=60,
+    ),
+    "freshness_window_180": PublicationExperiment(
+        experiment_id="freshness_window_180",
+        description="Extend the observation freshness window to 180 days.",
+        stale_after_days=180,
+    ),
+}
+
+
+def _unique_records(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        item = dict(record)
+        key = _canonical_job_id(item)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _evaluate_policy(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    company_registry: set[str] | None,
+    now: datetime,
+    min_description_chars: int,
+    stale_after_days: int,
+) -> tuple[list[dict[str, Any]], list[CompletenessResult]]:
+    unique = _unique_records(records)
+    results = [
+        validate_job_for_publication(
+            record,
+            now=now,
+            company_registry=company_registry,
+            min_description_chars=min_description_chars,
+            stale_after_days=stale_after_days,
+        )
+        for record in unique
+    ]
+    return unique, results
+
+
+def _reason_counts(results: Sequence[CompletenessResult]) -> dict[str, int]:
+    counts: Counter[str] = Counter(
+        reason.code for result in results for reason in result.reasons
+    )
+    return dict(sorted(counts.items()))
+
+
+def run_policy_experiments(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    company_registry: set[str] | None,
+    now: datetime,
+    experiment_ids: Sequence[str] = tuple(PUBLICATION_EXPERIMENTS),
+    sample_size: int = 20,
+) -> dict[str, Any]:
+    """Compare named policies over one frozen, provider-free snapshot.
+
+    Identity, application, lifecycle, freshness, and provenance semantics are
+    not removed by an experiment. Candidates only vary the two explicitly
+    declared thresholds, and their samples are potential false positives until
+    a separately labelled truth set is supplied.
+    """
+
+    unique, baseline_results = _evaluate_policy(
+        records,
+        company_registry=company_registry,
+        now=now,
+        min_description_chars=80,
+        stale_after_days=90,
+    )
+    baseline_publishable = [result.publishable for result in baseline_results]
+    experiments: dict[str, Any] = {}
+    for experiment_id in experiment_ids:
+        try:
+            policy = PUBLICATION_EXPERIMENTS[experiment_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown publication experiment: {experiment_id}") from exc
+        _, candidate_results = _evaluate_policy(
+            unique,
+            company_registry=company_registry,
+            now=now,
+            min_description_chars=policy.min_description_chars,
+            stale_after_days=policy.stale_after_days,
+        )
+        gained = [
+            index
+            for index, result in enumerate(candidate_results)
+            if result.publishable and not baseline_publishable[index]
+        ]
+        lost = [
+            index
+            for index, result in enumerate(candidate_results)
+            if not result.publishable and baseline_publishable[index]
+        ]
+        source_impact: dict[str, dict[str, int]] = {}
+        missing_fields: Counter[str] = Counter()
+        for index in gained + lost:
+            source = _source(unique[index])
+            impact = source_impact.setdefault(source, {"gained": 0, "lost": 0})
+            impact["gained" if index in gained else "lost"] += 1
+        for index in gained:
+            for reason in baseline_results[index].reasons:
+                fields = reason.fields or (reason.code,)
+                for field_name in fields:
+                    missing_fields[field_name] += 1
+        sample = [
+            {
+                "canonical_job_id": _canonical_job_id(unique[index]),
+                "source": _source(unique[index]),
+                "baseline_reasons": [reason.to_dict() for reason in baseline_results[index].reasons],
+                "candidate_reasons": [reason.to_dict() for reason in candidate_results[index].reasons],
+            }
+            for index in gained[: max(0, sample_size)]
+        ]
+        experiments[experiment_id] = {
+            "policy": {
+                "id": policy.experiment_id,
+                "description": policy.description,
+                "min_description_chars": policy.min_description_chars,
+                "stale_after_days": policy.stale_after_days,
+            },
+            "baseline_publishable_count": sum(baseline_publishable),
+            "candidate_publishable_count": sum(result.publishable for result in candidate_results),
+            "incremental_publish_count": len(gained),
+            "no_longer_publishable_count": len(lost),
+            "source_impact": dict(sorted(source_impact.items())),
+            "reason_code_metrics": {
+                "baseline": _reason_counts(baseline_results),
+                "candidate": _reason_counts(candidate_results),
+            },
+            "missing_field_distribution": dict(sorted(missing_fields.items())),
+            "false_positive_sample": sample,
+            "false_positive_sample_is_proxy": True,
+            "labeled_truth_required": True,
+        }
+    return {
+        "contract_version": "job_publication_completeness_v1",
+        "snapshot": {
+            "input_records": len(records),
+            "unique_canonical_jobs": len(unique),
+            "evaluated_at": now.isoformat(),
+            "provider_calls": 0,
+        },
+        "baseline_policy": {
+            "min_description_chars": 80,
+            "stale_after_days": 90,
+            "trust_gates_preserved": True,
+        },
+        "experiments": experiments,
+    }
+
+
+def _required_field_coverage(
+    results: list[CompletenessResult],
+) -> dict[str, dict[str, dict[str, int]]]:
+    coverage: dict[str, dict[str, dict[str, int]]] = {}
+    for group, fields in {
+        "job": REQUIRED_JOB_FIELDS,
+        "company": REQUIRED_COMPANY_FIELDS,
+    }.items():
+        coverage[group] = {}
+        for field in fields:
+            counts = Counter({"present": 0, "missing": 0, "invalid": 0, "unknown": 0})
+            for result in results:
+                state = result.field_states.get(field, "missing")
+                counts[state] += 1
+            coverage[group][field] = dict(counts)
+    return coverage
+
+
+def _url_policy_impact(
+    records: list[dict[str, Any]],
+    contract_results: list[CompletenessResult],
+    *,
+    company_registry: set[str] | None,
+    now: datetime,
+    min_description_chars: int,
+    stale_after_days: int,
+) -> dict[str, Any]:
+    strict_results = [
+        validate_job_for_publication(
+            record,
+            now=now,
+            company_registry=company_registry,
+            min_description_chars=min_description_chars,
+            stale_after_days=stale_after_days,
+            allow_trusted_linkedin_detail_url=False,
+        )
+        for record in records
+    ]
+    additional_by_source: Counter[str] = Counter()
+    additional = 0
+    for record, strict, contract in zip(records, strict_results, contract_results):
+        if contract.publishable and not strict.publishable:
+            additional += 1
+            additional_by_source[_source(record)] += 1
+    return {
+        "additional_publishable_records": additional,
+        "additional_publishable_by_source": dict(sorted(additional_by_source.items())),
+        "precision_recall_impact": {
+            "additional_eligible_records_as_recall_proxy": additional,
+            "precision_requires_labeled_truth": True,
+            "recall_requires_labeled_truth": True,
+            "comparison_policy": "reject_trusted_linkedin_job_detail_url",
+        },
+    }
+
+
 def run_audit(
     records: list[dict[str, Any]],
     *,
@@ -132,6 +363,18 @@ def run_audit(
                 stale_after_days=stale_after_days,
             )
         )
+
+    required_field_coverage = _required_field_coverage(results)
+    policy_impact = {
+        "trusted_linkedin_job_detail_url": _url_policy_impact(
+            unique,
+            results,
+            company_registry=company_registry,
+            now=now,
+            min_description_chars=min_description_chars,
+            stale_after_days=stale_after_days,
+        )
+    }
 
     outcome_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
@@ -217,6 +460,8 @@ def run_audit(
         "outcome_by_source": {src: dict(c) for src, c in sorted(source_outcome.items())},
         "top_blocking_reasons": top_reasons,
         "company_coverage": company_coverage,
+        "required_field_coverage": required_field_coverage,
+        "policy_impact": policy_impact,
         "missing_canonical_company_identity": missing_company_identity,
         "invalid_or_missing_application_url_count": len(invalid_application_url),
         "missing_description_count": missing_or_placeholder_description,
@@ -236,6 +481,40 @@ def _looks_placeholder(value: str) -> bool:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    if "experiments" in report:
+        lines = [
+            "# Job Publication Policy Experiments",
+            "",
+            f"- Contract: `{report['contract_version']}`",
+            f"- Frozen input records: {report['snapshot']['input_records']}",
+            f"- Unique canonical jobs: {report['snapshot']['unique_canonical_jobs']}",
+            f"- Evaluated: `{report['snapshot']['evaluated_at']}`",
+            f"- Provider calls: {report['snapshot']['provider_calls']}",
+            "",
+            "## Counterfactual results",
+            "",
+            "| Experiment | Candidate publishable | Incremental | No longer publishable |",
+            "|---|---:|---:|---:|",
+        ]
+        for experiment_id, experiment in report["experiments"].items():
+            lines.append(
+                f"| `{experiment_id}` | {experiment['candidate_publishable_count']} | "
+                f"{experiment['incremental_publish_count']} | {experiment['no_longer_publishable_count']} |"
+            )
+        for experiment_id, experiment in report["experiments"].items():
+            lines.extend(
+                [
+                    "",
+                    f"### `{experiment_id}`",
+                    "",
+                    f"- Rule: {experiment['policy']['description']}",
+                    f"- Missing-field distribution: `{json.dumps(experiment['missing_field_distribution'], sort_keys=True)}`",
+                    f"- Source impact: `{json.dumps(experiment['source_impact'], sort_keys=True)}`",
+                    f"- Potential false-positive sample is labelled-truth dependent: `{experiment['labeled_truth_required']}`",
+                ]
+            )
+        return "\n".join(lines) + "\n"
+
     lines: list[str] = []
     lines.append("# Job Publication Completeness Audit")
     lines.append("")
@@ -290,19 +569,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--now", default="", help="Override 'now' as ISO-8601 (deterministic audits).")
     parser.add_argument("--min-description-chars", type=int, default=80)
     parser.add_argument("--stale-after-days", type=int, default=90)
+    parser.add_argument(
+        "--experiment",
+        dest="experiment_ids",
+        action="append",
+        choices=tuple(PUBLICATION_EXPERIMENTS),
+        help="Run a named counterfactual policy experiment; repeat for multiple candidates.",
+    )
+    parser.add_argument("--sample-size", type=int, default=20)
     args = parser.parse_args(argv)
 
     records = load_records(args.input)
     company_registry = load_company_registry(args.company_registry)
     now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(timezone.utc)
 
-    report = run_audit(
-        records,
-        company_registry=company_registry,
-        now=now,
-        min_description_chars=args.min_description_chars,
-        stale_after_days=args.stale_after_days,
-    )
+    if args.experiment_ids:
+        report = run_policy_experiments(
+            records,
+            company_registry=company_registry,
+            now=now,
+            experiment_ids=tuple(args.experiment_ids),
+            sample_size=args.sample_size,
+        )
+    else:
+        report = run_audit(
+            records,
+            company_registry=company_registry,
+            now=now,
+            min_description_chars=args.min_description_chars,
+            stale_after_days=args.stale_after_days,
+        )
 
     args.output.mkdir(parents=True, exist_ok=True)
     if args.format in {"json", "both"}:

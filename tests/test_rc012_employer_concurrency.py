@@ -13,6 +13,7 @@ from scripts.master_employer_jobs_catalog import (
     TransportGate,
     run_collection,
 )
+from scripts.benchmark_linkedin_pipeline import evaluate_benchmark_contract
 
 
 def _company(identifier: str) -> EmployerCompany:
@@ -251,3 +252,265 @@ def test_request_metrics_do_not_use_job_or_target_counts(tmp_path: Path, monkeyp
 
     assert metrics["requests"] == 0
     assert metrics["request_accounting"]["total_attempts"] == 0
+
+
+def test_common_contract_can_classify_employer_lifecycle_counts() -> None:
+    result = evaluate_benchmark_contract(
+        profile="local-dry-run",
+        counts={
+            "discovered": 3,
+            "parsed": 3,
+            "complete": 2,
+            "accepted": 2,
+            "published": 2,
+            "duplicate": 1,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=32 * 1024 * 1024,
+        browser_requests=0,
+        requests=3,
+        concurrency=1,
+        timeout_seconds=30,
+        accepted_source="approved-employer-source",
+        approval_status="approved",
+    )
+
+    assert result["status"] == "PASS"
+    assert result["window_seconds"] == 300
+    assert result["counts"]["duplicate"] == 1
+
+
+def test_employer_producer_rows_are_not_accepted_counts_without_a_declared_source() -> None:
+    result = evaluate_benchmark_contract(
+        profile="local-dry-run",
+        counts={
+            "discovered": 3,
+            "parsed": 3,
+            "complete": 2,
+            "accepted": 2,
+            "published": 2,
+            "duplicate": 1,
+            "failed": 0,
+        },
+        elapsed_seconds=1.0,
+        cpu_seconds=0.5,
+        rss_bytes=32 * 1024 * 1024,
+        browser_requests=0,
+        requests=3,
+        concurrency=1,
+        timeout_seconds=30,
+    )
+
+    assert result["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in result["reason_codes"]
+    assert result["counts"]["accepted"] == 0
+    assert result["counts"]["published"] == 0
+
+
+class _SharedFakePage:
+    active_lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def __init__(self, navigation_seconds: float = 0.02) -> None:
+        self._navigation_seconds = navigation_seconds
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event: str, callback: object) -> None:
+        self.handlers[event] = callback
+
+    def route(self, _pattern: object, callback: object) -> None:
+        self.route_callback = callback
+
+    def goto(self, *_args: object, **_kwargs: object) -> None:
+        with _SharedFakePage.active_lock:
+            _SharedFakePage.active += 1
+            _SharedFakePage.peak = max(_SharedFakePage.peak, _SharedFakePage.active)
+        threading.Event().wait(self._navigation_seconds)
+        with _SharedFakePage.active_lock:
+            _SharedFakePage.active -= 1
+        self.route_callback(
+            SimpleNamespace(
+                request=SimpleNamespace(url="https://acme.example/careers", resource_type="document"),
+                continue_=lambda: None,
+                abort=lambda: None,
+            )
+        )
+
+    def content(self) -> str:
+        return '<html><h1>Engineer</h1><script type="application/json">{"jobs":[]}</script></html>'
+
+    def wait_for_timeout(self, *_args: object) -> None:
+        return None
+
+
+class _SharedFakeContext:
+    def new_page(self) -> _SharedFakePage:
+        return _SharedFakePage()
+
+
+class _SharedFakeBrowser:
+    def new_context(self) -> _SharedFakeContext:
+        return _SharedFakeContext()
+
+    def close(self) -> None:
+        return None
+
+
+def _shared_playwright_factory(launches: list[int]):
+    class _SharedFakeChromium:
+        def launch(self, **_kwargs: object):
+            launches.append(1)
+            return _SharedFakeBrowser()
+
+    class _SharedFakePlaywright:
+        def __init__(self) -> None:
+            self.chromium = _SharedFakeChromium()
+
+        def __enter__(self) -> "_SharedFakePlaywright":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    return lambda: _SharedFakePlaywright()
+
+
+def test_reusable_browser_launches_one_process_for_many_fetches(monkeypatch) -> None:
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    launches: list[int] = []
+    monkeypatch.setattr(fallbacks, "sync_playwright", _shared_playwright_factory(launches))
+
+    session = fallbacks.ReusableBrowser()
+    try:
+        for _ in range(4):
+            result = session.fetch("https://acme.example/careers", timeout_seconds=5, max_requests=5)
+            assert result["status"] == "completed"
+    finally:
+        session.close()
+
+    assert session.launch_count == 1
+    assert launches == [1]
+    assert not session.is_running()
+
+
+def test_reusable_browser_serializes_concurrent_host_navigations(monkeypatch) -> None:
+    import backend.connectors.employer_site_fallbacks as fallbacks
+
+    launches: list[int] = []
+    monkeypatch.setattr(fallbacks, "sync_playwright", _shared_playwright_factory(launches))
+
+    session = fallbacks.ReusableBrowser()
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            results.append(
+                session.fetch("https://acme.example/careers", timeout_seconds=5, max_requests=5)
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced via assertions
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+    finally:
+        session.close()
+
+    assert not errors
+    assert len(results) == 4
+    assert all(result["status"] == "completed" for result in results)
+    assert _SharedFakePage.peak == 1
+    assert session.launch_count == 1
+
+
+def test_per_host_request_budget_enforces_and_observes() -> None:
+    from scripts.run_manifested_employer import (
+        EmployerPerHostBudgetExceeded,
+        PerHostRequestBudget,
+    )
+
+    budget = PerHostRequestBudget(2)
+    assert budget.admit("https://one.example/first") == "one.example"
+    assert budget.admit("https://one.example/second") == "one.example"
+    try:
+        budget.admit("https://one.example/third")
+        raise AssertionError("per-host ceiling should prevent the third same-host request")
+    except EmployerPerHostBudgetExceeded as exc:
+        assert exc.host == "one.example"
+        assert exc.max_requests_per_host == 2
+    assert budget.admit("https://two.example/first") == "two.example"
+    assert budget.snapshot() == {"one.example": 2, "two.example": 1}
+
+    observer = PerHostRequestBudget(1, enforce=False)
+    for _ in range(3):
+        observer.admit("https://busy.example/jobs")
+    assert observer.snapshot() == {"busy.example": 3}
+    assert observer.exceeded_hosts() == ["busy.example"]
+
+
+def test_employer_fixture_benchmark_distinguishes_lifecycle_stages(tmp_path: Path) -> None:
+    import json as json_module
+
+    from scripts.run_manifested_employer import (
+        BENCHMARK_STAGE_NAMES,
+        run_employer_fixture_benchmark,
+    )
+
+    receipt = run_employer_fixture_benchmark(
+        output_dir=tmp_path,
+        profile="local-dry-run",
+        accepted_source="employer-durable-state",
+        approval_status="approved",
+    )
+
+    assert list(receipt["stages"].keys()) == list(BENCHMARK_STAGE_NAMES)
+    assert receipt["benchmark_revision"] == "T38"
+    assert receipt["mode"] == "fixture_benchmark"
+    assert receipt["window_seconds"] == 300
+    assert receipt["elapsed_seconds"] <= receipt["window_seconds"]
+    counts = receipt["counts"]
+    assert counts["discovered"] >= counts["parsed"] >= counts["complete"]
+    assert counts["complete"] >= counts["accepted"] >= counts["published"]
+    assert counts["duplicate"] >= 1
+    assert counts["accepted"] > 0
+    assert counts["failed"] == 0
+    attribution = receipt["low_yield_attribution"]
+    assert attribution["attributed"] is True
+    assert attribution["classes"]["missing_url"] >= 1
+    assert attribution["classes"]["data_quality"] >= 2
+    assert "discovery:no_career_target_found" in attribution["reason_codes"]["missing_url"]
+    evaluation = receipt["contract_evaluation"]
+    assert evaluation["status"] == "PASS"
+    assert evaluation["window_seconds"] == 300
+    assert evaluation["throughput_per_300_seconds"]["accepted"] > 0
+    assert receipt["per_host_limits"] == {
+        "max_requests_per_host": 25,
+        "enforced": True,
+    }
+    assert receipt["per_host_observed"]["acme-full.example"] >= 1
+    assert receipt["per_host_exceeded"] == []
+    assert json_module.loads(Path(receipt["receipt_path"]).read_text(encoding="utf-8"))["counts"] == counts
+
+
+def test_employer_fixture_benchmark_receipt_fails_without_declared_source(tmp_path: Path) -> None:
+    from scripts.run_manifested_employer import run_employer_fixture_benchmark
+
+    receipt = run_employer_fixture_benchmark(
+        output_dir=tmp_path,
+        profile="local-dry-run",
+    )
+
+    assert receipt["counts"]["accepted"] == 0
+    assert receipt["counts"]["published"] == 0
+    evaluation = receipt["contract_evaluation"]
+    assert evaluation["status"] == "FAIL"
+    assert "accepted_counts_unsourced" in evaluation["reason_codes"]
+    assert evaluation["counts_zeroed_by_source_guard"] == ["accepted", "published"]

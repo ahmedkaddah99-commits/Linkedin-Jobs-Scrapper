@@ -72,8 +72,13 @@ REASON_UNRESOLVED_OWNERSHIP_CONFLICT = "unresolved_ownership_conflict"
 # Company / title
 REASON_MISSING_COMPANY_NAME = "missing_company_name"
 REASON_PLACEHOLDER_COMPANY_NAME = "placeholder_company_name"
+REASON_MISSING_COMPANY_LOGO = "missing_company_logo"
+REASON_MISSING_COMPANY_ENRICHMENT = "missing_company_enrichment"
 REASON_MISSING_TITLE = "missing_title"
 REASON_PLACEHOLDER_TITLE = "placeholder_title"
+REASON_MISSING_SENIORITY = "missing_seniority"
+REASON_MISSING_EMPLOYMENT_TYPE = "missing_employment_type"
+REASON_MISSING_WORKPLACE_ARRANGEMENT = "missing_workplace_arrangement"
 
 # Application / URL
 REASON_MISSING_APPLICATION_URL = "missing_application_url"
@@ -114,8 +119,13 @@ REASON_CODES = (
     REASON_UNRESOLVED_OWNERSHIP_CONFLICT,
     REASON_MISSING_COMPANY_NAME,
     REASON_PLACEHOLDER_COMPANY_NAME,
+    REASON_MISSING_COMPANY_LOGO,
+    REASON_MISSING_COMPANY_ENRICHMENT,
     REASON_MISSING_TITLE,
     REASON_PLACEHOLDER_TITLE,
+    REASON_MISSING_SENIORITY,
+    REASON_MISSING_EMPLOYMENT_TYPE,
+    REASON_MISSING_WORKPLACE_ARRANGEMENT,
     REASON_MISSING_APPLICATION_URL,
     REASON_INVALID_APPLICATION_URL,
     REASON_TRACKING_ONLY_APPLICATION_URL,
@@ -148,8 +158,13 @@ _REASON_STATUS = {
     REASON_UNRESOLVED_OWNERSHIP_CONFLICT: STATUS_UNRESOLVED_IDENTITY,
     REASON_MISSING_COMPANY_NAME: STATUS_MISSING_REQUIRED,
     REASON_PLACEHOLDER_COMPANY_NAME: STATUS_PLACEHOLDER,
+    REASON_MISSING_COMPANY_LOGO: STATUS_MISSING_REQUIRED,
+    REASON_MISSING_COMPANY_ENRICHMENT: STATUS_MISSING_REQUIRED,
     REASON_MISSING_TITLE: STATUS_MISSING_REQUIRED,
     REASON_PLACEHOLDER_TITLE: STATUS_PLACEHOLDER,
+    REASON_MISSING_SENIORITY: STATUS_MISSING_REQUIRED,
+    REASON_MISSING_EMPLOYMENT_TYPE: STATUS_MISSING_REQUIRED,
+    REASON_MISSING_WORKPLACE_ARRANGEMENT: STATUS_MISSING_REQUIRED,
     REASON_MISSING_APPLICATION_URL: STATUS_MISSING_REQUIRED,
     REASON_INVALID_APPLICATION_URL: STATUS_INVALID,
     REASON_TRACKING_ONLY_APPLICATION_URL: STATUS_INVALID,
@@ -174,10 +189,8 @@ _REASON_STATUS = {
 # Field classification
 # ---------------------------------------------------------------------------
 
-REQUIRED_FIELDS = (
+REQUIRED_JOB_FIELDS = (
     "canonical_job_id",
-    "canonical_company_id",
-    "company_name",
     "title",
     "application_url",
     "description",
@@ -186,7 +199,19 @@ REQUIRED_FIELDS = (
     "source_job_id",
     "observed_at",
     "lifecycle_state",
+    "seniority",
+    "employment_type",
+    "workplace_arrangement",
 )
+
+REQUIRED_COMPANY_FIELDS = (
+    "canonical_company_id",
+    "company_name",
+    "company_logo",
+    "company_enrichment",
+)
+
+REQUIRED_FIELDS = REQUIRED_JOB_FIELDS + REQUIRED_COMPANY_FIELDS
 
 CONDITIONALLY_REQUIRED_FIELDS = (
     "posted_at",
@@ -195,17 +220,11 @@ CONDITIONALLY_REQUIRED_FIELDS = (
 )
 
 RECOMMENDED_FIELDS = (
-    "employment_type",
-    "workplace_arrangement",
-    "experience_level",
     "salary",
 )
 
 OPTIONAL_FIELDS = (
     "benefits",
-    "seniority",
-    "company_logo",
-    "company_enrichment",
 )
 
 # ---------------------------------------------------------------------------
@@ -476,6 +495,24 @@ def _company_name(record: Mapping[str, Any]) -> str:
     )
 
 
+def _company_logo(record: Mapping[str, Any]) -> Any:
+    company = record.get("company")
+    if isinstance(company, Mapping):
+        nested = _first(company, "logo", "logo_url", "company_logo")
+        if nested is not None:
+            return nested
+    return _first(record, "company_logo", "logo_url", "logo")
+
+
+def _company_enrichment(record: Mapping[str, Any]) -> Any:
+    company = record.get("company")
+    if isinstance(company, Mapping):
+        nested = _first(company, "enrichment", "company_enrichment", "metadata")
+        if nested is not None:
+            return nested
+    return _first(record, "company_enrichment", "enrichment", "company_metadata")
+
+
 def _title(record: Mapping[str, Any]) -> str:
     return _text(_first(record, "title", "job_title"))
 
@@ -487,6 +524,14 @@ def _location(record: Mapping[str, Any]) -> str:
 def _workplace_arrangement(record: Mapping[str, Any]) -> str:
     raw = _first(record, "workplace_arrangement", "workplace_type", "workplaceType", "remote_type")
     return _norm(raw)
+
+
+def _seniority(record: Mapping[str, Any]) -> str:
+    return _text(_first(record, "seniority", "experience_level", "experienceLevel"))
+
+
+def _employment_type(record: Mapping[str, Any]) -> str:
+    return _text(_first(record, "employment_type", "employmentType", "job_type"))
 
 
 def _description(record: Mapping[str, Any]) -> str:
@@ -600,6 +645,7 @@ def validate_job_for_publication(
     min_description_chars: int = 80,
     stale_after_days: int = 90,
     require_application_destination: bool = True,
+    allow_trusted_linkedin_detail_url: bool = True,
 ) -> CompletenessResult:
     """Classify one canonical job record for publication.
 
@@ -672,6 +718,18 @@ def validate_job_for_publication(
     else:
         field_states["company_name"] = "present"
 
+    # --- blocking company enrichment ---
+    company_requirements = (
+        ("company_logo", _company_logo(record), REASON_MISSING_COMPANY_LOGO),
+        ("company_enrichment", _company_enrichment(record), REASON_MISSING_COMPANY_ENRICHMENT),
+    )
+    for field, value, reason in company_requirements:
+        if is_blank(value) or is_unknown_token(value) or is_placeholder(value):
+            mark(reason, field)
+            field_states[field] = "missing"
+        else:
+            field_states[field] = "present"
+
     # --- title ---
     title = _title(record)
     if not title:
@@ -682,6 +740,19 @@ def validate_job_for_publication(
         field_states["title"] = "invalid"
     else:
         field_states["title"] = "present"
+
+    # --- blocking job enrichment ---
+    job_requirements = (
+        ("seniority", _seniority(record), REASON_MISSING_SENIORITY),
+        ("employment_type", _employment_type(record), REASON_MISSING_EMPLOYMENT_TYPE),
+        ("workplace_arrangement", _workplace_arrangement(record), REASON_MISSING_WORKPLACE_ARRANGEMENT),
+    )
+    for field, value, reason in job_requirements:
+        if is_blank(value) or is_unknown_token(value) or is_placeholder(value):
+            mark(reason, field)
+            field_states[field] = "missing"
+        else:
+            field_states[field] = "present"
 
     # --- application URL ---
     application_url, application_kind = _application_url_and_kind(record)
@@ -694,8 +765,11 @@ def validate_job_for_publication(
             mark(REASON_INVALID_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
             field_states["application_url"] = "invalid"
         elif is_linkedin_job_detail_url(application_url):
-            mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
-            field_states["application_url"] = "invalid"
+            if allow_trusted_linkedin_detail_url and _is_linkedin_source(record):
+                field_states["application_url"] = "present"
+            else:
+                mark(REASON_LISTING_FALLBACK_APPLICATION_URL, "application_destination", "apply_url", detail="linkedin_job_detail")
+                field_states["application_url"] = "invalid"
         elif is_tracking_only_url(application_url):
             mark(REASON_TRACKING_ONLY_APPLICATION_URL, "apply_url", "application_url", detail=application_url)
             field_states["application_url"] = "invalid"
@@ -708,16 +782,13 @@ def validate_job_for_publication(
     else:
         field_states["application_url"] = "optional_missing" if not application_url else "present_unverified"
 
-    # Easy Apply is never a customer-facing application destination. Keep
-    # collecting its evidence at the producer boundary, but reject it from
-    # every publication mode, including display-first mode where a missing
-    # external application URL is otherwise allowed.
+    # Easy Apply-only records are not customer-facing application destinations.
+    # An unknown marker is not itself a rejection when the record has an
+    # otherwise trusted URL; only explicit Easy Apply evidence blocks.
     if _is_linkedin_source(record):
         easy_apply_status = _easy_apply_status(record)
         if easy_apply_status in {"true", "yes", "1", "easy apply", "easy_apply"}:
             mark(REASON_EASY_APPLY_NOT_SUPPORTED, "easy_apply_status")
-        elif require_application_destination and easy_apply_status != "false":
-            mark(REASON_UNRESOLVED_APPLICATION_METHOD, "easy_apply_status", "application_destination")
 
     # --- description ---
     description = _description(record)
@@ -846,9 +917,16 @@ __all__ = [
     "CONDITIONALLY_REQUIRED_FIELDS",
     "OPTIONAL_FIELDS",
     "RECOMMENDED_FIELDS",
+    "REQUIRED_COMPANY_FIELDS",
     "REQUIRED_FIELDS",
+    "REQUIRED_JOB_FIELDS",
     "REASON_CODES",
     "REASON_EASY_APPLY_NOT_SUPPORTED",
+    "REASON_MISSING_COMPANY_ENRICHMENT",
+    "REASON_MISSING_COMPANY_LOGO",
+    "REASON_MISSING_EMPLOYMENT_TYPE",
+    "REASON_MISSING_SENIORITY",
+    "REASON_MISSING_WORKPLACE_ARRANGEMENT",
     "REASON_UNRESOLVED_APPLICATION_METHOD",
     "STATUSES",
     "STATUS_INVALID",

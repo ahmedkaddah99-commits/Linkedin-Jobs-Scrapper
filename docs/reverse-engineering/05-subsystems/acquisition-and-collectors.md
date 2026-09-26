@@ -22,7 +22,7 @@ Acquisition fills the shared job catalog that customers browse in the personaliz
 | Capability | What it does | Main code |
 |---|---|---|
 | LinkedIn producer | Germany-scoped LinkedIn guest search + detail collection per eligible company, resumable SQLite state, bounded request budget, Webshare proxy transport | `scripts/master_linkedin_jobs_catalog.py` (`CatalogRunner` L3188, `WebshareTransport` L920, `StateStore` L1839) wrapped by `scripts/run_manifested_linkedin.py` |
-| Employer producer | Career-site discovery, ATS detection/fetch, JSON-LD and embedded-payload extraction, Playwright browser fallback, per-company coverage receipts | `scripts/master_employer_jobs_catalog.py` (`run_collection` L1945, `EmployerState` L1261) wrapped by `scripts/run_manifested_employer.py` |
+| Employer producer | Guarded CompanyEnrich domain autocomplete for missing/ambiguous website seeds, career-site discovery, ATS detection/fetch, JSON-LD and embedded-payload extraction, Playwright browser fallback, per-company coverage receipts | `backend/connectors/company_enrich_autocomplete.py`; `scripts/master_employer_jobs_catalog.py` (`run_collection`) wrapped by `scripts/run_manifested_employer.py` |
 | Eligibility manifest gate | Only a versioned, hash-verified manifest may feed a collector; LinkedIn tasks need a reviewed organization association | `backend/application/source_eligibility_manifest.py` (`load_manifest` L876, `validate_manifest_for_source` L925, `materialize_source_input` L990, `require_eligibility_manifest` L1050) |
 | Observation contract | Adapts producer rows (from SQLite state, never from CSV) to `runr_source_observation_v1` with deterministic idempotency keys | `backend/acquisition/producer_adapters.py` |
 | Connector layer | ATS router, expansion connectors, generic JSON-LD, bounded probe, browser fallbacks, career discovery, job-board portal strategies | `backend/connectors/**` |
@@ -84,7 +84,15 @@ Timer schedules, sandboxing and `runr.target` membership are WS-7's: [../02-depl
 
 Both manifested runners print one JSON metrics object and return 0; failures surface as exceptions (non-zero exit) that the wrapper records in the receipt.
 
-### 3.3 In-app entry (legacy Phase A)
+### 3.3 Guarded CompanyEnrich autocomplete fallback (T57)
+
+`run_collection` passes employer rows through `CompanyEnrichAutocompleteAdapter` before the employer producer rejects rows without a usable website seed. The adapter is only eligible for missing or explicitly ambiguous website/domain rows. It normalizes the required `query` parameter, accepts at most ten sanitized `name`/`domain`/`logoUrl` fields, ranks candidates against the employer's identity evidence, and accepts a domain only when the score and margin clear the ambiguity policy. Unsafe domains, ambiguous matches, missing credentials, provider errors, and exhausted budgets are deferred without inventing a URL.
+
+The adapter has explicit request, retry, concurrency, cache, and total-attempt budgets. Its request is `GET https://api.companyenrich.com/companies/autocomplete`; the recorded intent is free with zero credit cost. It never calls the paid `/companies/enrich`, `/companies/enrich/batch`, or property-enrichment paths, and it never stores authorization headers or raw provider payloads. Dry runs do not construct or call the adapter.
+
+An accepted domain is a homepage seed only, never a career URL. `EmployerCompany.website_provenance`, the `company_domain_provenance` export field, coverage receipts, and `CareerDiscoveryResult.provenance.homepage_seed` retain the sanitized provider decision while the existing career/ATS discovery still contributes every downstream candidate.
+
+### 3.4 In-app entry (legacy Phase A)
 
 `backend/application/services.py:913` constructs `PhaseAAcquisitionScheduler`; `services.py:937` `run_due_cycle`; worker polls it (`backend/worker/service.py:168–192`). Worker roles and the poll loop are WS-2's ([../01-architecture/backend-workers-and-orchestration.md](../01-architecture/backend-workers-and-orchestration.md)).
 
@@ -206,9 +214,9 @@ Details and VPS copies: [../03-data/acquisition-source-state.md](../03-data/acqu
 
 ### 5.2 Employer source run
 1. Same wrapper guard with `locks/employer.lock`.
-2. `run_manifested_employer.main` → manifest gate → `run_collection` (`master_employer_jobs_catalog.py:1945`) with `RequestAccounting`/`TransportGate` budget (`max_requests`, L1974).
-3. Per company: career-target discovery (`backend/connectors/company_career_discovery.py`), `detect_ats`/`fetch_ats_snapshot` (`backend/connectors/ats_router.py:24,186`), expansion connectors (`ats_expansions.EXPANSION_CONNECTORS`), `fetch_generic_snapshot` (`generic_jsonld.py:208`), `extract_embedded_jobs`/`fetch_browser_snapshot` (`employer_site_fallbacks.py:232,318`), coverage receipt (`backend/acquisition/employer_coverage.py:build_coverage_receipt` L358).
-4. State: `companies.payload_json.coverage.outcome` (e.g. `confirmed_complete`) is what the publisher later uses for closure safety.
+2. `run_manifested_employer.main` → manifest gate → `run_collection` (`master_employer_jobs_catalog.py`) with the autocomplete seed gate, then `RequestAccounting`/`TransportGate` budget (`max_requests`).
+3. Per company: career-target discovery (`backend/connectors/company_career_discovery.py`) receives the validated homepage seed and its provenance and returns the full bounded candidate inventory (`CareerDiscoveryResult.candidates`, deterministic order; `build_source_inventory` renders the durable dict shape). The collector (`master_employer_jobs_catalog.py:collect_company`) then traverses **every independent validated partition** — a distinct host, or a distinct ATS tenant — up to `CollectorLimits.max_targets` and the `RequestAccounting`/`TransportGate` request budget, instead of stopping at the first complete snapshot: `detect_ats`/`fetch_ats_snapshot` (`backend/connectors/ats_router.py:24,186`), expansion connectors (`ats_expansions.EXPANSION_CONNECTORS`), `fetch_generic_snapshot` (`generic_jsonld.py:208`), `extract_embedded_jobs`/`fetch_browser_snapshot` (`employer_site_fallbacks.py:232,318`). Jobs are deduplicated into one union across traversed sources (per-target `counts.duplicates_skipped`). Redundant same-host routes, rank-cutoff and budget-deferred candidates keep an explicit `deferred_reason` (`redundant_with_traversed_source`, `below_rank_cutoff`, `request_budget_exhausted`), and per-candidate disposition plus per-source job counts are persisted in `coverage.source_inventory`. Coverage receipt (`backend/acquisition/employer_coverage.py:build_coverage_receipt`) carries the same inventory on `EmployerCoverageReceipt.source_inventory` plus a `source_union` completeness block.
+4. State: `companies.payload_json.coverage.outcome` (e.g. `confirmed_complete`) is what the publisher later uses for closure safety; `company_domain_provenance` and the full all-candidate `coverage.source_inventory` are preserved alongside the downstream source inventory.
 
 ### 5.3 Producer → observation contract
 `producer_adapters._adapt` (L282–359): picks canonical company ID, source job ID/URL, apply URL; `_application_type` (L108–130) classifies `linkedin_job_detail`/`linkedin_easy_apply`/`linkedin_external`/`employer_ats`/`employer_site`; idempotency key = `obs_` + SHA-256 over schema version, source, company, job ID, URL, cycle, scan, content hash (L306–317); `map_job_fields` (`unified_mapping.py:401`) adds the normalized mapping. `SqliteAcquisitionTransport` (L607) forbids mixed sources/companies per batch, non-final `send` never closes a snapshot, and `send_final` requires a complete external-ID inventory (L709–740). Publication continues in [publication-and-catalog.md](publication-and-catalog.md).
@@ -237,6 +245,9 @@ Source defaults 110 total / 100 LinkedIn / 10 employer (wrappers and `acquisitio
 | Intermediate batch cannot authorize absence/closure | `SqliteAcquisitionTransport.send` L696–707 |
 | Combined CSV never built from one source | `run-acquisition-cycle.sh:36–49`; `build_master_jobs_catalog._generation_id` raises on missing CSV |
 | Producer targets use connector `producer_<source>` so the Phase G applicant gate does not block delivery | `publish_producer_states.py:536–539` |
+| CompanyEnrich autocomplete is free-only, bounded, fail-closed, and never a career URL | `backend/connectors/company_enrich_autocomplete.py`; `scripts/master_employer_jobs_catalog.py` |
+| Autocomplete provenance and downstream career/ATS candidates remain separate source evidence | `company_domain_provenance`; `CareerDiscoveryResult.provenance.homepage_seed`; `result.targets` |
+| Employer collection is source union, not first-success selection: independent validated partitions (distinct host or ATS tenant) are traversed within the target/request budget, jobs are deduplicated into one union, and every discovered source keeps a disposition in `coverage.source_inventory` / `EmployerCoverageReceipt.source_inventory` | `master_employer_jobs_catalog.py` (`collect_company`, `_coverage_target`, `_finalize_coverage`); `backend/connectors/company_career_discovery.py` (`build_source_inventory`); `backend/acquisition/employer_coverage.py` |
 
 Recovery: state restore via `deploy/restore-acquisition-states.sh` (refuses to replace an existing release dir; atomic symlink switch), checkpoints via `scripts/acquisition_state_backup.py`, catalog recovery via `scripts/publish_existing_catalog.py`, rule replay via `scripts/reprocess_acquisition.py`. Cycle failures in the publisher mark `recovery_required` (publication doc §6).
 
@@ -247,7 +258,7 @@ Recovery: state restore via `deploy/restore-acquisition-states.sh` (refuses to r
 | Producer delivery / adapters | `tests/test_producer_state_delivery.py`, `tests/test_producer_adapters.py`, `tests/test_unified_acquisition_pipeline.py`, `tests/test_acquisition_mapping_contract.py` |
 | LinkedIn producer | `tests/test_master_linkedin_jobs_catalog.py`, `tests/test_linkedin_pipeline_performance.py`, `tests/test_linkedin_pipeline_shutdown.py`, `tests/test_master_linkedin_jobs_url_catalog.py` |
 | Employer producer | `tests/test_master_employer_jobs_catalog.py`, `tests/test_employer_bounded_cycles.py`, `tests/test_employer_coverage_evidence.py`, `tests/test_employer_coverage_receipts.py`, `tests/test_employer_site_fallbacks.py`, `tests/test_employer_traversal.py`, `tests/test_rc011_employer_outcomes.py`, `tests/test_rc012_employer_concurrency.py` |
-| Connectors | `tests/test_ats_router.py`, `tests/test_ats_expansions.py`, `tests/test_job_board_connectors.py`, `tests/test_company_career_discovery.py`, `tests/test_career_url_discovery_security.py` |
+| Connectors | `tests/test_ats_router.py`, `tests/test_ats_expansions.py`, `tests/test_job_board_connectors.py`, `tests/test_company_enrich_autocomplete.py`, `tests/test_company_career_discovery.py`, `tests/test_career_url_discovery_security.py` |
 | Manifest / runtime paths | `tests/test_source_eligibility_manifest.py`, `tests/test_rc023_producer_state_paths.py`, `tests/test_rc029_wave_manifest.py`, `tests/test_acquisition_runtime_manifest.py` (WS-7 key test) |
 | Phase A scheduler / safety | `tests/test_phase_a_acquisition.py`, `tests/test_phase_a_scheduler.py`, `tests/test_phase_a_safety_defaults.py`, `tests/test_phase_a_persistence.py`, `tests/test_phase_a_remediation.py`, `tests/test_phase_a_routes.py`, `tests/test_phase_a_rc016.py`…`tests/test_phase_a_rc021.py`, `tests/test_phase_b_catalog.py` |
 | Quality / repair / reprocessing | `tests/test_acquisition_quality.py`, `tests/test_reprocessing.py`, `tests/test_acquisition_baseline.py`, `tests/test_rc026_benchmark.py`, `tests/test_rc024_backup_restore.py`, `tests/test_rc009_normalization_publication.py`, `tests/test_rc010_first_acquisition_slice.py` |
@@ -297,8 +308,10 @@ Never run the manifested runners without `--dry-run` outside an authorized host.
 | Wrapper → script call graph (U13) | VERIFIED (scope: static; wrapper lines cited in §3.1 invoke the named scripts with those flags at 58a96674) |
 | Manifest-gated LinkedIn producer entry | VERIFIED (scope: static; `run_manifested_linkedin.py:89–127` calls `require_eligibility_manifest` before `CatalogRunner`) |
 | Manifest-gated employer producer entry | VERIFIED (scope: static; `run_manifested_employer.py:73–96`) |
+| Guarded CompanyEnrich autocomplete seed fallback | IMPLEMENTED-LOCALLY-VERIFIED (fixture contract, bounded loader handoff, provenance-preserving career discovery; authorized VPS sample receipt remains external evidence) |
 | LinkedIn collection behaviour (cohort rotation, detail refresh, proxy transport) | IMPLEMENTED-UNVERIFIED (large module read by structure only; tests exist, not run) |
 | Employer collection behaviour (discovery, ATS, JSON-LD, browser fallback) | IMPLEMENTED-UNVERIFIED |
+| Employer source-union inventory (T56: multi-source traversal, deduplicated union, durable per-source inventory/deferral receipts) | IMPLEMENTED-LOCALLY-VERIFIED (focused unit suite; authorized bounded VPS receipt remains outstanding acceptance evidence) |
 | Wrapper request caps and lock/timeout guards | VERIFIED (scope: static shell logic `run-acquisition-source.sh:39–63,82,99`) |
 | Producer gating by `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED` | PARTIAL (enforced only for Phase A scheduler; producers not gated — WS3-G1) |
 | Observation contract + idempotent transport | VERIFIED (scope: static read of `producer_adapters.py` in full) |
@@ -333,6 +346,7 @@ Never run the manifested runners without `--dry-run` outside an authorized host.
 | T11 | `audit_runr_data_readiness.py` untracked with stale default root. |
 | U7 | Migration `055_acquisition_analytics_indexes` residue after analytics removal (WS-5). |
 | **WS3-G6** | Employer browser hang recorded 2026-09-12 (untracked report); watchdog mitigates, root cause not traced in code. |
+| CLOSED (T56, 2026-09-21) | First-success source selection in `collect_company` (early `break` after the first complete snapshot; only skipped ATS tenants recorded). Replaced by bounded source union with a durable `coverage.source_inventory`; see §5.2 and §6.3. |
 
 ## Agent context and remaining work
 

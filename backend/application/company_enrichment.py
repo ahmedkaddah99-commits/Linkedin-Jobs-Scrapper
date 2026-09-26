@@ -37,6 +37,11 @@ from backend.domain.models import utc_now_iso
 
 
 COMPANY_ENRICHMENT_FIELDS = (
+    "companyenrich_id",
+    "company_name",
+    "domain",
+    "linkedin_company_url",
+    "linkedin_company_id",
     "website",
     "careers_page",
     "industry",
@@ -51,6 +56,14 @@ COMPANY_ENRICHMENT_FIELDS = (
     "sponsorship",
     "leadership_type",
 )
+COMPANY_ENRICHMENT_IDENTITY_FIELDS = frozenset({
+    "companyenrich_id",
+    "company_name",
+    "domain",
+    "website",
+    "linkedin_company_url",
+    "linkedin_company_id",
+})
 UNKNOWN_REASON = "not_verified_from_authoritative_company_source"
 
 
@@ -1018,6 +1031,10 @@ def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
     """Build the explicitly configured provider without starting enrichment."""
 
     provider = str(os.getenv("RUNR_COMPANY_ENRICHMENT_PROVIDER") or "official_website").strip().casefold()
+    if provider in {"companyenrich", "company_enrich", "companyenrich_api"}:
+        from backend.integrations.companyenrich import CompanyEnrichProvider as CompanyEnrichAPIProvider
+
+        return CompanyEnrichAPIProvider()
     if provider in {"scrapeops_linkedin", "linkedin_scrapeops", "scrapeops_linkedin_company"}:
         return ScrapeOpsLinkedInCompanyProvider()
     if provider in {"webshare_linkedin", "linkedin_webshare", "public_linkedin"}:
@@ -1053,6 +1070,17 @@ def _known(value: Any) -> bool:
 def _valid_value(field: str, value: Any, *, now_year: int) -> Any:
     if not _known(value):
         return None
+    if field == "domain":
+        candidate = str(value).strip()
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        host = (parsed.hostname or "").casefold().removeprefix("www.").rstrip(".")
+        return host if host and "." in host else None
+    if field == "linkedin_company_url":
+        parsed = urlparse(str(value).strip())
+        host = (parsed.hostname or "").casefold().removeprefix("www.")
+        if parsed.scheme not in {"http", "https"} or host != "linkedin.com" and not host.endswith(".linkedin.com"):
+            return None
+        return parsed._replace(fragment="").geturl()
     if field in {"website", "careers_page"}:
         parsed = urlparse(str(value).strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1128,6 +1156,7 @@ class CompanyEnrichmentService:
         cycle_key: str = "",
         force: bool = False,
         force_all: bool = False,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         store = self.store
         if store is None:
@@ -1143,19 +1172,30 @@ class CompanyEnrichmentService:
         semaphore = asyncio.Semaphore(max(1, int(concurrency)))
         budget = max(0, int(request_budget))
         budget_lock = asyncio.Lock()
-        totals = {"status": "completed", "cycle_key": cycle_key, "companies_considered": len(candidates), "companies_processed": 0, "companies_succeeded": 0, "requests": 0, "cost_units": 0.0, "fields_available": 0, "fields_written": 0, "logos_cached": 0, "failures": 0}
+        totals = {"status": "completed", "cycle_key": cycle_key, "dry_run": bool(dry_run), "companies_considered": len(candidates), "companies_processed": 0, "companies_succeeded": 0, "requests": 0, "cost_units": 0.0, "fields_available": 0, "fields_written": 0, "logos_cached": 0, "failures": 0, "contract_passing_companies": [], "contract_failures": []}
+        batch_results: Mapping[str, Any] = {}
+        batch_error: Exception | None = None
+        batch_enricher = getattr(self.provider, "enrich_batch", None)
+        if callable(batch_enricher) and len(candidates) > 1:
+            try:
+                batch_results = await batch_enricher(candidates)
+            except Exception as exc:
+                # Do not silently retry a provider batch after an ambiguous
+                # transport failure. Each claimed company records the same
+                # bounded failure below instead.
+                batch_error = exc
 
         async def process(candidate: Mapping[str, Any]) -> None:
             nonlocal budget
             async with semaphore:
                 current = _now()
-                claimed = store.claim_company_enrichment_target(
+                claimed = dict(candidate) if dry_run else store.claim_company_enrichment_target(
                     str(candidate.get("company_id") or ""), cycle_key=cycle_key, lease_owner=self.lease_owner,
                     lease_expires_at=(current + timedelta(minutes=10)).isoformat(), now=current.isoformat(),
                 )
                 if claimed is None:
                     return
-                attempt_id = str(claimed["attempt_id"])
+                attempt_id = str(claimed.get("attempt_id") or "")
                 try:
                     async with budget_lock:
                         if budget <= 0:
@@ -1166,7 +1206,11 @@ class CompanyEnrichmentService:
                         "logo_verified_at": str(claimed.get("logo_verified_at") or ""),
                         "profile_updated_at": str(claimed.get("profile_updated_at") or ""),
                     }
-                    raw = await self.provider.enrich(claimed, conditional=conditional)
+                    raw = batch_results.get(str(claimed.get("company_id") or "")) if batch_results else None
+                    if raw is None:
+                        if batch_error is not None:
+                            raise batch_error
+                        raw = await self.provider.enrich(claimed, conditional=conditional)
                     result = raw if isinstance(raw, CompanyEnrichmentResult) else _as_result(raw)
                     observed_at = result.observed_at or current.isoformat()
                     verified_at = result.verified_at or (current.isoformat() if result.fields else "")
@@ -1178,6 +1222,8 @@ class CompanyEnrichmentService:
                     existing_extra_fields = existing_payload.get("additional_fields") if isinstance(existing_payload, Mapping) and isinstance(existing_payload.get("additional_fields"), Mapping) else {}
                     fields: dict[str, Any] = {}
                     fields_available = 0
+                    provider_confidence = "provider_verified" if result.source.casefold().startswith("companyenrich:") else ""
+                    lookup_method = str((result.extra_fields or {}).get("companyenrich_lookup_method") or "").strip()
                     for field in COMPANY_ENRICHMENT_FIELDS:
                         raw_field = result.fields.get(field)
                         raw_value = raw_field.get("value") if isinstance(raw_field, Mapping) else raw_field
@@ -1186,7 +1232,13 @@ class CompanyEnrichmentService:
                             fields_available += 1
                             field_source = raw_field.get("source") if isinstance(raw_field, Mapping) else result.source
                             field_url = raw_field.get("url") if isinstance(raw_field, Mapping) else result.provenance_url
-                            fields[field] = {"value": value, "state": "known", "status": "known", "provenance": {"source": str(field_source or result.source), "url": str(field_url or result.provenance_url)}, "observed_at": str(raw_field.get("observed_at") if isinstance(raw_field, Mapping) else observed_at), "verified_at": str(raw_field.get("verified_at") if isinstance(raw_field, Mapping) else verified_at)}
+                            confidence = str(raw_field.get("confidence") or provider_confidence) if isinstance(raw_field, Mapping) else provider_confidence
+                            provenance = {"source": str(field_source or result.source), "url": str(field_url or result.provenance_url)}
+                            if confidence:
+                                provenance["confidence"] = confidence
+                            if lookup_method:
+                                provenance["lookup_method"] = lookup_method
+                            fields[field] = {"value": value, "state": "known", "status": "known", "confidence": confidence, "lookup_method": lookup_method, "provenance": provenance, "observed_at": str(raw_field.get("observed_at") if isinstance(raw_field, Mapping) else observed_at), "verified_at": str(raw_field.get("verified_at") if isinstance(raw_field, Mapping) else verified_at)}
                         else:
                             existing_field = existing_fields.get(field)
                             existing_value = existing_field.get("value") if isinstance(existing_field, Mapping) else None
@@ -1205,16 +1257,42 @@ class CompanyEnrichmentService:
                         value = _valid_extra_value(raw_value)
                         if value is None:
                             continue
+                        name = str(extra_name)
+                        if name in COMPANY_ENRICHMENT_IDENTITY_FIELDS:
+                            existing_identity = existing_extra_fields.get(name) or existing_fields.get(name)
+                            if isinstance(existing_identity, Mapping) and _known(existing_identity.get("value")):
+                                extra_fields[name] = dict(existing_identity)
+                                continue
                         extra_source = raw_extra.get("source") if typed_extra else result.source
                         extra_url = raw_extra.get("url") if typed_extra else result.provenance_url
-                        extra_fields[str(extra_name)] = {
+                        confidence = str(raw_extra.get("confidence") or provider_confidence) if typed_extra else provider_confidence
+                        provenance = {"source": str(extra_source or result.source), "url": str(extra_url or result.provenance_url)}
+                        if confidence:
+                            provenance["confidence"] = confidence
+                        if lookup_method:
+                            provenance["lookup_method"] = lookup_method
+                        extra_fields[name] = {
                             "value": value,
                             "state": "known",
                             "status": "known",
-                            "provenance": {"source": str(extra_source or result.source), "url": str(extra_url or result.provenance_url)},
+                            "confidence": confidence,
+                            "lookup_method": lookup_method,
+                            "provenance": provenance,
                             "observed_at": str(raw_extra.get("observed_at") if typed_extra else observed_at),
                             "verified_at": str(raw_extra.get("verified_at") if typed_extra else verified_at),
                         }
+                    if dry_run:
+                        totals["companies_processed"] += 1
+                        totals["companies_succeeded"] += 1
+                        totals["requests"] += result.request_count
+                        totals["cost_units"] += result.cost_units
+                        totals["fields_available"] += fields_available
+                        totals["fields_written"] += fields_available
+                        totals["contract_passing_companies"].append({
+                            "company_id": str(claimed.get("company_id") or ""),
+                            "fields": [field for field in COMPANY_ENRICHMENT_FIELDS if fields[field]["state"] == "known"],
+                        })
+                        return
                     logo_key = ""
                     logo_cached = False
                     if result.logo_bytes is not None:
@@ -1231,10 +1309,13 @@ class CompanyEnrichmentService:
                     )
                     totals["companies_processed"] += 1; totals["companies_succeeded"] += 1; totals["requests"] += int(finish.get("request_count") or 0); totals["cost_units"] += float(finish.get("cost_units") or 0); totals["fields_available"] += fields_available; totals["fields_written"] += fields_available; totals["logos_cached"] += int(logo_cached)
                 except Exception as exc:
-                    store.finish_company_enrichment_attempt(
-                        attempt_id, status="failed", request_count=0, cost_units=0, fields_available=0, fields_written=0, logo_cached=False,
-                        error_code=type(exc).__name__, error_message=str(exc), next_attempt_at=(_now() + timedelta(hours=6)).isoformat(), now=_now().isoformat(),
-                    )
+                    if not dry_run:
+                        store.finish_company_enrichment_attempt(
+                            attempt_id, status="failed", request_count=0, cost_units=0, fields_available=0, fields_written=0, logo_cached=False,
+                            error_code=type(exc).__name__, error_message=str(exc), next_attempt_at=(_now() + timedelta(hours=6)).isoformat(), now=_now().isoformat(),
+                        )
+                    else:
+                        totals["contract_failures"].append({"company_id": str(candidate.get("company_id") or ""), "error_code": type(exc).__name__})
                     totals["companies_processed"] += 1; totals["failures"] += 1
 
         await asyncio.gather(*(process(candidate) for candidate in candidates))

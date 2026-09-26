@@ -94,6 +94,8 @@ sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.service" /etc/sys
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer" /etc/systemd/system/runr-acquisition-employer.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.service" /etc/systemd/system/runr-acquisition-publisher.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer" /etc/systemd/system/runr-acquisition-publisher.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-backup.service" /etc/systemd/system/runr-acquisition-backup.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-backup.timer" /etc/systemd/system/runr-acquisition-backup.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-frontend.service" /etc/systemd/system/runr-frontend.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr.target" /etc/systemd/system/runr.target
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-journald.conf" /etc/systemd/journald.conf.d/runr.conf
@@ -105,6 +107,9 @@ sudo systemctl restart systemd-journald
 # activation left by a previous release.
 sudo systemctl disable --now runr-acquisition-cycle.timer 2>/dev/null || true
 sudo systemctl enable runr.target
+# The off-host backup timer is enabled directly (not via runr.target) so a
+# failed backup unit is always visible in `systemctl list-timers`.
+sudo systemctl enable --now runr-acquisition-backup.timer
 
 cat <<'EOF'
 Next steps:

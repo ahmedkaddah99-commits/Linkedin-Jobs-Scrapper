@@ -31,7 +31,11 @@ def _linkedin_json(**overrides) -> str:
             "closely with stakeholders to deliver accurate, timely results."
         ),
         "location": "Munich, Bavaria, Germany",
-        "workplace_type": "",
+        "workplace_type": "hybrid",
+        "seniority": "mid",
+        "employment_type": "full_time",
+        "company_logo": "https://example.com/logo.png",
+        "company_enrichment": "verified",
         "apply_url_canonical": "https://www.linkedin.com/jobs/view/4313287713",
         "last_seen_at": "2026-09-02T00:38:36Z",
         "lifecycle_status": "active",
@@ -103,7 +107,7 @@ def test_real_audit_reconciles_outcomes_to_records(tmp_path: Path):
     employer_db = tmp_path / "employer.db"
     conn = sqlite3.connect(employer_db)
     conn.execute("CREATE TABLE jobs (source_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
-    conn.execute("INSERT INTO jobs VALUES ('k1', '{\"source_job_id\":\"u1\",\"source_job_url\":\"u1\",\"job_title\":\"t\",\"description_text\":\"d\",\"location\":\"l\",\"canonical_company_id\":\"//\",\"collection_status\":\"accepted\",\"last_seen_at\":\"2026-08-31T00:00:00Z\"}', 'x')")
+    conn.execute("INSERT INTO jobs VALUES ('k1', '{\"source_job_id\":\"u1\",\"source_job_url\":\"u1\",\"job_title\":\"t\",\"description_text\":\"d\",\"location\":\"l\",\"workplace_type\":\"hybrid\",\"seniority\":\"mid\",\"employment_type\":\"full_time\",\"company_logo\":\"https://example.com/logo.png\",\"company_enrichment\":\"verified\",\"canonical_company_id\":\"//\",\"collection_status\":\"accepted\",\"last_seen_at\":\"2026-08-31T00:00:00Z\"}', 'x')")
     conn.commit()
     conn.close()
 

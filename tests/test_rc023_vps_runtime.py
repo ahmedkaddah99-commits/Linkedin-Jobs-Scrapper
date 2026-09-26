@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +13,82 @@ SYSTEMD = ROOT / "deploy" / "systemd"
 
 def _read_unit(name: str) -> str:
     return (SYSTEMD / name).read_text(encoding="utf-8")
+
+
+def _schedule_manifest() -> dict[str, object]:
+    target = _read_unit("runr.target")
+    match = re.search(
+        r"^# RUNR_ACQUISITION_SCHEDULE_MANIFEST_BEGIN\n"
+        r"# (.+)\n"
+        r"# RUNR_ACQUISITION_SCHEDULE_MANIFEST_END$",
+        target,
+        flags=re.MULTILINE,
+    )
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def test_scrapeops_transport_is_explicit_bounded_and_reports_safe_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_manifested_linkedin as wrapper
+
+    class Response:
+        status_code = 503
+        text = '{"status_code": 503, "body": "", "sops_api_credits": 0}'
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: Response())
+    transport = wrapper.ScrapeOpsTransport("secret", max_requests=1)
+    first = transport.get("https://www.linkedin.com/jobs", kind="search")
+    second = transport.get("https://www.linkedin.com/jobs", kind="search")
+
+    assert first.status_code == 503
+    assert first.error == "provider_http_503"
+    assert second.error == "request_budget_exhausted"
+    assert transport.request_counts_by_kind == {"search": 1}
+    assert "secret" not in json.dumps(transport.proxy_health_snapshot())
+
+
+def test_linkedin_live_transport_defaults_to_webshare_and_requires_scrapeops_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_manifested_linkedin as wrapper
+
+    args = type("Args", (), {"timeout": 30, "max_requests": 2})()
+    monkeypatch.delenv("RUNR_LINKEDIN_TRANSPORT", raising=False)
+    assert wrapper._live_transport(args) is None
+
+    monkeypatch.setenv("RUNR_LINKEDIN_TRANSPORT", "scrapeops")
+    monkeypatch.delenv("SCRAPEOPS_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="SCRAPEOPS_API_KEY"):
+        wrapper._live_transport(args)
+
+
+def test_employer_wrapper_suppresses_collector_progress_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts import run_manifested_employer as wrapper
+
+    manifest = {"manifest_id": "manifest-test", "manifest_hash": "hash-test"}
+    monkeypatch.setattr(wrapper, "require_eligibility_manifest", lambda *args, **kwargs: (manifest, [object()]))
+    monkeypatch.setattr(wrapper, "materialize_source_input", lambda *args, **kwargs: {"rows": 1})
+
+    def fake_collection(**kwargs):
+        print('{"company":"progress-event"}')
+        return {"companies_processed": 1, "jobs_written": 2}
+
+    monkeypatch.setattr(wrapper, "run_collection", fake_collection)
+    result = wrapper.main([
+        "--manifest", str(tmp_path / "manifest.json"),
+        "--output-dir", str(tmp_path / "output"),
+        "--state-dir", str(tmp_path / "state"),
+        "--limit", "1",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["companies_processed"] == 1
+    assert "progress-event" not in json.dumps(payload)
 
 
 def test_runtime_contract_selects_systemd_and_keeps_unmeasured_values_explicit() -> None:
@@ -89,11 +168,237 @@ def test_runtime_setup_pins_python_and_installs_all_role_units() -> None:
     assert 'RUNR_API_HOST:-0.0.0.0' in start
 
 
-def test_logs_are_bounded_and_application_target_includes_acquisition_worker() -> None:
+def test_logs_are_bounded_and_application_target_includes_independent_acquisition_timers() -> None:
     journald = _read_unit("runr-journald.conf")
     target = _read_unit("runr.target")
 
     assert "SystemMaxUse=1G" in journald
     assert "RuntimeMaxUse=256M" in journald
     assert "MaxRetentionSec=14day" in journald
-    assert "runr-acquisition-worker.service" in target
+    # The legacy acquisition worker is intentionally outside the target (C6).
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    assert "runr-acquisition-worker.service" not in wants
+    for timer in (
+        "runr-acquisition-linkedin.timer",
+        "runr-acquisition-employer.timer",
+        "runr-acquisition-publisher.timer",
+    ):
+        assert timer in target
+
+
+def test_scheduled_backup_unit_is_hardened_non_root_and_uploads_before_prune() -> None:
+    unit = _read_unit("runr-acquisition-backup.service")
+
+    assert "Type=oneshot" in unit
+    assert "User=runr-acquisition" in unit
+    assert "Group=runr-acquisition" in unit
+    assert "User=root" not in unit
+    assert "EnvironmentFile=/opt/runr/.env.acquisition" in unit
+    assert "UMask=0077" in unit
+    assert "NoNewPrivileges=true" in unit
+    assert "PrivateTmp=true" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ProtectHome=true" in unit
+    assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" in unit
+    assert "ReadWritePaths=/srv/runr/state /srv/runr/backups" in unit
+    assert "scripts/acquisition_state_backup.py scheduled-backup" in unit
+    assert unit.count("scheduled-backup --role linkedin") == 1
+    assert unit.count("scheduled-backup --role employer") == 1
+    assert "--upload" in unit
+    assert "TimeoutStartSec=4h" in unit
+
+
+def test_backup_timer_is_a_bounded_daily_schedule() -> None:
+    timer = _read_unit("runr-acquisition-backup.timer")
+
+    assert "OnCalendar=*-*-* 05:00:00" in timer
+    assert "Persistent=true" in timer
+    assert "RandomizedDelaySec=300" in timer
+    assert "Unit=runr-acquisition-backup.service" in timer
+    assert "WantedBy=timers.target" in timer
+
+
+def test_setup_installs_and_enables_the_backup_schedule() -> None:
+    setup = (ROOT / "deploy" / "setup.sh").read_text(encoding="utf-8")
+
+    assert "runr-acquisition-backup.service" in setup
+    assert "runr-acquisition-backup.timer" in setup
+    assert "sudo systemctl enable --now runr-acquisition-backup.timer" in setup
+
+
+def test_runtime_contract_owns_the_backup_schedule_and_retention() -> None:
+    contract = json.loads((ROOT / "deploy" / "vps-runtime-contract.json").read_text(encoding="utf-8"))
+    acquisition = contract["roles"]["acquisition"]
+
+    assert acquisition["backup_unit"] == "runr-acquisition-backup.service"
+    assert acquisition["backup_timer"] == "runr-acquisition-backup.timer"
+    assert "scripts/acquisition_state_backup.py" in acquisition["backup_entrypoint"]
+    assert contract["retention"]["backup_local_generations_min"] >= 2
+    assert contract["retention"]["backup_remote_generations_min"] >= 2
+    assert contract["retention"]["backup_prune_requires_verified_off_host_receipt"] is True
+    assert contract["retention"]["backup_object_prefix"] == "runr/acquisition/checkpoints"
+
+
+def test_acquisition_env_example_declares_backup_configuration_without_secret_drift() -> None:
+    example = (ROOT / "deploy" / "acquisition.env.example").read_text(encoding="utf-8")
+
+    assert "RUNR_ACQUISITION_BACKUP_ROOT=/srv/runr/backups" in example
+    assert "RUNR_ACQUISITION_BACKUP_REMOTE_PREFIX=runr/acquisition/checkpoints" in example
+    assert "RUNR_ACQUISITION_BACKUP_LOCAL_KEEP=3" in example
+    assert "RUNR_ACQUISITION_BACKUP_REMOTE_KEEP=7" in example
+    assert "CLERK_" not in example
+    assert "CREEM_" not in example
+    assert "TRACKER_GOOGLE_OAUTH_" not in example
+    assert "DEEPSEEK_" not in example
+def test_vps_acquisition_units_run_as_dedicated_user_with_hardening() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "User=runr-acquisition" in unit
+        assert "Group=runr-acquisition" in unit
+        assert "UMask=0077" in unit
+        assert "NoNewPrivileges=true" in unit
+        assert "PrivateTmp=true" in unit
+        assert "ProtectSystem=strict" in unit
+        assert "ProtectHome=true" in unit
+        assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" in unit
+        assert "ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups" in unit
+
+
+def test_vps_acquisition_producer_command_lines_and_timer_ownership() -> None:
+    linkedin = _read_unit("runr-acquisition-linkedin.service")
+    employer = _read_unit("runr-acquisition-employer.service")
+    publisher = _read_unit("runr-acquisition-publisher.service")
+
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-source.sh linkedin" in linkedin
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-source.sh employer" in employer
+    assert "ExecStart=/opt/runr/deploy/run-acquisition-publisher.sh" in publisher
+
+    for unit in (linkedin, employer, publisher):
+        assert "PartOf=runr.target" in unit
+        assert "WantedBy=multi-user.target" in unit[-100:]
+
+    timers = {
+        "runr-acquisition-linkedin.timer": ("Unit=runr-acquisition-linkedin.service", "OnCalendar=*-*-* 02:00:00"),
+        "runr-acquisition-employer.timer": ("Unit=runr-acquisition-employer.service", "OnCalendar=*-*-* 02:30:00"),
+        "runr-acquisition-publisher.timer": ("Unit=runr-acquisition-publisher.service", "OnCalendar=*-*-* 04:00:00"),
+    }
+    for name, (unit_line, schedule) in timers.items():
+        timer = _read_unit(name)
+        assert unit_line in timer
+        assert schedule in timer
+        assert "Persistent=true" in timer
+        assert "RandomizedDelaySec=300" in timer
+
+
+def test_vps_acquisition_units_load_acquisition_env_boundary() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "EnvironmentFile=/opt/runr/.env.acquisition" in unit
+        assert "EnvironmentFile=/opt/runr/.env\n" not in unit
+        assert "CLERK_" not in unit
+        assert "CREEM_" not in unit
+
+    linkedin = _read_unit("runr-acquisition-linkedin.service")
+    employer = _read_unit("runr-acquisition-employer.service")
+    assert "EnvironmentFile=-/opt/runr/.env.acquisition.provider" in linkedin
+    assert "EnvironmentFile=-/opt/runr/.env.acquisition.provider" in employer
+
+    # Live-network override is hard-coded in the producer units (C4); the
+    # .env.acquisition default remains the fail-closed value.
+    assert "Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true" in linkedin
+    assert "Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true" in employer
+
+
+def test_vps_acquisition_env_intends_turso_and_source_version_placeholder() -> None:
+    example = (ROOT / "deploy" / "acquisition.env.example").read_text(encoding="utf-8")
+    assert "DATABASE_BACKEND=turso" in example
+    assert "TURSO_DATABASE_URL=replace-with-secret-store-reference" in example
+    assert "TURSO_AUTH_TOKEN=replace-with-secret-store-reference" in example
+    assert "RUNR_SOURCE_VERSION=replace-with-deployed-git-sha" in example
+
+
+def test_render_customer_plane_intends_turso_and_release_branch() -> None:
+    render = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    # Each Render service must target the same release branch/contract.
+    assert render.count("key: RUNR_RELEASE_BRANCH") == 3
+    assert render.count("value: deployment/render-turso-r2") == 3
+    assert render.count("key: RUNR_RELEASE_CONTRACT_VERSION") == 3
+    assert render.count("value: runr-contract-v1") == 3
+    # Both API and worker bind to the shared Turso catalog.
+    assert render.count("key: DATABASE_BACKEND") == 2
+    assert render.count("value: turso") == 2
+    assert render.count("key: RUNR_STORAGE_BACKEND") == 2
+    assert render.count("value: sqlite") == 2
+    # Acquisition must never run on Render.
+    assert render.count('RUNR_ACQUISITION_LIVE_NETWORK_ENABLED\n        value: "false"') == 2
+    assert render.count('RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY\n        value: "false"') == 2
+    assert render.count('RUNR_COMPANY_ENRICHMENT_ENABLED\n        value: "0"') == 2
+
+
+def test_target_declares_one_owner_per_acquisition_schedule() -> None:
+    target = _read_unit("runr.target")
+    manifest = _schedule_manifest()
+
+    assert manifest["schema_version"] == "runr.acquisition.schedule-manifest.v1"
+    schedules = manifest["schedules"]
+    assert isinstance(schedules, dict)
+    assert set(schedules) == {"linkedin", "employer", "publisher"}
+    assert len({schedule["owner_timer"] for schedule in schedules.values()}) == 3
+    assert len({schedule["owner_service"] for schedule in schedules.values()}) == 3
+    assert manifest["runtime_contract"]["overlap"]["exit_code"] == 75
+    assert manifest["runtime_contract"]["timeout"]["source_seconds"] == 900
+
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    for schedule in schedules.values():
+        assert schedule["owner_timer"] in wants
+        timer = _read_unit(schedule["owner_timer"])
+        assert f"Unit={schedule['owner_service']}" in timer
+        assert f"OnCalendar={schedule['calendar']}" in timer
+
+
+def test_target_explicitly_disables_stale_acquisition_units() -> None:
+    target = _read_unit("runr.target")
+    manifest = _schedule_manifest()
+    expected = {
+        "runr-acquisition-cycle.service",
+        "runr-acquisition-cycle.timer",
+        "runr-acquisition-export.service",
+        "runr-acquisition-export.timer",
+        "runr-acquisition-worker.service",
+    }
+    assert set(manifest["disabled_units"]) == expected
+    conflicts = next(line for line in target.splitlines() if line.startswith("Conflicts="))
+    assert set(conflicts.removeprefix("Conflicts=").split()) == expected
+    wants = next(line for line in target.splitlines() if line.startswith("Wants="))
+    assert not expected.intersection(wants.split())
+
+
+def test_acquisition_units_encode_overlap_and_failure_contract() -> None:
+    for name in (
+        "runr-acquisition-linkedin.service",
+        "runr-acquisition-employer.service",
+        "runr-acquisition-publisher.service",
+    ):
+        unit = _read_unit(name)
+        assert "SuccessExitStatus=75" in unit
+        assert "TimeoutStartSec=" in unit
+
+    source = (ROOT / "deploy" / "run-acquisition-source.sh").read_text(encoding="utf-8")
+    publisher = (ROOT / "deploy" / "run-acquisition-publisher.sh").read_text(encoding="utf-8")
+    assert 'lock_file="$lock_root/$source_name.lock"' in source
+    assert 'timeout --foreground "$run_timeout"' in source
+    assert "exit 75" in source
+    assert 'exec 7>"$lock_root/linkedin.lock"' in publisher
+    assert 'exec 8>"$lock_root/employer.lock"' in publisher
+    assert 'timeout --foreground "$run_timeout" "$python_bin" scripts/publish_producer_states.py' in publisher
+    assert "exit 75" in publisher
+    assert 'run_timeout="${RUNR_SOURCE_RUN_TIMEOUT_SECONDS:-900}"' in source
+    assert 'run_timeout="${RUNR_PUBLISHER_RUN_TIMEOUT_SECONDS:-900}"' in publisher

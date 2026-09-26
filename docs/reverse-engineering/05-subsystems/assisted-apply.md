@@ -1,4 +1,6 @@
 > Source: deployment/render-turso-r2 | SHA: 58a96674 | Verified: 2026-09-14
+> T52 current-state amendment: the [provider/browser capability matrix](../../assisted-apply/simplify-parity-matrix.md) distinguishes fixture-verified, partial, unsupported, and unverified paths. Earlier baseline and UNMERGED sections below are historical observations at `58a96674`, not current production claims. T47–T51 are now integrated.
+> Update (T47, 2026-09-21): the L2 boundary gate now recursively scans `apps/browser-extension/entrypoints/**`, `apps/browser-extension/src/**` and `packages/ats-core/src/**`, detects synthetic pointer/keyboard activation, and runs in `check`, `check:all`, `check:edge` and both extension CI jobs. See §6.1 L2, §7, §9.1, §10 (WS9-G1, WS9-G4).
 
 # Assisted Apply — extension-side subsystem
 
@@ -146,7 +148,7 @@ The web sends `RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS`, which calls `syncLinkedInCon
 | # | Layer | Mechanism | Scope / limits (from reading the code) |
 |---|---|---|---|
 | L1 | **Type-level** | `AtsAdapter` interface (`packages/ats-core/src/index.ts:171-188`) has no submit method. `type ForbiddenSubmissionCapability = Extract<keyof AtsAdapter, \`${string}${"submit"\|"Submit"}${string}\`>` and `ADAPTER_SUBMISSION_CAPABILITY_FORBIDDEN: ForbiddenSubmissionCapability extends never ? true : false = true` (L201-209). Adding any key containing `submit`/`Submit` makes the assignment a compile error (caught by `typecheck`). `ATS_ADAPTER_CAPABILITIES` (L190-199) is `satisfies ReadonlyArray<keyof AtsAdapter>`. | Only guards `AtsAdapter` key names. The existing `detectPossibleSubmissionSuccess` contains "Submission", not "Submit", so it passes. Does not guard non-adapter code. Test: `apps/browser-extension/tests/unit/ats-core.test.ts:52-54`. |
-| L2 | **Static regex scan: boundary script** | `apps/browser-extension/scripts/verify-assisted-apply-boundary.mjs` scans `packages/ats-core/src/*.ts` (top level, L16) for `adapter\|greenhouse\|lever .fill(`, `.click(`, `requestSubmit(`, `.submit(`, `window/document.location` assignment, Enter keydown, and dispatch of `PopStateEvent/HashChangeEvent/BeforeUnloadEvent` (L5-13). Exempt: `page-bridge.ts`, `declarative-actions.ts`, `submission-guard.ts` (L14). | **Not wired into `check`, `check:all`, `check:edge` or CI** (`package.json` scripts; `.github/workflows/ci.yml:111-177`). Run manually per `docs/assisted-apply/gates/AA-P03.md:53` and `docs/assisted-apply/ci/AA-225.md:37`. Does **not** scan `apps/browser-extension/**`. The exempt `declarative-actions.ts` contains `option.click()` (L308) for combobox options. → WS9-G1 |
+| L2 | **Static regex scan: boundary script** | `apps/browser-extension/scripts/verify-assisted-apply-boundary.mjs` recursively scans `apps/browser-extension/entrypoints/**`, `apps/browser-extension/src/**` and `packages/ats-core/src/**` (T47). It rejects adapter `fill(` bypasses, programmatic `.click(`, `requestSubmit(`/`.submit(`, `location` assignment/`assign`/`replace`/`reload`, Enter-key submission paths, synthetic pointer activation (`dispatchEvent(new MouseEvent\|PointerEvent\|TouchEvent)`), synthetic keyboard activation (`KeyboardEvent`), synthetic `submit` event dispatch, and `PopStateEvent/HashChangeEvent/BeforeUnloadEvent` dispatch. Fully exempt: `submission-guard.ts` only. Explicitly classified non-terminal allowances: `declarative-actions.ts` `option.click()` (AA-216 combobox option value interaction; terminal controls are refused by `executeNativeValueAction`) and the side panel's own `App.tsx` Enter keydown accessibility handlers (document upload and review state, never page-form activation). | **Wired into `check`, `check:all`, `check:edge` and both extension CI jobs (T47).** Location patterns match mutations only, so `window.location.href` reads stay legal. Does **not** attempt data-flow analysis: a future label-based misclassification of a terminal control (§9.2) is a runtime/executor concern (L3/L4), not a static-scan one. → WS9-G1 resolved by T47 |
 | L2b | **Static regex scan: manifest verifier** (wired into `check`/`check:edge`) | `apps/browser-extension/scripts/verify-manifest.mjs:99-126` scans `entrypoints/`, `src/`, `packages/ats-core/src`, `packages/extension-messages/src` for `eval(`, `new Function(`, URL imports, `.submit(`/`.requestSubmit(` (L120), and any identifier containing `submit`/`Submit` followed by `(` (L121-124). Built bundles: no fixture markers; `application-form.js`/`background.js` must not contain `.submit(`/`.requestSubmit(` (L143-148). | Catches submit-named calls and DOM submit APIs across apps and packages. Does **not** catch `.click()` or `dispatchEvent(new MouseEvent("click"))`. |
 | L3 | **Runtime guard** | `installSubmissionGuard(document)` (`packages/ats-core/src/submission-guard.ts:8-97`), installed at the top of the injected content script (`apps/browser-extension/entrypoints/application-form.ts:99`). Capture-phase listeners: **click** on any `button` or `input[type=submit\|button\|image\|reset]`: untrusted events are `preventDefault` + `stopImmediatePropagation`, trusted (user) clicks pass and arm a one-shot "user submit pending" flag (L12-24). **submit** is cancelled unless trusted and preceded by a trusted click/Enter (L25-34). **Enter** keydown on inputs: untrusted is cancelled (L35-45). `HTMLFormElement.prototype.requestSubmit`/`submit` are replaced with recorders (no-op) (L54-60). `fetch`/XHR and navigation events are **recorded only**, not blocked (L49-52, L61-76). | Reading-based observations: (a) prototype patches live in the content script's isolated world, so they neutralise extension-side calls, not page-script calls. DOM event listeners do see page-dispatched untrusted clicks, so page JS clicking its own buttons is also cancelled while the guard is active. (b) The guard is never stopped (`void submissionGuard`, L100), and re-injection installs another instance (no idempotency flag). (c) It blocks **all** untrusted button clicks, including intermediate Next/Continue. Tests: `apps/browser-extension/tests/unit/aa216-declarative-actions.test.ts:55`; e2e fixtures count `data-submit-clicks` = 0 across `apps/browser-extension/tests/e2e/assisted-apply.spec.ts` and `assisted-apply.edge.spec.ts`. The "1" cases are user-initiated clicks. |
 | L4 | **Executor refusals** | `writeControlValue` refuses `submit/button/image/reset/file` inputs (`declarative-actions.ts:215-217`). `executeNativeValueAction` rejects buttons and terminal inputs: "Terminal or button controls are never executable." (L239-241). `isDeclarativeAction` accepts only a fixed action set, so e.g. `submit_final` is rejected (test `aa216-declarative-actions.test.ts:33-34`). `manualReason` marks `type=submit` controls `final_submission` (`index.ts:333-338`). The adapter `fill` shim delegates to the central executor (`index.ts:833-836`). | — |
@@ -198,7 +200,7 @@ The web sends `RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS`, which calls `syncLinkedInCon
 | Messages / state / panel / success / telemetry / policy / LinkedIn | `apps/browser-extension/tests/unit/messages.test.ts`, `apps/browser-extension/tests/unit/tab-state.test.ts`, `apps/browser-extension/tests/unit/panel-model.test.ts`, `apps/browser-extension/tests/unit/possible-success-observer.test.ts`, `apps/browser-extension/tests/unit/aa15-telemetry.test.ts`, `apps/browser-extension/tests/unit/policy.test.ts`, `apps/browser-extension/tests/unit/application-url.test.ts`, `apps/browser-extension/tests/unit/linkedin-connections.test.ts` |
 | Backend side (WS-1/WS-4 own) | `tests/test_backend_api.py -k "assisted_apply or extension_cors or extension_origin or clerk_only_identity"`, `tests/test_assisted_apply_connection_service.py`, `tests/test_application_policy.py` |
 
-**CI (WS-7 owns `.github/workflows/ci.yml`):** job `assisted-apply-extension` (L111-141: `npm ci`, Playwright Chromium, `check:all`), job `assisted-apply-extension-edge` (L143-177: Playwright msedge, `check:edge` then `test:e2e:edge`). `docker` needs both (L178-185). No CI job runs `verify:assisted-apply-boundary`.
+**CI (WS-7 owns `.github/workflows/ci.yml`):** job `assisted-apply-extension` (L111-141: `npm ci`, a dedicated `verify:assisted-apply-boundary` step, Playwright Chromium, `check:all`), job `assisted-apply-extension-edge` (L143-177: `npm ci`, a dedicated `verify:assisted-apply-boundary` step, Playwright msedge, `check:edge` then `test:e2e:edge`). Since T47, `check`, `check:all` and `check:edge` each end with `verify:assisted-apply-boundary`, so every extension CI job runs the gate twice (standalone step plus aggregate check). `docker` needs both (L178-185).
 
 **Safe verification commands (not executed in Phase 2):**
 ```bash
@@ -248,7 +250,7 @@ npm run check:extension                                 # root wrapper
 |---|---|
 | MV3 manifest shape, permissions, externally_connectable | VERIFIED (scope: static — `wxt.config.ts:34-48` matches assertions in `verify-manifest.mjs:71-97`; not built) |
 | Never-submit L1 type constraint | VERIFIED (scope: static — `index.ts:171-209` read; construct is a compile-time error on submit-named keys; test `ats-core.test.ts:52-54` present, not run) |
-| Never-submit L2 boundary script | PARTIAL (scope: script read; exists and scans ats-core only; not in `check`/CI → WS9-G1) |
+| Never-submit L2 boundary script | VERIFIED (scope: static + unit — T47 rewrote it as a recursive three-root scan with synthetic-activation detection and explicit non-terminal allowances; wired into `check`, `check:all`, `check:edge` and both extension CI jobs; negative fixture check rejects synthetic click/submit/Enter; `tests/unit/ats-core.test.ts` "never-submit boundary gate" asserts roots/patterns and a clean live run) |
 | Never-submit L2b manifest/bundle scan | VERIFIED (scope: static — wired in `check` and `check:edge` scripts, CI runs both) |
 | Never-submit L3 runtime guard | VERIFIED (scope: static — installed at `application-form.ts:99` before any listener; behaviour read in `submission-guard.ts`; not executed) |
 | Intermediate Next/Continue navigation | PARTIAL (authorization logic only; no execution at baseline — `declarative-actions.ts:325-331`) |
@@ -289,21 +291,64 @@ npm run check:extension                                 # root wrapper
 - Render blueprint secrets list `RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS` and `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION` by name (evidence package `deployment-evidence.md`). Values and live state are UNKNOWN.
 - The Web Store URL is hard-coded in `apps/browser-extension/src/auth/config.ts:12`. Whether the listing is published is UNKNOWN. LIVE PRODUCTION = UNKNOWN.
 
+## T51 implementation amendment (2026-09-24)
+
+RUN-51 adds a separate **Continue to Next Step** panel action after the current
+page's autofill run completes. The recovered label-only classifier is not used.
+The helper requires one visible ordered application stepper, exactly one
+`aria-current="step"` item with a visible following item, and exactly one
+visible enabled Next/Continue control associated with a form. Terminal wording
+on the active step or candidate control, and explicit terminal state on the
+active step, stepper, form, or control, wins; missing or ambiguous evidence
+stays manual.
+
+Before activation, the helper reclassifies the page and requires the same
+stepper, active and following items, and control nodes. It requests one permit
+from `installSubmissionGuard`; the permit is stored on the document so the
+assistant-panel and application-form bundles share it in the extension's
+isolated world. The automatically registered panel installs L3 itself because
+it can run without the separate form runner. When both scripts are present, the
+document-scoped state reuses one listener and patch set. The permit expires after
+the one click. For a submit-type Continue
+control, only a submit event whose submitter is the same still-connected control
+on the same original form can pass. All other synthetic button clicks and
+submit events remain blocked, and trusted user actions keep their prior path.
+
+After activation, the helper reports success only when the ordered stepper's
+active marker moves to the exact next item. A replaced control is refused before
+activation; a transition that cannot be verified is reported for manual review
+without another click. The static boundary script contains a file-specific
+allowance for this one helper callsite and continues to reject unclassified
+synthetic activation.
+
+T51 narrows WS9-G3 and resolves WS9-G4 for the tested intermediate-step path.
+The Avature fixture browser test exercises the panel action and verifies both
+the step change and absence of a form submit; the final-step fixture verifies
+zero activation and unchanged URL. The extension unit suite also checks
+ambiguous/terminal refusal, one-shot guard behavior, matching submitter
+coexistence, and control replacement. WS9-G6 remains: page-owned fetch/XHR and
+navigation effects are observed rather than globally blocked. The terminal
+control is never activated by this feature.
+
 ## 10. Confirmed gaps and unresolved questions
 
 | ID | Gap / question |
 |---|---|
-| WS9-G1 | `verify:assisted-apply-boundary` is not run by `check`, `check:all`, `check:edge` or CI. It scans only top-level `packages/ats-core/src/*.ts` and exempts `declarative-actions.ts` (which calls `option.click()`). The memory's "build-time regex scan" is therefore manual-only. |
+| WS9-G1 | ~~`verify:assisted-apply-boundary` is not run by `check`, `check:all`, `check:edge` or CI. It scans only top-level `packages/ats-core/src/*.ts` and exempts `declarative-actions.ts` (which calls `option.click()`).~~ **RESOLVED by T47 (2026-09-21):** the gate now scans `apps/browser-extension/entrypoints/**`, `apps/browser-extension/src/**` and `packages/ats-core/src/**` recursively, detects synthetic `dispatchEvent(new MouseEvent\|PointerEvent\|TouchEvent\|KeyboardEvent)` activation and location navigation mutations, exempts only `submission-guard.ts`, explicitly classifies the `declarative-actions.ts` `option.click()` value interaction and the side panel `App.tsx` Enter accessibility handlers, and runs through `check`, `check:all`, `check:edge` and both extension CI jobs. |
 | WS9-G2 | The owner decision (broad host access at install, no curated optional list) is not implemented on baseline: `wxt.config.ts:36-43`, `verify-manifest.mjs:82-91` and `host-permissions.ts` enforce the narrow model. The implementation is UNMERGED in `0d7f2b5c` (T03). The permission rationale doc is stale relative to the decision. Store-review trade-off to discuss with owner. |
-| WS9-G3 | Runtime guard L3 blocks *all* untrusted button clicks and Enter, including page-script-dispatched ones, for the life of the page. It is never stopped and is re-installed on each injection. Possible interference with portal JS and with UNMERGED synthetic step advance. Needs a behavioural test decision. |
-| WS9-G4 | UNMERGED automated step advance relies on label text only and uses `dispatchEvent(MouseEvent)`, invisible to static gates. T03 must add a static and a test gate for `apps/browser-extension/src/panel/**` and entrypoints. |
+| WS9-G3 | **NARROWED by T51 (2026-09-24):** the automatically registered panel now installs the L3 guard; one revalidated, structurally verified intermediate Continue activation may pass once. Other untrusted terminal/control activations remain blocked. Guard state shares one listener set across panel and form-runner installs. Diverse live ATS behavior remains unassessed. |
+| WS9-G4 | **RESOLVED for T51 (2026-09-24):** label-only classification is replaced by ordered-stepper evidence, terminal wording/state vetoes, exact control revalidation, one-shot guard authorization, post-transition proof, and final-step refusal. Unit and browser acceptance cover these paths; the static boundary allows only the classified helper callsite. |
 | WS9-G5 | Allocation text says the extension imports ats-core from `assistant-panel.tsx`, but that file is UNMERGED only. Baseline consumers are `background.ts`, `application-form.ts`, `controlled-field-bridge.ts`, `inactive-fixture-spike.ts`. |
-| WS9-G6 | Fetch/XHR/navigation are recorded but not blocked by L3. Protection against page-initiated terminal network requests relies on not clicking terminal controls. Document as intended or tighten. |
+| WS9-G6 | **REMAINS OPEN:** page-owned fetch/XHR and navigation effects are observed rather than blocked. T51 constrains the extension activation path and never activates a terminal control; it does not firewall page-world network activity. |
 | U5 | Plan for feature-branch commits including extension changes (`0d7f2b5c`) → T03. |
 | T03 | Review assisted-apply panel and generic ATS planner work (48 paths). |
 | Open | Live state of the Web Store listing, backend extension-origin value, and preparation flag: UNKNOWN. |
 
 ## Agent context and remaining work
+
+### T50 broad-host runtime panel
+
+The 0.3.0 extension uses the owner-approved `https://*/*` install-time host permission while keeping `content_scripts` absent from the manifest. The service worker reconciles the unlisted `assistant-panel.js` runtime registration, excludes Runr-owned origins, and injects newly granted matching tabs. The panel mounts only when the provider-neutral classifier identifies an application context. It requests the approved profile package through the service worker, runs provider-neutral autofill, and displays applied, review, and unresolved outcomes. T50 contains no Next/Continue control, navigation module, or synthetic navigation dispatch; that remains T51 scope.
 
 **(a) Proposed agent context packet: Assisted Apply extension**
 - *Required reading:* this doc; [apps-and-extensions.md](../01-architecture/apps-and-extensions.md); [shared-packages.md](../01-architecture/shared-packages.md); `apps/browser-extension/README.md`; `packages/ats-core/src/submission-guard.ts`; `packages/ats-core/src/index.ts:171-209`; `packages/ats-core/src/declarative-actions.ts`; `apps/browser-extension/scripts/verify-manifest.mjs`; `apps/browser-extension/scripts/verify-assisted-apply-boundary.mjs`; `docs/assisted-apply/gates/AA-P03.md`; owner memory `runr-extension-safety-posture`.
@@ -318,8 +363,31 @@ npm run check:extension                                 # root wrapper
 | `assisted-apply-extension` | Assisted Apply browser extension and shared packages | `apps/**`, `packages/**` | `docs/reverse-engineering/05-subsystems/assisted-apply.md` (this doc; added in the WS-9 Phase 2 commit, so absent at 58a96674) | `apps/browser-extension/tests/**` | WS-9 |
 
 **(c) Gap/ticket candidates**
-1. Wire `verify:assisted-apply-boundary` into `check` and CI, and extend its scan to `apps/browser-extension/{entrypoints,src}` with `dispatchEvent(new MouseEvent` / `.click(` detection (WS9-G1, G4; CI edit via WS-7).
+1. ~~Wire `verify:assisted-apply-boundary` into `check` and CI, and extend its scan to `apps/browser-extension/{entrypoints,src}` with `dispatchEvent(new MouseEvent` / `.click(` detection (WS9-G1, G4; CI edit via WS-7).~~ DONE by T47 (2026-09-21).
 2. Owner decision record + implementation of broad host permissions via T03, updating `verify-manifest.mjs`, `host-permissions.ts` and the permission rationale doc (WS9-G2).
 3. T03 review record: 48-path accept/adapt/reject, with the never-submit review items in §9.2 (WS9-G3, G4).
-4. Behavioural test for L3 guard interplay with portal JS and authorized intermediate navigation (WS9-G3, G6).
+4. ~~Behavioural test for L3 guard interplay with portal JS and authorized intermediate navigation (WS9-G3, G6).~~ DONE by T51 for the sanitized Avature fixture; WS9-G6 remains open for page-owned fetch/XHR and navigation effects.
 5. Correct allocation/evidence note about `assistant-panel.tsx` (WS9-G5; Phase 3 / WS-12).
+
+## T49 implementation amendment (2026-09-23)
+
+The approved profile-package extension contract is now implemented across the
+backend route, shared message package, service worker, and panel mapper.
+
+- The service worker handles `ASSISTED_APPLY_PANEL_PROFILE`, requests
+  `POST /assisted-apply/extension/profile-package`, and validates the
+  schema-versioned payload before returning it as `PanelResponse.profilePackage`.
+- Session tokens remain service-worker-only. Untrusted senders, non-top frames,
+  missing sessions, failed requests, and malformed payloads fail closed with a
+  generic response.
+- The payload contains only approved candidate facts, profile-verified answers,
+  confirmed education/skills/languages, and career-memory experiences with
+  approved bullets and provenance. The panel mapper consumes the approved
+  `proposed_value` field and maps periods to planner-friendly ISO year-month
+  values; it does not invent missing facts.
+- The backend reuses `_profile_package_sections`; no profile-package store,
+  migration, manifest permission, or new external provider call is added.
+
+The route and wire contract are covered by backend API tests plus extension
+message and mapper unit tests. Boundary verification remains required for every
+future Assisted Apply change.

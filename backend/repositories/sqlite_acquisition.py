@@ -161,6 +161,10 @@ _PUBLICATION_PAYLOAD_FIELDS = (
     "workplace_type",
     "workplaceType",
     "remote_type",
+    "seniority",
+    "employment_type",
+    "company_logo",
+    "company_enrichment",
     "ownership_status",
     "company_match_status",
     "dedupe_state",
@@ -2235,6 +2239,94 @@ class SqliteAcquisitionStore(_SqliteStore):
             if (lease_owner or lease_token) and updated.rowcount != 1:
                 raise AcquisitionLeaseLostError(f"Acquisition cycle lease lost: {cycle_id}")
 
+    def require_publisher_checkpoint_table(self) -> None:
+        """Fail fast when the migration-registry checkpoint table is absent.
+
+        The ``acquisition_publisher_checkpoints`` schema is owned by migration
+        ``061_acquisition_publisher_checkpoints``. The store never creates it
+        ad hoc; callers get an explicit error instead of silent schema creation.
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='acquisition_publisher_checkpoints'"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "acquisition_publisher_checkpoints is missing; run the migration registry "
+                "(061_acquisition_publisher_checkpoints) before publishing producer states."
+            )
+
+    def publisher_checkpoint(self, source: str) -> dict[str, Any]:
+        """Return the durable publisher checkpoint for one producer source."""
+
+        normalized_source = str(source or "").strip()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT source,source_rowid,source_watermark,bootstrap_complete,"
+                "last_cycle_id,last_publication_id,updated_at "
+                "FROM acquisition_publisher_checkpoints WHERE source=?",
+                (normalized_source,),
+            ).fetchone()
+        if row is None:
+            return {
+                "source": normalized_source,
+                "source_rowid": 0,
+                "source_watermark": "",
+                "bootstrap_complete": False,
+                "last_cycle_id": "",
+                "last_publication_id": "",
+                "updated_at": "",
+            }
+        return {
+            "source": str(row["source"] or ""),
+            "source_rowid": int(row["source_rowid"] or 0),
+            "source_watermark": str(row["source_watermark"] or ""),
+            "bootstrap_complete": bool(int(row["bootstrap_complete"] or 0)),
+            "last_cycle_id": str(row["last_cycle_id"] or ""),
+            "last_publication_id": str(row["last_publication_id"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
+    def save_publisher_checkpoint(
+        self,
+        checkpoint: Mapping[str, Any],
+        *,
+        cycle_id: str,
+        publication_id: str,
+    ) -> None:
+        """Upsert one publisher checkpoint row; the caller owns retry semantics."""
+
+        source = str(checkpoint.get("source") or "").strip()
+        if not source:
+            raise ValueError("Publisher checkpoint requires a non-empty source.")
+        values = (
+            source,
+            int(checkpoint.get("source_rowid") or 0),
+            str(checkpoint.get("source_watermark") or ""),
+            int(bool(checkpoint.get("bootstrap_complete"))),
+            str(cycle_id),
+            str(publication_id),
+            utc_now_iso(),
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO acquisition_publisher_checkpoints(
+                    source,source_rowid,source_watermark,bootstrap_complete,
+                    last_cycle_id,last_publication_id,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(source) DO UPDATE SET
+                    source_rowid=excluded.source_rowid,
+                    source_watermark=excluded.source_watermark,
+                    bootstrap_complete=excluded.bootstrap_complete,
+                    last_cycle_id=excluded.last_cycle_id,
+                    last_publication_id=excluded.last_publication_id,
+                    updated_at=excluded.updated_at
+                """,
+                values,
+            )
+
     @staticmethod
     def _publication_rows_with_completeness(
         candidate_rows: Iterable[Mapping[str, Any]],
@@ -2573,7 +2665,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         created_by: str = "system",
         scheduled_run_id: str = "",
         policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
-    ) -> str:
+        batch_size: int = 1000,
+        dry_run: bool = False,
+    ) -> str | dict[str, Any]:
         """Publish the currently stored active catalog after a fresh gate check.
 
         This is an explicit recovery path for a catalog whose source delivery
@@ -2617,6 +2711,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                                 json_extract(v.payload_json, '$.workplace_type') AS payload_workplace_type,
                                 json_extract(v.payload_json, '$.workplaceType') AS payload_workplaceType,
                                 json_extract(v.payload_json, '$.remote_type') AS payload_remote_type,
+                                json_extract(v.payload_json, '$.seniority') AS payload_seniority,
+                                json_extract(v.payload_json, '$.employment_type') AS payload_employment_type,
+                                json_extract(v.payload_json, '$.company_logo') AS payload_company_logo,
+                                json_extract(v.payload_json, '$.company_enrichment') AS payload_company_enrichment,
                                 json_extract(v.payload_json, '$.ownership_status') AS payload_ownership_status,
                                 json_extract(v.payload_json, '$.company_match_status') AS payload_company_match_status,
                                 json_extract(v.payload_json, '$.dedupe_state') AS payload_dedupe_state,
@@ -2650,7 +2748,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             snapshot: list[dict[str, Any]] = []
             candidate_count = 0
             rejected_count = 0
-            page_size = 1000
+            page_size = max(1, min(1000, int(batch_size)))
             offset = 0
             while True:
                 candidate_rows = connection.execute(
@@ -2665,16 +2763,27 @@ class SqliteAcquisitionStore(_SqliteStore):
                     policy=policy,
                 )
                 snapshot.extend(page_snapshot)
-                self._persist_publication_rejections(
-                    connection,
-                    cycle_id=cycle_id,
-                    rejected_rows=rejected_rows,
-                )
+                if not dry_run:
+                    self._persist_publication_rejections(
+                        connection,
+                        cycle_id=cycle_id,
+                        rejected_rows=rejected_rows,
+                    )
                 candidate_count += len(candidate_rows)
                 rejected_count += len(rejected_rows)
                 offset += len(candidate_rows)
                 if len(candidate_rows) < page_size:
                     break
+            if dry_run:
+                return {
+                    "status": "dry_run",
+                    "dry_run": True,
+                    "candidate_count": candidate_count,
+                    "eligible": len(snapshot),
+                    "ineligible": rejected_count,
+                    "batch_size": page_size,
+                    "policy_version": policy.version,
+                }
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()

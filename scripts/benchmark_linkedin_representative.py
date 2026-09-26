@@ -34,6 +34,15 @@ from scripts.master_linkedin_jobs_catalog import (
     parse_job_detail,
     parse_search_page,
 )
+from scripts.benchmark_linkedin_pipeline import (
+    BENCHMARK_CONTRACT,
+    BENCHMARK_OWNER,
+    BENCHMARK_PROFILES,
+    BENCHMARK_REVISION,
+    BENCHMARK_WINDOW_SECONDS,
+    evaluate_benchmark_contract,
+    load_thresholds_override,
+)
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -184,6 +193,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write-sample", type=int, default=50000, help="number of historical rows to re-write")
     parser.add_argument("--parse-iterations", type=int, default=20000, help="search+detail parse iterations")
     parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--profile", choices=tuple(BENCHMARK_PROFILES), default="ci-fixture")
+    parser.add_argument("--owner", default=BENCHMARK_OWNER)
+    parser.add_argument("--revision", default=BENCHMARK_REVISION)
+    parser.add_argument(
+        "--approval",
+        dest="approval_status",
+        choices=("not-required", "approved"),
+        default="not-required",
+        help="required for the vps-authorized-live profile",
+    )
+    parser.add_argument(
+        "--accepted-source",
+        default=None,
+        help="declared source for accepted/published counts (requires --approval approved)",
+    )
+    parser.add_argument(
+        "--minimum-accepted",
+        dest="minimum_accepted_per_window",
+        type=int,
+        default=None,
+        help="minimum accepted jobs per 300-second window; operator sign-off required",
+    )
+    parser.add_argument(
+        "--thresholds",
+        type=Path,
+        default=None,
+        help="JSON file overriding the profile ceiling keys for this evaluation",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
@@ -201,14 +238,58 @@ def main(argv: list[str] | None = None) -> int:
         connection.close()
     writes = benchmark_db_writes(sample_rows, batch_size=args.batch_size)
 
+    benchmark_contract = evaluate_benchmark_contract(
+        profile=args.profile,
+        counts={
+            # Parse/rewrite throughput is producer-side work. Accepted and
+            # published remain zero without a T32-declared approved source;
+            # historical rows are observations, not publishable counts.
+            "discovered": parse["search_cards_parsed"],
+            "parsed": parse["detail_records_parsed"],
+            "complete": parse["detail_records_parsed"],
+            "accepted": 0,
+            "published": 0,
+            "duplicate": 0,
+            "failed": 0,
+        },
+        elapsed_seconds=float(parse["wall_time_seconds"]) + float(writes["wall_time_seconds"]),
+        cpu_seconds=float(parse["cpu_time_seconds"]) + float(writes["cpu_time_seconds"]),
+        rss_bytes=max(
+            value for value in (parse.get("peak_rss_bytes"), writes.get("peak_rss_bytes"))
+            if value is not None
+        ) if parse.get("peak_rss_bytes") is not None or writes.get("peak_rss_bytes") is not None else None,
+        browser_requests=0,
+        requests=0,
+        concurrency=1,
+        timeout_seconds=30,
+        approval_status=args.approval_status,
+        owner=args.owner,
+        revision=args.revision,
+        accepted_source=args.accepted_source,
+        thresholds_override=load_thresholds_override(args.thresholds) if args.thresholds else None,
+        minimum_accepted_per_window=args.minimum_accepted_per_window,
+    )
+
     report = {
-        "version": "linkedin-representative-benchmark-v1",
+        "version": "linkedin-representative-benchmark-v2",
+        "contract": {
+            "name": BENCHMARK_CONTRACT,
+            "window_seconds": BENCHMARK_WINDOW_SECONDS,
+            "profile": args.profile,
+            "owner": args.owner,
+            "revision": args.revision,
+            "approval": args.approval_status,
+            "accepted_source": args.accepted_source,
+            "minimum_accepted_per_window": args.minimum_accepted_per_window,
+            "ceilings": BENCHMARK_PROFILES[args.profile],
+        },
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "state_db_bytes": state_path.stat().st_size,
         "cardinality": cardinality,
         "parse": parse,
         "db_writes": writes,
+        "benchmark_contract": benchmark_contract,
         "note": "Offline, read-only against the preserved checkpoint copy. No network or provider calls.",
     }
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)

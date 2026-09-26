@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from html import unescape
-from typing import Callable, Iterable
+from ipaddress import ip_address
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
@@ -118,6 +120,10 @@ ATS_HOST_HINTS = {
     "academicpositions": ("academicpositions.com",),
 }
 
+CAREER_DISCOVERY_POLICY_VERSION = "career-host-policy-v2"
+CAREER_DISCOVERY_FOUND_REASON = "career_url_found"
+CAREER_DISCOVERY_NO_TARGET_REASON = "no_career_target_found"
+
 MAX_HTML_BYTES = 1_500_000
 
 
@@ -141,6 +147,11 @@ class CareerUrlCandidate:
     status_code: int = 0
     confidence_score: float = 0.0
     evidence: list[str] = field(default_factory=list)
+    validated: bool = True
+    validation_status: str = "policy_validated"
+    host_policy: str = ""
+    provenance: dict[str, Any] = field(default_factory=dict)
+    freshness: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -159,10 +170,16 @@ class CareerDiscoveryResult:
     crawl_status: str = "not_found"
     candidates: list[CareerUrlCandidate] = field(default_factory=list)
     validation_evidence: list[str] = field(default_factory=list)
+    validated_career_url: str = ""
+    reason_code: str = ""
+    provenance: dict[str, Any] = field(default_factory=dict)
+    freshness: dict[str, Any] = field(default_factory=dict)
+    host_policy: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["candidates"] = [candidate.to_dict() for candidate in self.candidates]
+        payload["validated_career_url"] = self.validated_career_url or self.primary_career_url
         return payload
 
     def to_company_site_entry(self) -> str:
@@ -197,6 +214,41 @@ def normalize_url(raw_url: str) -> str:
     return urlunparse(cleaned)
 
 
+def _host_policy_for_url(raw_url: str) -> tuple[bool, str, str]:
+    """Return (allowed, policy, reason) without resolving or contacting a host."""
+
+    normalized = normalize_url(raw_url)
+    if not normalized:
+        return False, "invalid_url", "invalid_url"
+    parsed = urlparse(normalized)
+    if parsed.username or parsed.password:
+        return False, "credentialed_url", "credentialed_url"
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if not host:
+        return False, "missing_host", "missing_host"
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".localhost", ".local", ".internal")):
+        return False, "private_host", "private_host"
+    try:
+        address = ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback or address.is_link_local or address.is_reserved):
+        return False, "private_host", "private_host"
+    return True, "public_host", ""
+
+
+def _candidate_host_policy(candidate_url: str, homepage_url: str) -> tuple[bool, str, str]:
+    allowed, _, reason = _host_policy_for_url(candidate_url)
+    if not allowed:
+        return False, "blocked", reason
+    if same_domain_or_subdomain(candidate_url, homepage_url):
+        return True, "same_company_host", ""
+    ats_type = detect_ats_type(candidate_url)
+    if ats_type:
+        return True, f"recognized_ats:{ats_type}", ""
+    return False, "unsupported_external_host", "unsupported_external_host"
+
+
 def canonicalize_url(raw_url: str) -> str:
     normalized = normalize_url(raw_url)
     if not normalized:
@@ -226,9 +278,11 @@ def same_domain_or_subdomain(candidate_url: str, homepage_url: str) -> bool:
 
 
 def detect_ats_type(url: str) -> str:
-    lowered = (url or "").lower()
+    host = (urlparse(normalize_url(url)).hostname or "").casefold().rstrip(".")
+    if not host:
+        return ""
     for ats_type, hints in ATS_HOST_HINTS.items():
-        if any(hint in lowered for hint in hints):
+        if any(host == hint or host.endswith(f".{hint}") for hint in hints):
             return ats_type
     return ""
 
@@ -249,6 +303,9 @@ def requests_fetcher(timeout_seconds: int = 20) -> Fetcher:
         requested_url = normalize_url(url)
         if not requested_url:
             return FetchResult(url, "", 0, error="invalid_url")
+        allowed, _, reason = _host_policy_for_url(requested_url)
+        if not allowed:
+            return FetchResult(requested_url, requested_url, 0, error=reason)
         try:
             response = session.get(
                 requested_url,
@@ -337,6 +394,9 @@ def _score_candidate(
     if source in {"sitemap", "robots_sitemap"}:
         score += 0.1
         evidence.append(f"found_in_{source}")
+    if source == "json_ld":
+        score += 0.3
+        evidence.append("found_in_json_ld")
 
     ats_type = detect_ats_type(url)
     if ats_type:
@@ -365,10 +425,23 @@ def _make_candidate(
     source: str,
     label: str = "",
     status_code: int = 0,
+    homepage_url: str = "",
+    provenance: dict[str, Any] | None = None,
 ) -> CareerUrlCandidate | None:
     canonical_url = canonicalize_url(url)
     if not canonical_url or not is_probably_career_url(canonical_url, label):
         return None
+    if homepage_url:
+        allowed, host_policy, reason = _candidate_host_policy(canonical_url, homepage_url)
+        if not allowed:
+            return None
+        if canonicalize_url(canonical_url) == canonicalize_url(homepage_url):
+            return None
+    else:
+        allowed, host_policy, reason = _host_policy_for_url(canonical_url)
+        if not allowed:
+            return None
+        reason = ""
     score, evidence = _score_candidate(
         url=canonical_url,
         label=label,
@@ -377,6 +450,10 @@ def _make_candidate(
     )
     if score <= 0:
         return None
+    evidence.append(f"host_policy:{host_policy}")
+    validation_status = "http_observed" if 200 <= status_code < 400 else "policy_validated"
+    if reason:
+        evidence.append(f"validation_reason:{reason}")
     return CareerUrlCandidate(
         url=canonical_url,
         source=source,
@@ -385,6 +462,11 @@ def _make_candidate(
         status_code=status_code,
         confidence_score=score,
         evidence=evidence,
+        validated=True,
+        validation_status=validation_status,
+        host_policy=host_policy,
+        provenance=dict(provenance or {"source": source}),
+        freshness={"state": "observed", "observed_at": utc_now_iso()},
     )
 
 
@@ -413,6 +495,8 @@ def guess_common_career_urls(homepage_url: str, fetch: Fetcher) -> list[CareerUr
                 source="common_path_guess",
                 label=path,
                 status_code=result.status_code,
+                homepage_url=homepage_url,
+                provenance={"requested_url": candidate_url, "resolved_url": result.final_url or candidate_url},
             )
             if candidate:
                 candidates.append(candidate)
@@ -442,10 +526,66 @@ def extract_career_links_from_html(
         ats_type = detect_ats_type(absolute_url)
         if not ats_type and not same_domain_or_subdomain(absolute_url, homepage_url):
             continue
-        candidate = _make_candidate(url=absolute_url, source=source, label=label)
+        candidate = _make_candidate(
+            url=absolute_url,
+            source=source,
+            label=label,
+            homepage_url=homepage_url,
+            provenance={"page_url": page_url, "link_label": label},
+        )
         if candidate:
             candidates.append(candidate)
 
+    return candidates
+
+
+def extract_career_urls_from_json_ld(
+    *,
+    page_url: str,
+    html: str,
+    homepage_url: str,
+) -> list[CareerUrlCandidate]:
+    """Extract safe career targets from JobPosting JSON-LD without extra requests."""
+
+    soup = BeautifulSoup(str(html or "")[:MAX_HTML_BYTES], "html.parser")
+    candidates: list[CareerUrlCandidate] = []
+    for script in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
+        try:
+            payload = json.loads(script.get_text("", strip=True))
+        except (TypeError, ValueError):
+            continue
+        items: list[Any] = []
+        if isinstance(payload, list):
+            items.extend(payload)
+        elif isinstance(payload, dict):
+            items.append(payload)
+            graph = payload.get("@graph")
+            if isinstance(graph, list):
+                items.extend(graph)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            types = item.get("@type")
+            types = types if isinstance(types, list) else [types]
+            if not any(str(value or "").casefold() == "jobposting" for value in types):
+                continue
+            target_url = str(item.get("url") or item.get("@id") or "").strip()
+            if not target_url:
+                target_url = page_url
+            title = " ".join(str(item.get("title") or "JobPosting").split())
+            candidate = _make_candidate(
+                url=target_url,
+                source="json_ld",
+                label=f"JobPosting {title}",
+                homepage_url=homepage_url,
+                provenance={
+                    "page_url": page_url,
+                    "structured_data_type": "JobPosting",
+                    "title": title,
+                },
+            )
+            if candidate:
+                candidates.append(candidate)
     return candidates
 
 
@@ -498,7 +638,13 @@ def discover_from_sitemaps(homepage_url: str, fetch: Fetcher, max_sitemaps: int 
         for url in _extract_urls_from_sitemap_xml(result.text):
             if not is_probably_career_url(url):
                 continue
-            candidate = _make_candidate(url=url, source="sitemap", status_code=result.status_code)
+            candidate = _make_candidate(
+                url=url,
+                source="sitemap",
+                status_code=result.status_code,
+                homepage_url=homepage_url,
+                provenance={"sitemap_url": normalized_sitemap},
+            )
             if candidate:
                 candidates.append(candidate)
     return candidates
@@ -532,6 +678,13 @@ def shallow_same_domain_crawl(
                 html=result.text,
                 homepage_url=homepage_url,
                 source="shallow_crawl_link",
+            )
+        )
+        candidates.extend(
+            extract_career_urls_from_json_ld(
+                page_url=result.final_url or crawl_url,
+                html=result.text,
+                homepage_url=homepage_url,
             )
         )
     return candidates
@@ -575,9 +728,12 @@ def resolve_homepage_from_company_name(company_name: str, fetch: Fetcher) -> str
         result = fetch(guessed_url)
         if not (200 <= result.status_code < 400):
             continue
+        resolved = result.final_url or guessed_url
+        if not _host_policy_for_url(resolved)[0]:
+            continue
         page_text = BeautifulSoup(result.text or "", "html.parser").get_text(" ", strip=True).lower()
         if any(token in page_text for token in tokens[:2]):
-            return result.final_url or guessed_url
+            return resolved
     return ""
 
 
@@ -592,10 +748,13 @@ def discover_career_url(
     use_rendered_fallback: bool = False,
     allow_domain_guessing: bool = False,
     prefer_homepage_candidates: bool = False,
+    homepage_provenance: Mapping[str, Any] | None = None,
     usage_callback=None,
 ) -> CareerDiscoveryResult:
     direct_fetch = fetch or requests_fetcher(request_timeout_seconds)
-    homepage = normalize_url(homepage_url or company_domain)
+    homepage_seed_provenance = dict(homepage_provenance or {})
+    raw_homepage = homepage_url or company_domain
+    homepage = normalize_url(raw_homepage)
     if not homepage and allow_domain_guessing and company_name:
         homepage = resolve_homepage_from_company_name(company_name, direct_fetch)
 
@@ -607,20 +766,56 @@ def discover_career_url(
             company_name=company_name,
             discovered_at=discovered_at,
             crawl_status="missing_homepage_or_domain",
+            reason_code="invalid_homepage_or_domain" if raw_homepage else "missing_homepage_or_domain",
+            provenance={"homepage_seed": homepage_seed_provenance},
+            freshness={"state": "not_observed", "observed_at": discovered_at},
             validation_evidence=["No homepage URL or domain was available."],
         )
 
+    homepage_allowed, homepage_policy, homepage_reason = _host_policy_for_url(homepage)
+    if not homepage_allowed:
+        return CareerDiscoveryResult(
+            company_domain=company_domain or domain_from_url(homepage),
+            homepage_url=canonicalize_url(homepage),
+            company_name=company_name,
+            discovered_at=discovered_at,
+            crawl_status="unsafe_homepage",
+            reason_code=homepage_reason,
+            provenance={"homepage_seed": homepage_seed_provenance},
+            freshness={"state": "not_observed", "observed_at": discovered_at},
+            host_policy={
+                "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+                "homepage": homepage_policy,
+                "allowed": False,
+            },
+            validation_evidence=[f"Homepage rejected by host policy: {homepage_reason}"],
+        )
+
     homepage_result = direct_fetch(homepage)
-    effective_homepage = homepage_result.final_url or homepage
+    effective_homepage = canonicalize_url(homepage_result.final_url or homepage) or homepage
     company_domain_value = company_domain or domain_from_url(effective_homepage)
 
-    if homepage_result.status_code and not (200 <= homepage_result.status_code < 400):
+    if homepage_result.error or (homepage_result.status_code and not (200 <= homepage_result.status_code < 400)):
         return CareerDiscoveryResult(
             company_domain=company_domain_value,
             homepage_url=effective_homepage,
             company_name=company_name,
             discovered_at=discovered_at,
             crawl_status="homepage_fetch_failed",
+            reason_code="homepage_fetch_failed",
+            provenance={
+                "requested_url": homepage,
+                "resolved_url": effective_homepage,
+                "transport": homepage_result.transport,
+                "error": homepage_result.error,
+                "homepage_seed": homepage_seed_provenance,
+            },
+            freshness={"state": "observed", "observed_at": discovered_at},
+            host_policy={
+                "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+                "homepage": homepage_policy,
+                "allowed": True,
+            },
             validation_evidence=[f"Homepage fetch status: {homepage_result.status_code}"],
         )
 
@@ -632,11 +827,18 @@ def discover_career_url(
         source="homepage_link",
     )
     all_candidates.extend(homepage_candidates)
+    all_candidates.extend(
+        extract_career_urls_from_json_ld(
+            page_url=effective_homepage,
+            html=homepage_result.text,
+            homepage_url=effective_homepage,
+        )
+    )
 
     # Prefer an ATS link already present in the homepage. It is an
     # authoritative source-specific endpoint, so common-path and sitemap
     # probing would only add request cost before the producer verifies it.
-    has_authoritative_ats = any(candidate.ats_type for candidate in homepage_candidates)
+    has_authoritative_ats = any(candidate.ats_type for candidate in all_candidates)
     has_homepage_target = prefer_homepage_candidates and any(
         candidate.confidence_score >= 0.55 for candidate in homepage_candidates
     )
@@ -673,6 +875,13 @@ def discover_career_url(
                     source="rendered_homepage_link",
                 )
             )
+            all_candidates.extend(
+                extract_career_urls_from_json_ld(
+                    page_url=effective_homepage,
+                    html=rendered_homepage.text,
+                    homepage_url=effective_homepage,
+                )
+            )
 
     candidates = _dedupe_candidates(all_candidates)
     if not candidates:
@@ -682,6 +891,26 @@ def discover_career_url(
             company_name=company_name,
             discovered_at=discovered_at,
             crawl_status="not_found",
+            reason_code=CAREER_DISCOVERY_NO_TARGET_REASON,
+            provenance={
+                "requested_url": homepage,
+                "resolved_url": effective_homepage,
+                "transport": homepage_result.transport,
+                "homepage_seed": homepage_seed_provenance,
+                "discovery_steps": [
+                    "homepage_links",
+                    "json_ld",
+                    "common_path_guesses",
+                    "sitemaps",
+                    "shallow_crawl",
+                ],
+            },
+            freshness={"state": "observed", "observed_at": discovered_at},
+            host_policy={
+                "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+                "homepage": homepage_policy,
+                "allowed": True,
+            },
             validation_evidence=["No career-like URL found after configured discovery steps."],
         )
 
@@ -690,6 +919,7 @@ def discover_career_url(
     status = "found" if primary.confidence_score >= 0.55 else "low_confidence"
     evidence = list(primary.evidence)
     evidence.append(f"candidate_source:{primary.source}")
+    evidence.append(f"validation_status:{primary.validation_status}")
 
     return CareerDiscoveryResult(
         company_domain=company_domain_value,
@@ -703,6 +933,27 @@ def discover_career_url(
         crawl_status=status,
         candidates=candidates,
         validation_evidence=evidence,
+        validated_career_url=primary.url if primary.validated else "",
+        reason_code=CAREER_DISCOVERY_FOUND_REASON,
+        provenance={
+            "requested_url": homepage,
+            "resolved_url": effective_homepage,
+            "selected_candidate_source": primary.source,
+            "selected_candidate": primary.provenance,
+            "transport": homepage_result.transport,
+            "homepage_seed": homepage_seed_provenance,
+        },
+        freshness={
+            "state": "fresh",
+            "observed_at": discovered_at,
+            "age_seconds": 0,
+        },
+        host_policy={
+            "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+            "homepage": homepage_policy,
+            "selected": primary.host_policy,
+            "allowed": primary.validated,
+        },
     )
 
 
@@ -726,6 +977,11 @@ def discover_many(
             shallow_crawl_pages=shallow_crawl_pages,
             use_rendered_fallback=use_rendered_fallback,
             allow_domain_guessing=allow_domain_guessing,
+            homepage_provenance=(
+                target.get("homepage_provenance")
+                if isinstance(target.get("homepage_provenance"), Mapping)
+                else None
+            ),
             usage_callback=usage_callback,
         )
         results.append(result)
@@ -734,13 +990,165 @@ def discover_many(
     return results
 
 
+def build_source_inventory(result: CareerDiscoveryResult) -> list[dict[str, Any]]:
+    """Deterministic, bounded inventory of every career source found for one employer.
+
+    The inventory preserves every discovered candidate — including sources that
+    were not selected as the preferred traversal route — with kind, host/policy
+    validation, provenance, and ranking. ``traversal_status`` starts as
+    ``discovered``; the collector assigns ``traversed`` or ``deferred`` plus an
+    explicit ``deferred_reason`` once it disposes of each source.
+    """
+
+    entries: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for candidate in result.candidates:
+        url = str(getattr(candidate, "url", "") or "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        provenance = getattr(candidate, "provenance", None)
+        entries.append(
+            {
+                "url": url,
+                "source_kind": str(getattr(candidate, "source", "") or "career_discovery"),
+                "ats_type": str(getattr(candidate, "ats_type", "") or ""),
+                "host_policy": str(getattr(candidate, "host_policy", "") or ""),
+                "validation_status": str(getattr(candidate, "validation_status", "") or ""),
+                "confidence_score": float(getattr(candidate, "confidence_score", 0.0) or 0.0),
+                "provenance": dict(provenance) if isinstance(provenance, Mapping) else {},
+                "traversal_status": "discovered",
+                "deferred_reason": "",
+                "job_count": 0,
+                "duplicate_count": 0,
+                "target_status": "",
+            }
+        )
+    return entries
+
+
+def build_discovery_receipt(result: CareerDiscoveryResult) -> dict[str, Any]:
+    """One bounded, cacheable receipt per employer discovery outcome."""
+
+    career_url = result.validated_career_url or result.primary_career_url
+    return {
+        "policy_version": CAREER_DISCOVERY_POLICY_VERSION,
+        "company_domain": result.company_domain,
+        "company_name": result.company_name,
+        "homepage_url": result.homepage_url,
+        "career_url": career_url,
+        "reason_code": result.reason_code or result.crawl_status,
+        "ats_type": result.ats_type,
+        "confidence_score": result.confidence_score,
+        "homepage_seed_provenance": result.provenance.get("homepage_seed", {}),
+        "provenance": result.provenance,
+        "freshness": result.freshness,
+        "host_policy": result.host_policy,
+        "discovered_at": result.discovered_at,
+    }
+
+
+def _receipt_cache_key(target: dict) -> str:
+    homepage = normalize_url(
+        str(target.get("homepage_url") or target.get("url") or target.get("company_domain") or "")
+    )
+    return canonicalize_url(homepage) or compact_company_key(target)
+
+
+def compact_company_key(target: dict) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(target.get("company_name") or "").casefold()).strip("-")
+
+
+def collect_discovery_receipts(
+    targets: Iterable[dict],
+    *,
+    cache: dict[str, dict] | None = None,
+    fetch: Fetcher | None = None,
+    request_timeout_seconds: int = 20,
+    shallow_crawl_pages: int = 8,
+    use_rendered_fallback: bool = False,
+    allow_domain_guessing: bool = False,
+    sleep_seconds: float = 0.0,
+    usage_callback=None,
+) -> list[dict[str, Any]]:
+    """Collect per-employer receipts, reusing cached receipts when provided.
+
+    The cache is caller-owned and bounded by the caller: every hit avoids a
+    full discovery pass (no requests) and returns the same receipt.
+    """
+
+    receipts: list[dict[str, Any]] = []
+    for target in targets:
+        cache_key = _receipt_cache_key(target)
+        if cache is not None and cache_key in cache:
+            receipts.append(dict(cache[cache_key]))
+            continue
+        result = discover_career_url(
+            homepage_url=str(target.get("homepage_url") or target.get("url") or ""),
+            company_domain=str(target.get("company_domain") or target.get("domain") or ""),
+            company_name=str(target.get("company_name") or target.get("name") or ""),
+            fetch=fetch,
+            request_timeout_seconds=request_timeout_seconds,
+            shallow_crawl_pages=shallow_crawl_pages,
+            use_rendered_fallback=use_rendered_fallback,
+            allow_domain_guessing=allow_domain_guessing,
+            homepage_provenance=(
+                target.get("homepage_provenance")
+                if isinstance(target.get("homepage_provenance"), Mapping)
+                else None
+            ),
+            usage_callback=usage_callback,
+        )
+        receipt = build_discovery_receipt(result)
+        if cache is not None and cache_key:
+            cache[cache_key] = receipt
+        receipts.append(receipt)
+        if sleep_seconds > 0:
+            time.sleep(float(sleep_seconds))
+    return receipts
+
+
+def build_career_coverage_benchmark(results: Iterable[CareerDiscoveryResult]) -> dict[str, Any]:
+    """Deterministic offline coverage metric over a fixture employer set.
+
+    ``career_targeted_coverage`` counts only validated career surfaces; the
+    homepage is never a career target, so a homepage-only baseline scores 0.
+    """
+
+    items = list(results)
+    total = len(items)
+    found = [item for item in items if item.validated_career_url or item.primary_career_url]
+    homepage_only = [
+        item
+        for item in items
+        if not (item.validated_career_url or item.primary_career_url)
+    ]
+    reason_counts: dict[str, int] = {}
+    for item in items:
+        reason = item.reason_code or item.crawl_status
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "employers": total,
+        "career_targets_found": len(found),
+        "career_targeted_coverage": round(len(found) / total, 4) if total else 0.0,
+        "homepage_only_employers": len(homepage_only),
+        "reason_codes": reason_counts,
+    }
+
+
 __all__ = [
     "CareerDiscoveryResult",
     "CareerUrlCandidate",
     "FetchResult",
+    "build_career_coverage_benchmark",
+    "build_discovery_receipt",
+    "build_source_inventory",
+    "collect_discovery_receipts",
     "discover_career_url",
     "discover_many",
     "domain_from_url",
+    "extract_career_links_from_html",
+    "extract_career_urls_from_json_ld",
     "guess_domains_from_company_name",
     "is_probably_career_url",
 ]
