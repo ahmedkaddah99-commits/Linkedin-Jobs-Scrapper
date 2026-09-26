@@ -1,4 +1,5 @@
 > Source: deployment/render-turso-r2 | SHA: 58a96674 | Verified: 2026-09-14
+> T52 current-state amendment: the [provider/browser capability matrix](../../assisted-apply/simplify-parity-matrix.md) distinguishes fixture-verified, partial, unsupported, and unverified paths. Earlier baseline and UNMERGED sections below are historical observations at `58a96674`, not current production claims. T47–T51 are now integrated.
 > Update (T47, 2026-09-21): the L2 boundary gate now recursively scans `apps/browser-extension/entrypoints/**`, `apps/browser-extension/src/**` and `packages/ats-core/src/**`, detects synthetic pointer/keyboard activation, and runs in `check`, `check:all`, `check:edge` and both extension CI jobs. See §6.1 L2, §7, §9.1, §10 (WS9-G1, WS9-G4).
 
 # Assisted Apply — extension-side subsystem
