@@ -1,5 +1,10 @@
 # Runr Assisted Apply browser extension
 
+The current fixture-verified provider and browser coverage, including partial and
+unverified behavior, is recorded in
+[`docs/assisted-apply/simplify-parity-matrix.md`](../../docs/assisted-apply/simplify-parity-matrix.md).
+Fixture coverage is not a live-portal or Web Store release claim.
+
 The Assisted Apply extension provides the guarded Chrome MV3 shell, review-only
 side panel, Runr account connection, immutable package retrieval, Greenhouse and
 Lever inspection/filling, verified document attachment, and service-worker-safe
