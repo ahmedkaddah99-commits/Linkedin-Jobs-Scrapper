@@ -329,6 +329,22 @@ def _publisher_telemetry(
     }
 
 
+def _progress(phase: str, **counts: int) -> None:
+    """Optional bounded status file; does not change the final metrics format."""
+    destination = os.getenv("RUNR_PUBLISHER_PROGRESS_FILE", "").strip()
+    if not destination:
+        return
+    path = Path(destination)
+    payload = {"phase": phase, "timestamp": datetime.now(timezone.utc).isoformat(),
+               "pid": os.getpid(), "counts": counts}
+    try:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError as error:
+        print(f"publisher_progress_write_failed:{type(error).__name__}", file=sys.stderr, flush=True)
+
+
 def _text(value: object) -> str:
     return str(value or "").strip()
 
@@ -1224,6 +1240,7 @@ def run_delivery(
         linkedin_companies = {key: value for key, value in linkedin_companies.items() if key in requested}
         employer_companies = {key: value for key, value in employer_companies.items() if key in requested}
 
+    _progress("initializing_database")
     store: SqliteAcquisitionStore | None = None
     if not controls.dry_run:
         store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
@@ -1232,6 +1249,8 @@ def run_delivery(
     if identity_crosswalk_document and store is not None:
         crosswalk_report = identity_crosswalk_document.get("report")
         crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
+        _progress("identity_reconciliation", identities=len(crosswalk),
+                  companies=len(crosswalk_report.get("canonical_rows") or []))
         if _crosswalk_already_applied(store, mapping=crosswalk, document=identity_crosswalk_document):
             crosswalk_result = {"status": "already_applied", "registry_sha256": _text(identity_crosswalk_document.get("registry_sha256"))}
         else:
@@ -1246,6 +1265,7 @@ def run_delivery(
                 },
             )
 
+    _progress("source_loading")
     linkedin_org_to_canonical = {
         _text(source_company_id): company_id
         for company_id, company in linkedin_companies.items()
@@ -1433,6 +1453,7 @@ def run_delivery(
             started_monotonic=started_monotonic,
         )
     assert store is not None
+    _progress("targets_registration", targets=len(targets))
     store.ensure_targets(targets)
     marker = "|".join(
         [
@@ -1448,6 +1469,7 @@ def run_delivery(
         ]
     )
     cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    _progress("cycle_claim")
     cycle = store.claim_due_cycle(
         window_key=cycle_key,
         lease_owner=f"producer_bridge:{os.getpid()}",
@@ -1464,6 +1486,7 @@ def run_delivery(
             started_monotonic=started_monotonic,
         )
     cycle_id = _text(cycle.get("cycle_id"))
+    _progress("task_registration", targets=len(targets))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)
     metrics: dict[str, object] = {
@@ -1553,6 +1576,8 @@ def run_delivery(
         }
 
     try:
+        delivered_companies = 0
+        _progress("delivery", companies_completed=0, targets=len(targets))
         for source, changed_ids in changed_by_source.items():
             source_metrics[source]["companies_pending_source_state"] = 0
             source_metrics[source]["jobs_delivered"] = 0
@@ -1587,6 +1612,8 @@ def run_delivery(
                         stop_requested = True
                         break
                     continue
+                delivered_companies += 1
+                _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
                 source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
                 source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
                 if bool(delivered["failed"]):
@@ -1624,6 +1651,7 @@ def run_delivery(
                 failures=failures,
                 stop_reason=stop_reason,
             )
+        _progress("publication", companies_completed=delivered_companies)
         publication_id = store.publish_valid_snapshot(
             cycle_id=cycle_id,
             valid_target_ids=valid_target_ids,
@@ -1639,6 +1667,7 @@ def run_delivery(
             error_code="partial_source_coverage" if partial else "",
             error_message="One or more source companies lacked closure-safe completeness evidence." if partial else "",
         )
+        _progress("checkpoints")
         store.save_publisher_checkpoint(next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         store.save_publisher_checkpoint(next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         metrics.update(
@@ -1648,6 +1677,7 @@ def run_delivery(
                 "report": store.get_cycle_report(cycle_id),
             }
         )
+        _progress("completed", companies_completed=delivered_companies)
         return _with_receipt(
             metrics,
             controls,
@@ -1656,6 +1686,7 @@ def run_delivery(
             failures=failures,
         )
     except BaseException as exc:
+        _progress("failed")
         store.complete_cycle(
             cycle_id,
             status="recovery_required",

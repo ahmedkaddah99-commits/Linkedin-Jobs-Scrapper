@@ -2,6 +2,18 @@
 
 # Publication and catalog (WS-3 secondary)
 
+## Live recovery update — 2026-09-26
+
+RUN-60 fixes remote write latency in `apply_company_identity_crosswalk` and
+`_persist_unified_mapping`: bounded multi-row SQL replaces per-row remote waits,
+preserving transaction rollback, existing company data and append-only provenance.
+Regression tests are in `tests/test_crosswalk_remote_batching.py`.
+The approved publisher-only Turso binding and live evidence are recorded in the
+[VPS operating policy](../02-deployment/vps-acquisition-operating-policy.md).
+The recovered run published a valid 120-job head; partial source coverage remains.
+RUN-59 adds operational monitoring, progress, alerts and agent read access.
+The older static analysis below remains historical, not current live evidence.
+
 Secondary doc; the primary is [acquisition-and-collectors.md](acquisition-and-collectors.md) (producers, connector layer, manifest gate, scripts inventory). Scope here: the **producer-state publisher** (`scripts/publish_producer_states.py`), the **record-completeness gate** (`backend/acquisition/job_publication_completeness.py`), **publication policy versions** (`backend/acquisition/publication.py`), **source merging** (`backend/acquisition/job_source_merging.py`), the **store publication machinery** (`backend/repositories/sqlite_acquisition.py`), the **identity crosswalk application**, catalog recovery (`scripts/publish_existing_catalog.py`) and the **combined CSV projection** (`scripts/build_master_jobs_catalog.py`).
 
 Method: static reading at `58a96674` only. Nothing was executed; production state is UNKNOWN and never claimed "live".

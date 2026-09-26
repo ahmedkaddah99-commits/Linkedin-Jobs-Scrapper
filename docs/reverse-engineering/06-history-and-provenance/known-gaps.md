@@ -31,6 +31,18 @@ LIVE PRODUCTION = UNKNOWN. Production SHAs below come from documents only.
 | C9 | The VPS contract still has purchase and region placeholders even though a VPS deployment is recorded. | `deploy/vps-runtime-contract.json` L12 and L29 | WS-7 | `02-deployment/vps-runtime-and-acquisition-timers.md` | OPEN |
 | **C10** (new, from N-5) | (i) `runr-acquisition-export.service` has `Wants=` and `After=runr-acquisition-cycle.service`, so the 06:00 export timer can pull in the combined oneshot cycle outside `runr.target`. (ii) The handoff caps (12 total / 6 / 6) differ from the source defaults (110/100/10). A host override is UNKNOWN. | `deploy/systemd/runr-acquisition-export.service` L3–4 (Wants/After, re-checked at baseline); handoff L32; `deploy/acquisition.env.example`; `deploy/run-acquisition-cycle.sh` L6–8 | WS-7 (WS-3 for caps semantics) | `02-deployment/vps-runtime-and-acquisition-timers.md` | OPEN |
 
+### Live evidence update — 2026-09-26
+
+RUN-59 establishes persistent source/publisher monitoring and verifies independent
+LinkedIn, employer and publisher timers enabled, with competing cycle/export paths
+disabled. This resolves C5's host ownership unknown for this observation window;
+historical rows above remain baseline findings. RUN-60 adds crosswalk transaction,
+SQL batching and provenance replay regression tests, narrowing WS3-G10, and fixes
+publisher-only shared Turso binding and remote write latency. See the
+[operating policy](../02-deployment/vps-acquisition-operating-policy.md) for live
+publication evidence, rollback backups and remaining partial coverage. No claim
+is made that all historical release provenance or customer UI gaps are closed.
+
 ## 2. Unknowns (U1–U13)
 
 | ID | Unknown (errata applied) | Would resolve it | Owner WS | Target Phase-2 doc | Status |

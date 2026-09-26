@@ -3,6 +3,8 @@
 
 # VPS runtime and acquisition timers
 
+**Current owner instruction (2026-09-26):** read [vps-acquisition-operating-policy.md](vps-acquisition-operating-policy.md) before touching live acquisition. Dedicated collectors and publisher must stay enabled for unattended validation. Historical UNKNOWN statements below describe the original documentary baseline, not the live evidence in that policy.
+
 For exact-revision live ticket testing, use [vps-predeployment-verification.md](vps-predeployment-verification.md). The systemd acquisition units execute `/opt/runr`, so Render branch switching alone does not select VPS code.
 
 This is a secondary WS-7 doc. Release records, evidence classes and C1–C3 are in [release-process-and-production-records.md](release-process-and-production-records.md).

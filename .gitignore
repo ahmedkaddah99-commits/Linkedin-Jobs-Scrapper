@@ -24,6 +24,7 @@ dev.env
 frontend/.env.local
 frontend/.env.*.local
 user_config/.env
+user_config/grafana-cloud-alloy-vps-token.txt
 .vscode/
 
 # Runtime data, logs, databases, and temp folders
@@ -68,6 +69,8 @@ user_config/candidate_assets/
 user_config/manual_job_urls.txt
 user_config/job_seeker_config.json
 user_config/*.live.txt
+user_config/grafana-cloud-observer-read-token.txt
+user_config/grafana-dashboard-editor-token.txt
 
 # Archive data and external datasets
 Archive/
