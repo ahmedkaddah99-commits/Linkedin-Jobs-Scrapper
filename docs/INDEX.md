@@ -18,6 +18,8 @@ Start with [reverse-engineering/00-overview.md](reverse-engineering/00-overview.
 | Work on the browser extension or shared TS packages | [reverse-engineering/01-architecture/apps-and-extensions.md](reverse-engineering/01-architecture/apps-and-extensions.md), [shared-packages.md](reverse-engineering/01-architecture/shared-packages.md) |
 | Work on Render deploy config | [reverse-engineering/02-deployment/render.md](reverse-engineering/02-deployment/render.md) |
 | Work on the VPS / systemd acquisition timers | [reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md](reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md) |
+| Operate VPS Grafana Alloy observability | [reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md](reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md) |
+| Check scraper outcomes or change VPS execution | [reverse-engineering/02-deployment/vps-acquisition-operating-policy.md](reverse-engineering/02-deployment/vps-acquisition-operating-policy.md) — owner instruction, timer guard, agent JSON access, shared catalog binding |
 | Verify a predeployment revision on the VPS | [reverse-engineering/02-deployment/vps-predeployment-verification.md](reverse-engineering/02-deployment/vps-predeployment-verification.md) |
 | Work on Docker images | [reverse-engineering/02-deployment/docker.md](reverse-engineering/02-deployment/docker.md) |
 | Work on CI | [reverse-engineering/02-deployment/ci-cd.md](reverse-engineering/02-deployment/ci-cd.md) |

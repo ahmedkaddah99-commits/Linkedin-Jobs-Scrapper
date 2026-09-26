@@ -5284,23 +5284,30 @@ class SqliteAcquisitionStore(_SqliteStore):
             return result
 
         def merge(connection) -> dict[str, Any]:
+            # One network request per identity made a 17k-company registry take
+            # tens of minutes before publication even created its cycle. Keep
+            # the same transaction, but bound SQL parameters and round trips.
+            crosswalk_parameters = []
             for identity_key, winner_company_id in sorted(mapping.items()):
                 identity_type = identity_key.split(":", 1)[0] or "external"
                 crosswalk_id = "company_crosswalk_" + hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:24]
+                crosswalk_parameters.append((crosswalk_id, identity_key, winner_company_id, identity_type,
+                                             _json(source_provenance), now, now))
+            for offset in range(0, len(crosswalk_parameters), 100):
+                batch = crosswalk_parameters[offset:offset + 100]
                 connection.execute(
                     """
                     INSERT INTO company_identity_crosswalk (
                         crosswalk_id, source_identity_key, winner_company_id,
                         identity_type, provenance_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES """ + ",".join(["(?, ?, ?, ?, ?, ?, ?)"] * len(batch)) + """
                     ON CONFLICT(source_identity_key) DO UPDATE SET
                         winner_company_id=excluded.winner_company_id,
                         identity_type=excluded.identity_type,
                         provenance_json=excluded.provenance_json,
                         updated_at=excluded.updated_at
                     """,
-                    (crosswalk_id, identity_key, winner_company_id, identity_type,
-                     _json(source_provenance), now, now),
+                    tuple(value for row in batch for value in row),
                 )
 
             # Create IDs allocated by the registry crosswalk before repointing
@@ -5310,20 +5317,28 @@ class SqliteAcquisitionStore(_SqliteStore):
                 company_id = str(row.get("canonical_CompanyID") or row.get("canonical_company_id") or "").strip()
                 if company_id and company_id not in rows_by_id:
                     rows_by_id[company_id] = row
-            for company_id, row in rows_by_id.items():
-                existing = connection.execute(
-                    "SELECT 1 FROM canonical_companies WHERE company_id=?", (company_id,)
-                ).fetchone()
-                if existing:
+            company_ids = list(rows_by_id)
+            for offset in range(0, len(company_ids), 100):
+                batch_ids = company_ids[offset:offset + 100]
+                existing = {str(row[0]) for row in connection.execute(
+                    "SELECT company_id FROM canonical_companies WHERE company_id IN (" +
+                    ",".join(["?"] * len(batch_ids)) + ")", tuple(batch_ids)
+                ).fetchall()}
+                parameters = []
+                for company_id in batch_ids:
+                    if company_id in existing:
+                        continue
+                    row = rows_by_id[company_id]
+                    name = " ".join(str(row.get("company_name") or "Unknown employer").split()).strip() or "Unknown employer"
+                    parameters.append((company_id, name, str(row.get("website_url") or row.get("linkedin_company_url") or ""), now, now))
+                if not parameters:
                     continue
-                name = " ".join(str(row.get("company_name") or "Unknown employer").split()).strip() or "Unknown employer"
                 connection.execute(
                     """
                     INSERT INTO canonical_companies (
                         company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at
-                    ) VALUES (?, ?, 'employer', ?, ?, ?)
-                    """,
-                    (company_id, name, str(row.get("website_url") or row.get("linkedin_company_url") or ""), now, now),
+                    ) VALUES """ + ",".join(["(?, ?, 'employer', ?, ?, ?)"] * len(parameters)),
+                    tuple(value for row in parameters for value in row),
                 )
 
             merged: list[dict[str, Any]] = []
@@ -6800,8 +6815,17 @@ class SqliteAcquisitionStore(_SqliteStore):
                 raw_value_json, normalized_value_json, state, source, source_field,
                 extraction_method, evidence_json, confidence, observed_at, rule_version,
                 selected, selection_reason, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES
         """
+        def persist_provenance(rows):
+            # 18 fields * 50 rows stays under SQLite's legacy 999-parameter
+            # limit and avoids the libSQL driver's per-row executemany waits.
+            for offset in range(0, len(rows), 50):
+                batch = rows[offset:offset + 50]
+                connection.execute(
+                    provenance_sql + ",".join(["(" + ",".join(["?"] * 18) + ")"] * len(batch)),
+                    tuple(value for row in batch for value in row),
+                )
         job_provenance_rows = []
         for field_name, record in fields.items():
             if not isinstance(record, Mapping):
@@ -6816,7 +6840,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                  selected, "latest evidence-backed candidate" if selected else "no evidence-backed value", now)
             )
         if job_provenance_rows:
-            connection.executemany(provenance_sql, job_provenance_rows)
+            persist_provenance(job_provenance_rows)
         mapped_company_fields = mapping.get("company_fields") if isinstance(mapping.get("company_fields"), Mapping) else {}
         company_source = job.get("company") if isinstance(job.get("company"), Mapping) else {}
         company_values = {
@@ -6853,7 +6877,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                  "latest evidence-backed candidate" if known else "no evidence-backed value", now)
             )
         if company_provenance_rows:
-            connection.executemany(provenance_sql, company_provenance_rows)
+            persist_provenance(company_provenance_rows)
         output_payload = dict(mapping)
         connection.execute(
             """

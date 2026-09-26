@@ -1,0 +1,14 @@
+[Unit]
+Description=Runr acquisition health and owner-approved timer guard
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/runr/.venv/bin/python /opt/runr-ops/observe.py --enforce-policy --output-dir /var/lib/runr/observability --catalog-env /opt/runr/.env.acquisition
+TimeoutStartSec=120
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/runr/observability /etc/systemd/system

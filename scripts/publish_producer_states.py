@@ -47,6 +47,22 @@ COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRME
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
 
 
+def _progress(phase: str, **counts: int) -> None:
+    """Optional bounded status file; does not change the final metrics format."""
+    destination = os.getenv("RUNR_PUBLISHER_PROGRESS_FILE", "").strip()
+    if not destination:
+        return
+    path = Path(destination)
+    payload = {"phase": phase, "timestamp": datetime.now(timezone.utc).isoformat(),
+               "pid": os.getpid(), "counts": counts}
+    try:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError as error:
+        print(f"publisher_progress_write_failed:{type(error).__name__}", file=sys.stderr, flush=True)
+
+
 def _text(value: object) -> str:
     return str(value or "").strip()
 
@@ -865,12 +881,15 @@ def run_delivery(
         linkedin_companies = {key: value for key, value in linkedin_companies.items() if key in requested}
         employer_companies = {key: value for key, value in employer_companies.items() if key in requested}
 
+    _progress("initializing_database")
     store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
     _ensure_publisher_checkpoint_table(store)
     crosswalk_result: dict[str, object] = {}
     if identity_crosswalk_document:
         crosswalk_report = identity_crosswalk_document.get("report")
         crosswalk_report = crosswalk_report if isinstance(crosswalk_report, Mapping) else {}
+        _progress("identity_reconciliation", identities=len(crosswalk),
+                  companies=len(crosswalk_report.get("canonical_rows") or []))
         crosswalk_result = store.apply_company_identity_crosswalk(
             mapping_by_identity=crosswalk,
             merge_receipts=crosswalk_report.get("merge_receipts") or [],
@@ -882,6 +901,7 @@ def run_delivery(
             },
         )
 
+    _progress("source_loading")
     linkedin_org_to_canonical = {
         _text(source_company_id): company_id
         for company_id, company in linkedin_companies.items()
@@ -982,6 +1002,7 @@ def run_delivery(
             "sources": source_metrics,
             "identity_crosswalk": crosswalk_result,
         }
+    _progress("targets_registration", targets=len(targets))
     store.ensure_targets(targets)
     marker = "|".join(
         [
@@ -996,6 +1017,7 @@ def run_delivery(
         ]
     )
     cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    _progress("cycle_claim")
     cycle = store.claim_due_cycle(
         window_key=cycle_key,
         lease_owner=f"producer_bridge:{os.getpid()}",
@@ -1007,6 +1029,7 @@ def run_delivery(
     if cycle is None:
         return {"status": "already_running", "cycle_key": cycle_key}
     cycle_id = _text(cycle.get("cycle_id"))
+    _progress("task_registration", targets=len(targets))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)
     metrics: dict[str, object] = {
@@ -1089,6 +1112,8 @@ def run_delivery(
         }
 
     try:
+        delivered_companies = 0
+        _progress("delivery", companies_completed=0, targets=len(targets))
         for source, changed_ids in changed_by_source.items():
             source_metrics[source]["companies_pending_source_state"] = 0
             source_metrics[source]["jobs_delivered"] = 0
@@ -1098,12 +1123,15 @@ def run_delivery(
                 if skip_status_only and not (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id):
                     continue
                 delivered = deliver_company(source, company_id)
+                delivered_companies += 1
+                _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
                 source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
                 source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
                 if bool(delivered["failed"]):
                     source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
                 if not bool(delivered["closure_safe"]):
                     source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+        _progress("publication", companies_completed=delivered_companies)
         publication_id = store.publish_valid_snapshot(
             cycle_id=cycle_id,
             valid_target_ids=valid_target_ids,
@@ -1119,6 +1147,7 @@ def run_delivery(
             error_code="partial_source_coverage" if partial else "",
             error_message="One or more source companies lacked closure-safe completeness evidence." if partial else "",
         )
+        _progress("checkpoints")
         _save_publisher_checkpoint(store, next_linkedin_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         _save_publisher_checkpoint(store, next_employer_checkpoint, cycle_id=cycle_id, publication_id=publication_id)
         metrics.update(
@@ -1128,8 +1157,10 @@ def run_delivery(
                 "report": store.get_cycle_report(cycle_id),
             }
         )
+        _progress("completed", companies_completed=delivered_companies)
         return metrics
     except BaseException as exc:
+        _progress("failed")
         store.complete_cycle(
             cycle_id,
             status="recovery_required",

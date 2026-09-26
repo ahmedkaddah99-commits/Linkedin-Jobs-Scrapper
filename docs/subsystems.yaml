@@ -224,6 +224,7 @@ subsystems:
     documentation:
       - docs/reverse-engineering/02-deployment/render.md
       - docs/reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md
+      - docs/reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md
       - docs/reverse-engineering/02-deployment/docker.md
       - docs/reverse-engineering/02-deployment/ci-cd.md
       - docs/reverse-engineering/02-deployment/release-process-and-production-records.md

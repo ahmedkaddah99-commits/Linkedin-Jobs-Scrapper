@@ -2,6 +2,8 @@
 
 # Acquisition and collectors (WS-3 primary)
 
+Before changing VPS execution, read the [owner operating policy](../02-deployment/vps-acquisition-operating-policy.md). The owner requires dedicated collectors and publisher to remain enabled for unattended validation; assumed customer traffic is not a reason to disable them.
+
 Scope: the two job **producers** (LinkedIn guest-endpoint collector, employer career-site collector), the connector/ATS layer they share with the legacy Phase A scheduler, the eligibility-manifest input contract, the VPS wrapper call graph into `scripts/`, and an inventory of all 45 `scripts/` files and 7 `data/` files. Publication, identity/logos, applicant intelligence and source-state storage are split into secondary docs:
 
 - [publication-and-catalog.md](publication-and-catalog.md): publisher, completeness gate, source merging, combined CSV

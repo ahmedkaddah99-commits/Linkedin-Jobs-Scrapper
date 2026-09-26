@@ -12,6 +12,8 @@ All Python commands in this repository must use the project virtual environment:
 
 Never use the global Python interpreter or global `pip` for this project.
 
+Do not inspect `Archive/` during routine codebase exploration. It contains inactive local artifacts and is excluded from Git and Docker; open it only when the user explicitly asks for archived material.
+
 Before running tests, scripts, or installing packages, verify the interpreter:
 
 ```powershell
