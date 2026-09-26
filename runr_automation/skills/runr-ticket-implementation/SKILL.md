@@ -5,6 +5,8 @@ description: Use when explicitly implementing one exact Runr Linear issue or sub
 
 # Runr ticket implementation
 
+For VPS acceptance tickets, use `docs/reverse-engineering/02-deployment/vps-predeployment-verification.md` for the later host test. A locally passing implementation remains `In Review` until code integration; lack of a VPS receipt does not require restarting research or rebuilding a passing ticket branch. Reuse the verified tested commit and attach the host receipt after exact-revision integration.
+
 This skill is explicit-only and owns one complete implementation attempt for one exact Linear issue or sub-issue. It is the standalone path when the user wants a single ticket implemented without running `runr-auto once`, `daemon`, `reconcile`, or any controller operation that can process other tickets.
 
 The implementation boundary ends at `In Review`, `Implementation Fix Required`, or an appropriate blocked status. This skill must never merge, never deploy, delete issue artifacts, or assign `Done`.

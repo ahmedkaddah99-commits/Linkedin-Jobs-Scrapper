@@ -3,6 +3,8 @@
 
 # VPS runtime and acquisition timers
 
+For exact-revision live ticket testing, use [vps-predeployment-verification.md](vps-predeployment-verification.md). The systemd acquisition units execute `/opt/runr`, so Render branch switching alone does not select VPS code.
+
 This is a secondary WS-7 doc. Release records, evidence classes and C1–C3 are in [release-process-and-production-records.md](release-process-and-production-records.md).
 
 The collector and publisher **scripts** under `scripts/` are WS-3's and are documented in `../05-subsystems/acquisition-and-collectors.md` and `../05-subsystems/publication-and-catalog.md`. Producer state and exports are in `../03-data/acquisition-source-state.md`.
