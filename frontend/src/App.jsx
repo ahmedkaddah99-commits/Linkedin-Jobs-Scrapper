@@ -9,13 +9,15 @@ import MarketingSite from "./pages/MarketingSite";
 import { QUOTA_EXCEEDED_EVENT, markJobsPhase } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { personalizedJobsDataMode, personalizedJobsExperienceEnabled } from "./lib/personalizedJobsConfig";
+import { markRoutePhase, routeForPath, routeReadyState } from "./lib/routePerformance";
 import { hasAuthenticatedSession } from "./lib/sessionState";
 
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
-const appSubdomain = typeof window !== "undefined" && window.location.hostname === "app.userunr.com";
+const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
+const appSubdomain = typeof window !== "undefined" && (window.location.hostname === "app.userunr.com" || browserTestMode);
 
 const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
@@ -41,7 +43,6 @@ const PersonalizedJobsPage = lazy(() => import("./pages/PersonalizedJobsPage"));
 const HiddenJobsPage = lazy(() => import("./pages/HiddenJobsPage"));
 const PersonalizedJobDetailPage = lazy(() => import("./pages/PersonalizedJobDetailPage"));
 const PersonalizedOnboardingPage = lazy(() => import("./pages/PersonalizedOnboardingPage"));
-const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
 
 function RouteLoadingFallback() {
   return (
@@ -171,6 +172,34 @@ function AuthenticatedApp() {
   const lastTrackedPageRef = useRef("");
   const routeChunkMarkedRef = useRef(false);
   const userId = String(user?.user_id || user?.email || "").trim();
+
+  useEffect(() => {
+    if (!hasSession) return undefined;
+    const route = routeForPath(location.pathname);
+    if (!route) return undefined;
+    const mode = performance.getEntriesByType("navigation").length && !window.__runrRouteVisited ? "cold" : "warm";
+    window.__runrRouteVisited = true;
+    markRoutePhase(route.name, "navigation", mode);
+    markRoutePhase(route.name, "session-connected", mode);
+    let finished = false;
+    const observe = () => {
+      if (finished) return;
+      const state = routeReadyState(route, document);
+      if (!state) return;
+      finished = true;
+      markRoutePhase(route.name, state === "error" ? "error" : "useful-render", mode, state);
+      markRoutePhase(route.name, "interactive", mode, state);
+      observer.disconnect();
+    };
+    const observer = new MutationObserver(observe);
+    observer.observe(document.getElementById("root"), { childList: true, subtree: true, characterData: true });
+    const frame = requestAnimationFrame(observe);
+    return () => {
+      finished = true;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [hasSession, location.pathname]);
 
   useEffect(() => {
     if (!personalizedJobsExperienceEnabled || !location.pathname.startsWith("/jobs")) return undefined;
