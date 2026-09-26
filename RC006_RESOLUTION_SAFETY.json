@@ -1,0 +1,77 @@
+{
+  "ticket": "RC-006",
+  "slice": "RC-006a",
+  "status": "completed_offline",
+  "target_worktree": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview",
+  "target_branch": "deployment/render-turso-r2",
+  "head_at_validation": "e7662c63082d605d8ae6de090d3a04a55bba6556",
+  "python": {
+    "executable": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe",
+    "version": "Python 3.12.7"
+  },
+  "changed_files": [
+    "backend/application/company_enrichment_resolution.py",
+    "scripts/run_linkedin_company_id_resolution.py",
+    "tests/fixtures/rc006_mostly_blocked.json",
+    "tests/test_rc006_resolution_safety.py",
+    "RC006_RESOLUTION_SAFETY.md"
+  ],
+  "implemented": [
+    "Independent missing-canonical, missing-website, missing-LinkedIn-URL, unresolved-numeric-ID, and ownership-conflict queues.",
+    "Evidence precedence that protects user-confirmed values and routes conflicting values to review.",
+    "Accumulated contextual LinkedIn ID history across responses and restarts.",
+    "AMBIGUOUS status for same-response or cross-response contradictory IDs.",
+    "Explicit reconciliation-decision path before a contradictory identity can be marked RESOLVED.",
+    "Persistent per-URL/provider attempts and next-eligible retry times.",
+    "Atomic rolling global/provider request reservations and ScrapeOps conservative credit ceiling.",
+    "Provider circuit breaker with bounded backoff and one recovery-probe slot.",
+    "Source-evidence fingerprinting so input reordering does not restart completed identity work while evidence changes remain detectable.",
+    "Resolver report fields for durable safety configuration and rolling-window state."
+  ],
+  "verification": [
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' --version",
+      "result": "Python 3.12.7"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m pytest tests/test_acquisition_baseline.py tests/test_company_registry_reconciliation.py tests/test_company_id_backfill.py tests/test_source_eligibility_manifest.py tests/test_linkedin_company_id_browser_resolution.py tests/test_linkedin_company_enrichment_pipeline.py tests/test_producer_adapters.py tests/test_rc006_resolution_safety.py -q",
+      "result": "66 passed in 15.88s"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m ruff check backend/application/company_enrichment_resolution.py scripts/run_linkedin_company_id_resolution.py tests/test_rc006_resolution_safety.py",
+      "result": "All checks passed"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m py_compile backend/application/company_enrichment_resolution.py scripts/run_linkedin_company_id_resolution.py tests/test_rc006_resolution_safety.py",
+      "result": "exit code 0"
+    },
+    {
+      "command": "git diff --check",
+      "result": "No diff errors; Git emitted only existing line-ending warnings while status was read."
+    }
+  ],
+  "offline_proof": {
+    "contradictory_followed_by_single_id": "AMBIGUOUS; no guessed ID",
+    "same_response_multiple_ids": "AMBIGUOUS",
+    "explicit_reconciliation": "RESOLVED only after selected ID and reviewer decision were recorded",
+    "retry_persistence": "Cooldown survives closing and reopening the safety SQLite database",
+    "mostly_blocked_fixture": "Circuit opens after two failures, blocks requests while open, then admits one recovery probe",
+    "budget_scope": "Global and provider request reservations are atomic; ScrapeOps uses a conservative estimated-credit ceiling",
+    "network_calls": 0
+  },
+  "limitations": [
+    "No live HTTP, proxy, browser, ScrapeOps, paid enrichment, provider quota, or deployment check was performed.",
+    "RC-006b authorized enrichment expansion is not complete and was not started.",
+    "Provider limits and defaults still require an authorized bounded provider check before production use.",
+    "The repository-wide pytest run was not used as a gate: it is substantially larger than the acquisition slice and showed failures outside the bounded command before it was stopped; no trace was retained. The bounded acquisition/resolver regression set above is the recorded gate.",
+    "No production database or input CSV was modified."
+  ],
+  "rollback": [
+    "Stop any resolver process before changing state or code.",
+    "Back up the resolver state directory, including linkedin_id_resolution.sqlite3 and resolver_safety.sqlite3.",
+    "To disable RC-006a safety behavior, reverse only the RC-006 hunks in scripts/run_linkedin_company_id_resolution.py; preserve its earlier RC-001 transfer and all dirty exporter changes.",
+    "Remove backend/application/company_enrichment_resolution.py and the RC-006 fixture/test/report files only if the ticket artifacts themselves must be withdrawn.",
+    "Do not delete resolver results or request logs; restoring the backed-up state directory is the recoverable rollback path."
+  ],
+  "next_gate": "RC-006b requires explicit authorization for bounded provider/network checks; do not proceed to RC-007 from this session."
+}

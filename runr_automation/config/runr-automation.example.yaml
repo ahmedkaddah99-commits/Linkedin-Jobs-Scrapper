@@ -1,0 +1,54 @@
+linear:
+  team_id: ""
+  poll_interval_seconds: 90
+  poll_jitter_seconds: 15
+  overlap_seconds: 120
+
+execution:
+  max_concurrent_issues: 2
+  checkpoint_interval_seconds: 300
+  max_attempt_minutes: 45
+  max_attempt_tokens: 80000
+  reserve_tokens: 12000
+  minimum_remaining_ratio: 0.15
+
+providers:
+  # This is the complete priority order. The first available provider wins;
+  # capacity/transient failures fall through to the next entry. Codex is kept
+  # last by default, but this list is yours to reorder.
+  order: [opencode_subscription, openrouter, codex]
+  codex:
+    model: gpt-5.6-luna
+    # Leave command empty for capability-probed VS Code/PATH discovery.
+    # Commands are YAML argument lists, never shell command strings.
+    command: ""
+  opencode_subscription:
+    model: opencode-go/gpt-5.6-luna
+    # Leave empty to discover PATH OpenCode or Desktop shared auth.
+    # The prompt attachment must be last because OpenCode's --file accepts arrays.
+    command: ""
+  openrouter:
+    enabled: false
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    max_tool_calls: 24
+    # Used only when a response omits usage.cost; keeps limits conservative.
+    estimated_request_cost_usd: 0.01
+    # Models are independently configurable by automation purpose.
+    models:
+      implementation: openai/gpt-4.1-mini
+      research: openai/gpt-4.1-mini
+      ticket_creation: openai/gpt-4.1-mini
+      deduplication: openai/gpt-4.1-mini
+      parallelization: openai/gpt-4.1-mini
+    # Both limits must be positive before the adapter can spend anything.
+    max_usd_per_job: 1.00
+    max_usd_per_day: 5.00
+
+logging:
+  level: INFO
+  retain_files: 7
+  include_prompts: false
+
+approvals:
+  expiry_minutes: 60

@@ -1,0 +1,2218 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping
+from uuid import uuid4
+
+from backend.domain.phase0_contracts import normalize_referral_relationship
+
+
+RUN_STATUS_PLANNED = "planned"
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_CANCEL_REQUESTED = "cancel_requested"
+RUN_STATUS_CANCELLED = "cancelled"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+
+STAGE_STATUS_PENDING = "pending"
+STAGE_STATUS_SKIPPED = "skipped"
+STAGE_STATUS_CANCELLED = "cancelled"
+STAGE_STATUS_COMPLETED = "completed"
+STAGE_STATUS_FAILED = "failed"
+
+ROLE_ADMIN = "admin"
+ROLE_EDITOR = "editor"
+ROLE_REVIEWER = "reviewer"
+ROLE_VIEWER = "viewer"
+
+TOKEN_SCOPE_ADMIN = "admin"
+TOKEN_SCOPE_WORKSPACES_READ = "workspaces:read"
+TOKEN_SCOPE_WORKSPACES_WRITE = "workspaces:write"
+TOKEN_SCOPE_TEMPLATES_READ = "templates:read"
+TOKEN_SCOPE_TEMPLATES_WRITE = "templates:write"
+TOKEN_SCOPE_RUNS_READ = "runs:read"
+TOKEN_SCOPE_RUNS_WRITE = "runs:write"
+TOKEN_SCOPE_WORKER_EXECUTE = "worker:execute"
+TOKEN_SCOPE_REVIEWS_READ = "reviews:read"
+TOKEN_SCOPE_REVIEWS_WRITE = "reviews:write"
+TOKEN_SCOPE_ARTIFACTS_READ = "artifacts:read"
+TOKEN_SCOPE_ARTIFACTS_WRITE = "artifacts:write"
+TOKEN_SCOPE_SECRETS_READ = "secrets:read"
+TOKEN_SCOPE_SECRETS_WRITE = "secrets:write"
+TOKEN_SCOPE_USERS_READ = "users:read"
+TOKEN_SCOPE_USERS_WRITE = "users:write"
+
+# Acquisition operation scopes. ``admin`` remains a compatibility grant for
+# existing administrator tokens; these explicit scopes are used for new
+# operation-specific authorization.
+TOKEN_SCOPE_ACQUISITION_VIEW = "acquisition.view"
+TOKEN_SCOPE_ACQUISITION_COLLECT = "acquisition.collect"
+TOKEN_SCOPE_ACQUISITION_ENRICH = "acquisition.enrich"
+TOKEN_SCOPE_ACQUISITION_REVIEW = "acquisition.review"
+TOKEN_SCOPE_ACQUISITION_OVERRIDE = "acquisition.override"
+TOKEN_SCOPE_ACQUISITION_DUPLICATES = "acquisition.duplicates"
+TOKEN_SCOPE_ACQUISITION_PREVIEW = "acquisition.preview"
+TOKEN_SCOPE_ACQUISITION_PUBLISH = "acquisition.publish"
+TOKEN_SCOPE_ACQUISITION_ROLLBACK = "acquisition.rollback"
+TOKEN_SCOPE_ACQUISITION_PROVIDERS = "acquisition.providers"
+TOKEN_SCOPE_ACQUISITION_AUDIT = "acquisition.audit"
+
+SECRET_PROVIDER_STORED = "stored"
+SECRET_PROVIDER_ENV = "env"
+
+WORKER_STATUS_IDLE = "idle"
+WORKER_STATUS_RUNNING = "running"
+WORKER_STATUS_STOPPED = "stopped"
+WORKER_STATUS_STALE = "stale"
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def utc_plus_seconds(seconds: int | float) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(0.0, float(seconds)))).isoformat()
+
+
+@dataclass(slots=True)
+class JobRecord:
+    job_id: str
+    title: str = ""
+    company: str = ""
+    source_type: str = ""
+    filter_status: str = ""
+    location_raw: str = ""
+    link: str = ""
+    source_url: str = ""
+    apply_link: str = ""
+    portal: str = ""
+    description_text: str = ""
+    manual_approved: bool = False
+    role_category_id: str = ""
+    role_category_name: str = ""
+    priority_rank: int | None = None
+    extra_fields: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, record: Mapping[str, Any]) -> "JobRecord":
+        payload = dict(record)
+        known_field_names = {field_info.name for field_info in fields(cls) if field_info.name != "extra_fields"}
+        extra_fields = {key: value for key, value in payload.items() if key not in known_field_names}
+
+        description_text = str(
+            payload.get("description_text")
+            or payload.get("full_description")
+            or payload.get("description")
+            or ""
+        )
+
+        return cls(
+            job_id=str(payload.get("job_id") or ""),
+            title=str(payload.get("title") or ""),
+            company=str(payload.get("company") or ""),
+            source_type=str(payload.get("source_type") or ""),
+            filter_status=str(payload.get("filter_status") or ""),
+            location_raw=str(payload.get("location_raw") or ""),
+            link=str(payload.get("link") or ""),
+            source_url=str(payload.get("source_url") or ""),
+            apply_link=str(payload.get("apply_link") or ""),
+            portal=str(payload.get("portal") or ""),
+            description_text=description_text,
+            manual_approved=bool(payload.get("manual_approved") or False),
+            role_category_id=str(payload.get("role_category_id") or ""),
+            role_category_name=str(payload.get("role_category_name") or ""),
+            priority_rank=payload.get("priority_rank"),
+            extra_fields=extra_fields,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        extra_fields = payload.pop("extra_fields", {}) or {}
+        payload.update(extra_fields)
+        if self.description_text:
+            payload.setdefault("description", self.description_text)
+            payload.setdefault("full_description", self.description_text)
+        return payload
+
+
+@dataclass(slots=True)
+class JobSource:
+    id: str
+    connector_id: str
+    enabled: bool = True
+    settings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "JobSource":
+        return cls(
+            id=str(payload.get("id") or ""),
+            connector_id=str(payload.get("connector_id") or ""),
+            enabled=bool(payload.get("enabled", True)),
+            settings=dict(payload.get("settings") or {}),
+        )
+
+
+@dataclass(slots=True)
+class ProfileRef:
+    id: str
+    label: str
+    settings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ProfileRef":
+        return cls(
+            id=str(payload.get("id") or ""),
+            label=str(payload.get("label") or ""),
+            settings=dict(payload.get("settings") or {}),
+        )
+
+
+@dataclass(slots=True)
+class PromptSetRef:
+    id: str
+    family: str
+    settings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "PromptSetRef":
+        return cls(
+            id=str(payload.get("id") or ""),
+            family=str(payload.get("family") or ""),
+            settings=dict(payload.get("settings") or {}),
+        )
+
+
+@dataclass(slots=True)
+class ArtifactRecord:
+    artifact_id: str
+    artifact_type: str
+    path: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ArtifactRecord":
+        return cls(
+            artifact_id=str(payload.get("artifact_id") or ""),
+            artifact_type=str(payload.get("artifact_type") or ""),
+            path=str(payload.get("path") or ""),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class ReviewRecord:
+    review_id: str
+    run_id: str
+    job_id: str
+    status: str = "pending"
+    decision: str = ""
+    reviewer: str = ""
+    notes: str = ""
+    job_set_key: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str,
+        job_id: str,
+        status: str = "pending",
+        decision: str = "",
+        reviewer: str = "",
+        notes: str = "",
+        job_set_key: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "ReviewRecord":
+        now = utc_now_iso()
+        return cls(
+            review_id=f"review_{uuid4().hex[:16]}",
+            run_id=run_id,
+            job_id=job_id,
+            status=status,
+            decision=decision,
+            reviewer=reviewer,
+            notes=notes,
+            job_set_key=job_set_key,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ReviewRecord":
+        return cls(
+            review_id=str(payload.get("review_id") or ""),
+            run_id=str(payload.get("run_id") or ""),
+            job_id=str(payload.get("job_id") or ""),
+            status=str(payload.get("status") or "pending"),
+            decision=str(payload.get("decision") or ""),
+            reviewer=str(payload.get("reviewer") or ""),
+            notes=str(payload.get("notes") or ""),
+            job_set_key=str(payload.get("job_set_key") or ""),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class ReferralContactRecord:
+    contact_id: str
+    name: str
+    company: str
+    linkedin_url: str = ""
+    relationship_note: str = ""
+    can_refer: bool = False
+    is_active: bool = True
+    inactive_at: str = ""
+    inactive_reason: str = ""
+    companies: list[dict[str, Any]] = field(default_factory=list)
+    source_kind: str = "manual"
+    import_batch_id: str = ""
+    import_ref: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        name: str,
+        company: str = "",
+        companies: list[Mapping[str, Any]] | None = None,
+        linkedin_url: str = "",
+        relationship_note: str = "",
+        can_refer: bool = False,
+        is_active: bool = True,
+        inactive_at: str = "",
+        inactive_reason: str = "",
+        source_kind: str = "manual",
+        import_batch_id: str = "",
+        import_ref: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "ReferralContactRecord":
+        now = utc_now_iso()
+        normalized = normalize_referral_relationship(
+            {
+                "name": name,
+                "company": company,
+                "companies": companies or [],
+                "linkedin_url": linkedin_url,
+                "relationship_note": relationship_note,
+                "can_refer": can_refer,
+                "is_active": is_active,
+                "inactive_at": inactive_at,
+                "inactive_reason": inactive_reason,
+                "source_kind": source_kind,
+                "import_batch_id": import_batch_id,
+                "import_ref": import_ref,
+                "metadata": dict(metadata or {}),
+            }
+        )
+        normalized_companies = [dict(item) for item in normalized["companies"]]
+        primary_company = next(
+            (
+                str(item.get("company_name") or "").strip()
+                for item in normalized_companies
+                if str(item.get("company_name") or "").strip()
+            ),
+            str(company).strip(),
+        )
+        return cls(
+            contact_id=f"contact_{uuid4().hex[:16]}",
+            name=str(normalized["person"]["full_name"] or name).strip(),
+            company=primary_company,
+            linkedin_url=str(normalized["person"]["linkedin_url"] or "").strip(),
+            relationship_note=str(normalized["person"]["notes"] or "").strip(),
+            can_refer=bool(
+                can_refer
+                or any(bool(item.get("can_refer")) for item in normalized_companies)
+            ),
+            is_active=bool(normalized["lifecycle"]["is_active"]),
+            inactive_at=str(normalized["lifecycle"]["inactive_at"] or "").strip(),
+            inactive_reason=str(normalized["lifecycle"]["inactive_reason"] or "").strip(),
+            companies=normalized_companies,
+            source_kind=str(normalized["source"]["kind"] or source_kind).strip() or "manual",
+            import_batch_id=str(normalized["source"]["import_batch_id"] or import_batch_id).strip(),
+            import_ref=str(normalized["source"]["import_ref"] or import_ref).strip(),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["company"] = self.primary_company()
+        payload["can_refer"] = self.can_refer or any(bool(item.get("can_refer")) for item in self.companies)
+        payload["is_active"] = bool(self.is_active)
+        payload["lifecycle"] = {
+            "status": "active" if self.is_active else "inactive",
+            "is_active": bool(self.is_active),
+            "inactive_at": self.inactive_at,
+            "inactive_reason": self.inactive_reason,
+        }
+        return payload
+
+    def primary_company(self) -> str:
+        for item in self.companies:
+            company_name = str(item.get("company_name") or "").strip()
+            if company_name:
+                return company_name
+        return str(self.company or "").strip()
+
+    def company_names(self) -> list[str]:
+        names: list[str] = []
+        for item in self.companies:
+            company_name = str(item.get("company_name") or "").strip()
+            if company_name:
+                names.append(company_name)
+        if not names and str(self.company or "").strip():
+            names.append(str(self.company).strip())
+        return names
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ReferralContactRecord":
+        normalized = normalize_referral_relationship(payload)
+        companies = [dict(item) for item in normalized["companies"]]
+        primary_company = next(
+            (
+                str(item.get("company_name") or "").strip()
+                for item in companies
+                if str(item.get("company_name") or "").strip()
+            ),
+            str(payload.get("company") or "").strip(),
+        )
+        return cls(
+            contact_id=str(payload.get("contact_id") or ""),
+            name=str(normalized["person"]["full_name"] or payload.get("name") or ""),
+            company=primary_company,
+            linkedin_url=str(normalized["person"]["linkedin_url"] or ""),
+            relationship_note=str(normalized["person"]["notes"] or ""),
+            can_refer=bool(
+                payload.get("can_refer")
+                or any(bool(item.get("can_refer")) for item in companies)
+            ),
+            is_active=bool(normalized["lifecycle"]["is_active"]),
+            inactive_at=str(normalized["lifecycle"]["inactive_at"] or ""),
+            inactive_reason=str(normalized["lifecycle"]["inactive_reason"] or ""),
+            companies=companies,
+            source_kind=str(normalized["source"]["kind"] or payload.get("source_kind") or "manual"),
+            import_batch_id=str(normalized["source"]["import_batch_id"] or payload.get("import_batch_id") or ""),
+            import_ref=str(normalized["source"]["import_ref"] or payload.get("import_ref") or ""),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class UserRecord:
+    user_id: str
+    email: str
+    display_name: str = ""
+    role: str = ROLE_VIEWER
+    allowed_workspace_ids: list[str] = field(default_factory=list)
+    is_active: bool = True
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        email: str,
+        display_name: str = "",
+        role: str = ROLE_VIEWER,
+        allowed_workspace_ids: list[str] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "UserRecord":
+        now = utc_now_iso()
+        return cls(
+            user_id=f"user_{uuid4().hex[:16]}",
+            email=str(email).strip(),
+            display_name=str(display_name).strip(),
+            role=str(role or ROLE_VIEWER).strip() or ROLE_VIEWER,
+            allowed_workspace_ids=[str(item).strip() for item in (allowed_workspace_ids or []) if str(item).strip()],
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "UserRecord":
+        return cls(
+            user_id=str(payload.get("user_id") or ""),
+            email=str(payload.get("email") or ""),
+            display_name=str(payload.get("display_name") or ""),
+            role=str(payload.get("role") or ROLE_VIEWER),
+            allowed_workspace_ids=[
+                str(item) for item in payload.get("allowed_workspace_ids") or [] if str(item).strip()
+            ],
+            is_active=bool(payload.get("is_active", True)),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class ApiTokenRecord:
+    token_id: str
+    user_id: str
+    name: str
+    token_prefix: str
+    token_hash: str
+    scopes: list[str] = field(default_factory=list)
+    is_active: bool = True
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    last_used_at: str = ""
+    expires_at: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        user_id: str,
+        name: str,
+        token_prefix: str,
+        token_hash: str,
+        scopes: list[str] | None = None,
+        expires_at: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "ApiTokenRecord":
+        now = utc_now_iso()
+        return cls(
+            token_id=f"token_{uuid4().hex[:16]}",
+            user_id=str(user_id).strip(),
+            name=str(name).strip(),
+            token_prefix=str(token_prefix).strip(),
+            token_hash=str(token_hash).strip(),
+            scopes=[str(item).strip() for item in (scopes or []) if str(item).strip()],
+            created_at=now,
+            updated_at=now,
+            expires_at=str(expires_at).strip(),
+            metadata=dict(metadata or {}),
+        )
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "token_id": self.token_id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "token_prefix": self.token_prefix,
+            "scopes": list(self.scopes),
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "last_used_at": self.last_used_at,
+            "expires_at": self.expires_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ApiTokenRecord":
+        return cls(
+            token_id=str(payload.get("token_id") or ""),
+            user_id=str(payload.get("user_id") or ""),
+            name=str(payload.get("name") or ""),
+            token_prefix=str(payload.get("token_prefix") or ""),
+            token_hash=str(payload.get("token_hash") or ""),
+            scopes=[str(item) for item in payload.get("scopes") or [] if str(item).strip()],
+            is_active=bool(payload.get("is_active", True)),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            last_used_at=str(payload.get("last_used_at") or ""),
+            expires_at=str(payload.get("expires_at") or ""),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class SecretRecord:
+    secret_id: str
+    name: str
+    provider: str = SECRET_PROVIDER_STORED
+    workspace_id: str = ""
+    description: str = ""
+    env_var_name: str = ""
+    secret_value: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        name: str,
+        provider: str = SECRET_PROVIDER_STORED,
+        workspace_id: str = "",
+        description: str = "",
+        env_var_name: str = "",
+        secret_value: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "SecretRecord":
+        now = utc_now_iso()
+        return cls(
+            secret_id=f"secret_{uuid4().hex[:16]}",
+            name=str(name).strip(),
+            provider=str(provider or SECRET_PROVIDER_STORED).strip() or SECRET_PROVIDER_STORED,
+            workspace_id=str(workspace_id).strip(),
+            description=str(description).strip(),
+            env_var_name=str(env_var_name).strip(),
+            secret_value=str(secret_value),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "secret_id": self.secret_id,
+            "name": self.name,
+            "provider": self.provider,
+            "workspace_id": self.workspace_id,
+            "description": self.description,
+            "env_var_name": self.env_var_name,
+            "has_stored_value": bool(self.secret_value),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "SecretRecord":
+        return cls(
+            secret_id=str(payload.get("secret_id") or ""),
+            name=str(payload.get("name") or ""),
+            provider=str(payload.get("provider") or SECRET_PROVIDER_STORED),
+            workspace_id=str(payload.get("workspace_id") or ""),
+            description=str(payload.get("description") or ""),
+            env_var_name=str(payload.get("env_var_name") or ""),
+            secret_value=str(payload.get("secret_value") or ""),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class WorkerRecord:
+    worker_id: str
+    status: str = WORKER_STATUS_IDLE
+    host_name: str = ""
+    process_id: int = 0
+    current_run_id: str = ""
+    started_at: str = field(default_factory=utc_now_iso)
+    last_heartbeat_at: str = field(default_factory=utc_now_iso)
+    lease_expires_at: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        worker_id: str,
+        status: str = WORKER_STATUS_IDLE,
+        host_name: str = "",
+        process_id: int = 0,
+        current_run_id: str = "",
+        lease_expires_at: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "WorkerRecord":
+        now = utc_now_iso()
+        return cls(
+            worker_id=str(worker_id).strip(),
+            status=str(status or WORKER_STATUS_IDLE).strip() or WORKER_STATUS_IDLE,
+            host_name=str(host_name).strip(),
+            process_id=int(process_id or 0),
+            current_run_id=str(current_run_id).strip(),
+            started_at=now,
+            last_heartbeat_at=now,
+            lease_expires_at=str(lease_expires_at).strip(),
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WorkerRecord":
+        return cls(
+            worker_id=str(payload.get("worker_id") or ""),
+            status=str(payload.get("status") or WORKER_STATUS_IDLE),
+            host_name=str(payload.get("host_name") or ""),
+            process_id=int(payload.get("process_id") or 0),
+            current_run_id=str(payload.get("current_run_id") or ""),
+            started_at=str(payload.get("started_at") or utc_now_iso()),
+            last_heartbeat_at=str(payload.get("last_heartbeat_at") or utc_now_iso()),
+            lease_expires_at=str(payload.get("lease_expires_at") or ""),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class StageDefinition:
+    stage_id: str
+    stage_type: str
+    name: str
+    description: str = ""
+    input_keys: list[str] = field(default_factory=list)
+    output_key: str = ""
+    enabled: bool = True
+    config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "StageDefinition":
+        return cls(
+            stage_id=str(payload.get("stage_id") or ""),
+            stage_type=str(payload.get("stage_type") or ""),
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            input_keys=[str(item) for item in payload.get("input_keys") or [] if str(item).strip()],
+            output_key=str(payload.get("output_key") or ""),
+            enabled=bool(payload.get("enabled", True)),
+            config=dict(payload.get("config") or {}),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class WorkflowTemplate:
+    id: str
+    name: str
+    description: str = ""
+    stages: list[StageDefinition] = field(default_factory=list)
+    default_run_settings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "stages": [stage.to_dict() for stage in self.stages],
+            "default_run_settings": dict(self.default_run_settings),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WorkflowTemplate":
+        return cls(
+            id=str(payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            stages=[StageDefinition.from_dict(item) for item in payload.get("stages") or [] if isinstance(item, dict)],
+            default_run_settings=dict(payload.get("default_run_settings") or {}),
+        )
+
+
+@dataclass(slots=True)
+class WorkspaceDefinition:
+    id: str
+    name: str
+    workflow_template_id: str
+    owner_user_id: str = ""
+    description: str = ""
+    workspace_type: str = ""
+    settings: dict[str, Any] = field(default_factory=dict)
+    feature_flags: dict[str, bool] = field(default_factory=dict)
+    profiles: list[ProfileRef] = field(default_factory=list)
+    prompt_sets: list[PromptSetRef] = field(default_factory=list)
+    sources: list[JobSource] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "workflow_template_id": self.workflow_template_id,
+            "owner_user_id": self.owner_user_id,
+            "description": self.description,
+            "workspace_type": self.workspace_type,
+            "settings": dict(self.settings),
+            "feature_flags": dict(self.feature_flags),
+            "profiles": [asdict(profile) for profile in self.profiles],
+            "prompt_sets": [asdict(prompt_set) for prompt_set in self.prompt_sets],
+            "sources": [asdict(source) for source in self.sources],
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WorkspaceDefinition":
+        return cls(
+            id=str(payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            workflow_template_id=str(payload.get("workflow_template_id") or ""),
+            owner_user_id=str(payload.get("owner_user_id") or ""),
+            description=str(payload.get("description") or ""),
+            workspace_type=str(payload.get("workspace_type") or ""),
+            settings=dict(payload.get("settings") or {}),
+            feature_flags={str(key): bool(value) for key, value in (payload.get("feature_flags") or {}).items()},
+            profiles=[ProfileRef.from_dict(item) for item in payload.get("profiles") or [] if isinstance(item, dict)],
+            prompt_sets=[
+                PromptSetRef.from_dict(item) for item in payload.get("prompt_sets") or [] if isinstance(item, dict)
+            ],
+            sources=[JobSource.from_dict(item) for item in payload.get("sources") or [] if isinstance(item, dict)],
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class RunPlan:
+    workflow_template_id: str
+    workspace_snapshot: dict[str, Any]
+    workflow_snapshot: dict[str, Any]
+    resolved_run_settings: dict[str, Any]
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "RunPlan":
+        return cls(
+            workflow_template_id=str(payload.get("workflow_template_id") or ""),
+            workspace_snapshot=dict(payload.get("workspace_snapshot") or {}),
+            workflow_snapshot=dict(payload.get("workflow_snapshot") or {}),
+            resolved_run_settings=dict(payload.get("resolved_run_settings") or {}),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+        )
+
+
+@dataclass(slots=True)
+class StageResult:
+    stage_id: str
+    stage_type: str
+    status: str
+    started_at: str
+    finished_at: str
+    metrics: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    output_keys: list[str] = field(default_factory=list)
+    artifact_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "StageResult":
+        return cls(
+            stage_id=str(payload.get("stage_id") or ""),
+            stage_type=str(payload.get("stage_type") or ""),
+            status=str(payload.get("status") or ""),
+            started_at=str(payload.get("started_at") or ""),
+            finished_at=str(payload.get("finished_at") or ""),
+            metrics=dict(payload.get("metrics") or {}),
+            error=str(payload.get("error") or ""),
+            output_keys=[str(item) for item in payload.get("output_keys") or [] if str(item).strip()],
+            artifact_ids=[str(item) for item in payload.get("artifact_ids") or [] if str(item).strip()],
+        )
+
+
+def resolve_run_user_id(requested_by: str, user_id: str = "") -> str:
+    normalized_requested_by = str(requested_by or "").strip()
+    if normalized_requested_by.startswith("api:"):
+        return normalized_requested_by.split(":", 1)[1].strip()
+    return str(user_id or "").strip()
+
+
+@dataclass(slots=True)
+class RunRecord:
+    id: str
+    workspace_id: str
+    workflow_template_id: str
+    status: str
+    requested_by: str = ""
+    user_id: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    queued_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    current_stage_id: str = ""
+    last_error: str = ""
+    attempt_count: int = 0
+    max_attempts: int = 1
+    run_input_overrides: dict[str, Any] = field(default_factory=dict)
+    run_plan: RunPlan | None = None
+    stage_results: list[StageResult] = field(default_factory=list)
+    final_job_set_keys: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        workspace_id: str,
+        workflow_template_id: str,
+        run_input_overrides: Mapping[str, Any] | None = None,
+        requested_by: str = "",
+        user_id: str = "",
+        max_attempts: int = 1,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "RunRecord":
+        now = utc_now_iso()
+        return cls(
+            id=f"run_{uuid4().hex[:16]}",
+            workspace_id=workspace_id,
+            workflow_template_id=workflow_template_id,
+            status=RUN_STATUS_PLANNED,
+            requested_by=requested_by,
+            user_id=resolve_run_user_id(requested_by, user_id),
+            created_at=now,
+            updated_at=now,
+            max_attempts=max(1, int(max_attempts)),
+            run_input_overrides=dict(run_input_overrides or {}),
+            metadata=dict(metadata or {}),
+        )
+
+    @property
+    def normalized_user_id(self) -> str:
+        return resolve_run_user_id(self.requested_by, self.user_id)
+
+    @property
+    def is_test_run(self) -> bool:
+        if str(self.metadata.get("run_mode") or "").strip().lower() == "test":
+            return True
+        if self.run_plan is None:
+            return False
+        return str(self.run_plan.resolved_run_settings.get("run_mode") or "").strip().lower() == "test"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "workflow_template_id": self.workflow_template_id,
+            "status": self.status,
+            "requested_by": self.requested_by,
+            "user_id": self.normalized_user_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "queued_at": self.queued_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "current_stage_id": self.current_stage_id,
+            "last_error": self.last_error,
+            "attempt_count": self.attempt_count,
+            "max_attempts": self.max_attempts,
+            "run_input_overrides": dict(self.run_input_overrides),
+            "run_plan": self.run_plan.to_dict() if self.run_plan else None,
+            "stage_results": [result.to_dict() for result in self.stage_results],
+            "final_job_set_keys": list(self.final_job_set_keys),
+            "metadata": dict(self.metadata),
+            "is_test_run": self.is_test_run,
+            "run_mode": "test" if self.is_test_run else "normal",
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "RunRecord":
+        run_plan_payload = payload.get("run_plan")
+        requested_by = str(payload.get("requested_by") or "")
+        return cls(
+            id=str(payload.get("id") or ""),
+            workspace_id=str(payload.get("workspace_id") or ""),
+            workflow_template_id=str(payload.get("workflow_template_id") or ""),
+            status=str(payload.get("status") or RUN_STATUS_PLANNED),
+            requested_by=requested_by,
+            user_id=resolve_run_user_id(requested_by, str(payload.get("user_id") or "")),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            queued_at=str(payload.get("queued_at") or ""),
+            started_at=str(payload.get("started_at") or ""),
+            finished_at=str(payload.get("finished_at") or ""),
+            current_stage_id=str(payload.get("current_stage_id") or ""),
+            last_error=str(payload.get("last_error") or ""),
+            attempt_count=int(payload.get("attempt_count") or 0),
+            max_attempts=max(1, int(payload.get("max_attempts") or 1)),
+            run_input_overrides=dict(payload.get("run_input_overrides") or {}),
+            run_plan=RunPlan.from_dict(run_plan_payload) if isinstance(run_plan_payload, dict) else None,
+            stage_results=[
+                StageResult.from_dict(item) for item in payload.get("stage_results") or [] if isinstance(item, dict)
+            ],
+            final_job_set_keys=[str(item) for item in payload.get("final_job_set_keys") or [] if str(item).strip()],
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+# --- Career Profile lifecycle statuses ---
+
+CAREER_PROFILE_STATUS_NOT_STARTED = "not_started"
+CAREER_PROFILE_STATUS_EXTRACTING_EVIDENCE = "extracting_evidence"
+CAREER_PROFILE_STATUS_NEEDS_REVIEW = "needs_review"
+CAREER_PROFILE_STATUS_READY_FOR_TAILORING = "ready_for_tailoring"
+CAREER_PROFILE_STATUS_UNBOUND = "unbound"
+
+CAREER_PROFILE_STATUSES = {
+    CAREER_PROFILE_STATUS_NOT_STARTED,
+    CAREER_PROFILE_STATUS_EXTRACTING_EVIDENCE,
+    CAREER_PROFILE_STATUS_NEEDS_REVIEW,
+    CAREER_PROFILE_STATUS_READY_FOR_TAILORING,
+    CAREER_PROFILE_STATUS_UNBOUND,
+}
+
+
+@dataclass(slots=True)
+class CareerProfile:
+    profile_id: str
+    user_id: str
+    name: str
+    description: str = ""
+    preferred_language: str = "en"
+    target_direction: str = ""
+    bound_workspace_id: str = ""
+    baseline_cv_asset_id: str = ""
+    baseline_cv_display_name: str = ""
+    baseline_cv_extraction_date: str = ""
+    baseline_cv_source_version: str = ""
+    status: str = CAREER_PROFILE_STATUS_NOT_STARTED
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        user_id: str,
+        name: str,
+        description: str = "",
+        preferred_language: str = "en",
+        target_direction: str = "",
+        bound_workspace_id: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "CareerProfile":
+        now = utc_now_iso()
+        return cls(
+            profile_id=f"prof_{uuid4().hex[:16]}",
+            user_id=str(user_id).strip(),
+            name=str(name).strip(),
+            description=str(description).strip(),
+            preferred_language=str(preferred_language).strip() or "en",
+            target_direction=str(target_direction).strip(),
+            bound_workspace_id=str(bound_workspace_id).strip(),
+            status=CAREER_PROFILE_STATUS_NOT_STARTED,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "profile_id": self.profile_id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "description": self.description,
+            "preferred_language": self.preferred_language,
+            "target_direction": self.target_direction,
+            "bound_workspace_id": self.bound_workspace_id,
+            "baseline_cv_asset_id": self.baseline_cv_asset_id,
+            "baseline_cv_display_name": self.baseline_cv_display_name,
+            "baseline_cv_extraction_date": self.baseline_cv_extraction_date,
+            "baseline_cv_source_version": self.baseline_cv_source_version,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CareerProfile":
+        return cls(
+            profile_id=str(payload.get("profile_id") or ""),
+            user_id=str(payload.get("user_id") or ""),
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            preferred_language=str(payload.get("preferred_language") or "en"),
+            target_direction=str(payload.get("target_direction") or ""),
+            bound_workspace_id=str(payload.get("bound_workspace_id") or ""),
+            status=str(payload.get("status") or CAREER_PROFILE_STATUS_NOT_STARTED),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            baseline_cv_asset_id=str(payload.get("baseline_cv_asset_id") or ""),
+            baseline_cv_display_name=str(payload.get("baseline_cv_display_name") or ""),
+            baseline_cv_extraction_date=str(payload.get("baseline_cv_extraction_date") or ""),
+            baseline_cv_source_version=str(payload.get("baseline_cv_source_version") or ""),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+
+@dataclass(slots=True)
+class StageContext:
+    workspace: WorkspaceDefinition
+    workflow: WorkflowTemplate
+    run: RunRecord
+    repositories: Any
+    registries: Any
+    logger: Any
+    job_sets: dict[str, list[JobRecord]] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[ArtifactRecord] = field(default_factory=list)
+
+    def get_job_set(self, key: str) -> list[JobRecord]:
+        return list(self.job_sets.get(key) or [])
+
+    def get_job_dicts(self, key: str) -> list[dict[str, Any]]:
+        return [job.to_dict() for job in self.get_job_set(key)]
+
+    def set_job_set(self, key: str, jobs: list[JobRecord | Mapping[str, Any]]) -> None:
+        self.job_sets[key] = [
+            item if isinstance(item, JobRecord) else JobRecord.from_mapping(item)
+            for item in jobs
+        ]
+
+    def update_run_progress(
+        self,
+        *,
+        stage_id: str,
+        stage_type: str = "",
+        stage_name: str = "",
+        message: str = "",
+        counters: Mapping[str, Any] | None = None,
+        current_item: Mapping[str, Any] | None = None,
+        recent_failures: list[Mapping[str, Any]] | None = None,
+        status: str = "running",
+        extra: Mapping[str, Any] | None = None,
+        save: bool = True,
+    ) -> None:
+        now = utc_now_iso()
+        progress_payload = {
+            "stage_id": str(stage_id or self.run.current_stage_id or ""),
+            "stage_type": str(stage_type or ""),
+            "stage_name": str(stage_name or ""),
+            "status": str(status or "running"),
+            "message": str(message or ""),
+            "started_at": str(
+                (
+                    (self.run.metadata.get("progress") or {}).get("started_at")
+                    if isinstance(self.run.metadata.get("progress"), dict)
+                    else ""
+                )
+                or now
+            ),
+            "last_progress_at": now,
+            "counters": dict(counters or {}),
+            "current_item": dict(current_item or {}),
+            "recent_failures": [dict(item) for item in recent_failures or [] if item is not None],
+        }
+        if extra:
+            progress_payload.update(dict(extra))
+        self.run.metadata["progress"] = progress_payload
+        self.run.updated_at = now
+        if save:
+            self.repositories.run_repository.save(self.run)
+
+    def clear_run_progress(self, *, save: bool = True) -> None:
+        self.run.metadata.pop("progress", None)
+        self.run.updated_at = utc_now_iso()
+        if save:
+            self.repositories.run_repository.save(self.run)
+
+
+
+# --- Rebind Compatibility Review ---
+
+@dataclass(slots=True)
+class CompatibilityExperience:
+    """A single experience entry used in rebind compatibility comparison."""
+    experience_id: str
+    title: str = ""
+    company: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    description: str = ""
+    skills: list[str] = field(default_factory=list)
+    source: str = ""  # "preserved" or "new"
+    match_status: str = ""  # "match", "missing", "changed_date", "duplicate", "conflict"
+    match_details: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CompatibilityExperience":
+        return cls(
+            experience_id=str(payload.get("experience_id") or ""),
+            title=str(payload.get("title") or ""),
+            company=str(payload.get("company") or ""),
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+            description=str(payload.get("description") or ""),
+            skills=[str(item) for item in payload.get("skills") or [] if str(item).strip()],
+            source=str(payload.get("source") or ""),
+            match_status=str(payload.get("match_status") or ""),
+            match_details=str(payload.get("match_details") or ""),
+        )
+
+
+@dataclass(slots=True)
+class RebindCompatibilityReview:
+    """The result of a rebind compatibility review comparing preserved evidence against a new workspace."""
+    review_id: str
+    profile_id: str
+    workspace_id: str
+    baseline_cv_asset_id: str = ""
+    matching_experiences: list[CompatibilityExperience] = field(default_factory=list)
+    missing_experiences: list[CompatibilityExperience] = field(default_factory=list)
+    changed_dates: list[CompatibilityExperience] = field(default_factory=list)
+    possible_duplicates: list[CompatibilityExperience] = field(default_factory=list)
+    conflicts: list[CompatibilityExperience] = field(default_factory=list)
+    summary: str = ""
+    requires_confirmation: bool = False
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        workspace_id: str,
+        baseline_cv_asset_id: str = "",
+    ) -> "RebindCompatibilityReview":
+        return cls(
+            review_id=f"rebind_{uuid4().hex[:16]}",
+            profile_id=profile_id,
+            workspace_id=workspace_id,
+            baseline_cv_asset_id=baseline_cv_asset_id,
+            created_at=utc_now_iso(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "review_id": self.review_id,
+            "profile_id": self.profile_id,
+            "workspace_id": self.workspace_id,
+            "baseline_cv_asset_id": self.baseline_cv_asset_id,
+            "matching_experiences": [exp.to_dict() for exp in self.matching_experiences],
+            "missing_experiences": [exp.to_dict() for exp in self.missing_experiences],
+            "changed_dates": [exp.to_dict() for exp in self.changed_dates],
+            "possible_duplicates": [exp.to_dict() for exp in self.possible_duplicates],
+            "conflicts": [exp.to_dict() for exp in self.conflicts],
+            "summary": self.summary,
+            "requires_confirmation": self.requires_confirmation,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "RebindCompatibilityReview":
+        return cls(
+            review_id=str(payload.get("review_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            workspace_id=str(payload.get("workspace_id") or ""),
+            baseline_cv_asset_id=str(payload.get("baseline_cv_asset_id") or ""),
+            matching_experiences=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("matching_experiences") or []
+                if isinstance(item, dict)
+            ],
+            missing_experiences=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("missing_experiences") or []
+                if isinstance(item, dict)
+            ],
+            changed_dates=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("changed_dates") or []
+                if isinstance(item, dict)
+            ],
+            possible_duplicates=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("possible_duplicates") or []
+                if isinstance(item, dict)
+            ],
+            conflicts=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("conflicts") or []
+                if isinstance(item, dict)
+            ],
+            summary=str(payload.get("summary") or ""),
+            requires_confirmation=bool(payload.get("requires_confirmation") or False),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+        )
+
+# --- Baseline CV Replacement (CP-034) ---
+
+BASELINE_CV_REPLACEMENT_ACTION_ADD = "add"
+BASELINE_CV_REPLACEMENT_ACTION_IGNORE = "ignore"
+BASELINE_CV_REPLACEMENT_ACTION_NEEDS_REVIEW = "needs_review"
+BASELINE_CV_REPLACEMENT_ACTIONS = {
+    BASELINE_CV_REPLACEMENT_ACTION_ADD,
+    BASELINE_CV_REPLACEMENT_ACTION_IGNORE,
+    BASELINE_CV_REPLACEMENT_ACTION_NEEDS_REVIEW,
+}
+
+BASELINE_CV_DIFF_CATEGORY_MATCHING = "matching"
+BASELINE_CV_DIFF_CATEGORY_ADDED = "added"
+BASELINE_CV_DIFF_CATEGORY_REMOVED = "removed"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_TITLE = "changed_title"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_DATES = "changed_dates"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_BULLETS = "changed_bullets"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_COMPANY = "changed_company"
+
+
+@dataclass(slots=True)
+class BaselineCVBulletDiff:
+    """A single bullet-level diff between old and new CV experiences."""
+    bullet_id: str
+    text: str = ""
+    diff_category: str = ""
+    old_text: str = ""
+    new_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVBulletDiff":
+        return cls(
+            bullet_id=str(payload.get("bullet_id") or ""),
+            text=str(payload.get("text") or ""),
+            diff_category=str(payload.get("diff_category") or ""),
+            old_text=str(payload.get("old_text") or ""),
+            new_text=str(payload.get("new_text") or ""),
+        )
+
+
+
+@dataclass(slots=True)
+class BaselineCVExperienceDiff:
+    """Diff for a single experience entry between old and new baseline CVs."""
+    diff_id: str
+    diff_category: str = ""
+    old_experience_id: str = ""
+    new_experience_id: str = ""
+    old_title: str = ""
+    new_title: str = ""
+    old_company: str = ""
+    new_company: str = ""
+    old_start_date: str = ""
+    new_start_date: str = ""
+    old_end_date: str = ""
+    new_end_date: str = ""
+    old_description: str = ""
+    new_description: str = ""
+    bullet_diffs: list[BaselineCVBulletDiff] = field(default_factory=list)
+    old_skills: list[str] = field(default_factory=list)
+    new_skills: list[str] = field(default_factory=list)
+    suggested_action: str = ""
+    match_score: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "diff_id": self.diff_id,
+            "diff_category": self.diff_category,
+            "old_experience_id": self.old_experience_id,
+            "new_experience_id": self.new_experience_id,
+            "old_title": self.old_title,
+            "new_title": self.new_title,
+            "old_company": self.old_company,
+            "new_company": self.new_company,
+            "old_start_date": self.old_start_date,
+            "new_start_date": self.new_start_date,
+            "old_end_date": self.old_end_date,
+            "new_end_date": self.new_end_date,
+            "old_description": self.old_description,
+            "new_description": self.new_description,
+            "bullet_diffs": [bd.to_dict() for bd in self.bullet_diffs],
+            "old_skills": list(self.old_skills),
+            "new_skills": list(self.new_skills),
+            "suggested_action": self.suggested_action,
+            "match_score": self.match_score,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVExperienceDiff":
+        return cls(
+            diff_id=str(payload.get("diff_id") or ""),
+            diff_category=str(payload.get("diff_category") or ""),
+            old_experience_id=str(payload.get("old_experience_id") or ""),
+            new_experience_id=str(payload.get("new_experience_id") or ""),
+            old_title=str(payload.get("old_title") or ""),
+            new_title=str(payload.get("new_title") or ""),
+            old_company=str(payload.get("old_company") or ""),
+            new_company=str(payload.get("new_company") or ""),
+            old_start_date=str(payload.get("old_start_date") or ""),
+            new_start_date=str(payload.get("new_start_date") or ""),
+            old_end_date=str(payload.get("old_end_date") or ""),
+            new_end_date=str(payload.get("new_end_date") or ""),
+            old_description=str(payload.get("old_description") or ""),
+            new_description=str(payload.get("new_description") or ""),
+            bullet_diffs=[BaselineCVBulletDiff.from_dict(bd) for bd in payload.get("bullet_diffs") or [] if isinstance(bd, dict)],
+            old_skills=[str(s) for s in payload.get("old_skills") or [] if str(s).strip()],
+            new_skills=[str(s) for s in payload.get("new_skills") or [] if str(s).strip()],
+            suggested_action=str(payload.get("suggested_action") or ""),
+            match_score=float(payload.get("match_score") or 0.0),
+        )
+
+
+
+@dataclass(slots=True)
+class BaselineCVReplacementPreview:
+    """Non-mutating preview for a baseline CV replacement (CP-034)."""
+    preview_id: str
+    profile_id: str
+    old_baseline_cv_asset_id: str = ""
+    old_baseline_cv_display_name: str = ""
+    old_baseline_cv_source_version: str = ""
+    proposed_baseline_cv_asset_id: str = ""
+    proposed_baseline_cv_display_name: str = ""
+    proposed_baseline_cv_source_version: str = ""
+    experience_diffs: list[BaselineCVExperienceDiff] = field(default_factory=list)
+    summary: str = ""
+    requires_confirmation: bool = True
+    created_at: str = field(default_factory=utc_now_iso)
+    existing_evidence_count: int = 0
+    preserved_timestamp_count: int = 0
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        old_baseline_cv_asset_id: str = "",
+        old_baseline_cv_display_name: str = "",
+        old_baseline_cv_source_version: str = "",
+        proposed_baseline_cv_asset_id: str = "",
+        proposed_baseline_cv_display_name: str = "",
+        proposed_baseline_cv_source_version: str = "",
+    ) -> "BaselineCVReplacementPreview":
+        return cls(
+            preview_id=f"bcvrpreview_{uuid4().hex[:16]}",
+            profile_id=profile_id,
+            old_baseline_cv_asset_id=old_baseline_cv_asset_id,
+            old_baseline_cv_display_name=old_baseline_cv_display_name,
+            old_baseline_cv_source_version=old_baseline_cv_source_version,
+            proposed_baseline_cv_asset_id=proposed_baseline_cv_asset_id,
+            proposed_baseline_cv_display_name=proposed_baseline_cv_display_name,
+            proposed_baseline_cv_source_version=proposed_baseline_cv_source_version,
+            created_at=utc_now_iso(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "preview_id": self.preview_id,
+            "profile_id": self.profile_id,
+            "old_baseline_cv_asset_id": self.old_baseline_cv_asset_id,
+            "old_baseline_cv_display_name": self.old_baseline_cv_display_name,
+            "old_baseline_cv_source_version": self.old_baseline_cv_source_version,
+            "proposed_baseline_cv_asset_id": self.proposed_baseline_cv_asset_id,
+            "proposed_baseline_cv_display_name": self.proposed_baseline_cv_display_name,
+            "proposed_baseline_cv_source_version": self.proposed_baseline_cv_source_version,
+            "experience_diffs": [ed.to_dict() for ed in self.experience_diffs],
+            "summary": self.summary,
+            "requires_confirmation": self.requires_confirmation,
+            "created_at": self.created_at,
+            "existing_evidence_count": self.existing_evidence_count,
+            "preserved_timestamp_count": self.preserved_timestamp_count,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVReplacementPreview":
+        return cls(
+            preview_id=str(payload.get("preview_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            old_baseline_cv_asset_id=str(payload.get("old_baseline_cv_asset_id") or ""),
+            old_baseline_cv_display_name=str(payload.get("old_baseline_cv_display_name") or ""),
+            old_baseline_cv_source_version=str(payload.get("old_baseline_cv_source_version") or ""),
+            proposed_baseline_cv_asset_id=str(payload.get("proposed_baseline_cv_asset_id") or ""),
+            proposed_baseline_cv_display_name=str(payload.get("proposed_baseline_cv_display_name") or ""),
+            proposed_baseline_cv_source_version=str(payload.get("proposed_baseline_cv_source_version") or ""),
+            experience_diffs=[
+                BaselineCVExperienceDiff.from_dict(ed)
+                for ed in payload.get("experience_diffs") or []
+                if isinstance(ed, dict)
+            ],
+            summary=str(payload.get("summary") or ""),
+            requires_confirmation=bool(payload.get("requires_confirmation", True)),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            existing_evidence_count=int(payload.get("existing_evidence_count") or 0),
+            preserved_timestamp_count=int(payload.get("preserved_timestamp_count") or 0),
+        )
+
+
+# --- Work Experience Record ---
+
+WORK_EXPERIENCE_STATUS_ACTIVE = "active"
+WORK_EXPERIENCE_STATUS_MERGED = "merged"
+WORK_EXPERIENCE_STATUS_ARCHIVED = "archived"
+WORK_EXPERIENCE_STATUSES = {
+    WORK_EXPERIENCE_STATUS_ACTIVE,
+    WORK_EXPERIENCE_STATUS_MERGED,
+    WORK_EXPERIENCE_STATUS_ARCHIVED,
+}
+
+WORK_EXPERIENCE_SOURCE_KIND_MANUAL = "manual"
+WORK_EXPERIENCE_SOURCE_KIND_EXTRACTED = "extracted"
+WORK_EXPERIENCE_SOURCE_KIND_IMPORTED = "imported"
+WORK_EXPERIENCE_SOURCE_KINDS = {
+    WORK_EXPERIENCE_SOURCE_KIND_MANUAL,
+    WORK_EXPERIENCE_SOURCE_KIND_EXTRACTED,
+    WORK_EXPERIENCE_SOURCE_KIND_IMPORTED,
+}
+
+EMPLOYMENT_TYPE_FULL_TIME = "full_time"
+EMPLOYMENT_TYPE_PART_TIME = "part_time"
+EMPLOYMENT_TYPE_CONTRACT = "contract"
+EMPLOYMENT_TYPE_FREELANCE = "freelance"
+EMPLOYMENT_TYPE_INTERNSHIP = "internship"
+EMPLOYMENT_TYPE_SELF_EMPLOYED = "self_employed"
+EMPLOYMENT_TYPES = {
+    EMPLOYMENT_TYPE_FULL_TIME,
+    EMPLOYMENT_TYPE_PART_TIME,
+    EMPLOYMENT_TYPE_CONTRACT,
+    EMPLOYMENT_TYPE_FREELANCE,
+    EMPLOYMENT_TYPE_INTERNSHIP,
+    EMPLOYMENT_TYPE_SELF_EMPLOYED,
+}
+
+MERGE_SUGGESTION_STATUS_PENDING = "pending"
+MERGE_SUGGESTION_STATUS_CONFIRMED = "confirmed"
+MERGE_SUGGESTION_STATUS_DISMISSED = "dismissed"
+
+
+@dataclass(slots=True)
+class WorkExperienceRecord:
+    """An identifiable work-experience record extracted from a CV or supporting source."""
+    experience_id: str
+    profile_id: str
+    employer: str = ""
+    job_title: str = ""
+    location: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    employment_type: str = ""
+    description: str = ""
+    source_kind: str = WORK_EXPERIENCE_SOURCE_KIND_MANUAL
+    source_asset_ids: list[str] = field(default_factory=list)
+    status: str = WORK_EXPERIENCE_STATUS_ACTIVE
+    merged_into_id: str = ""
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        employer: str = "",
+        job_title: str = "",
+        location: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        employment_type: str = "",
+        description: str = "",
+        source_kind: str = WORK_EXPERIENCE_SOURCE_KIND_MANUAL,
+        source_asset_ids: list[str] | None = None,
+        sort_order: int = 0,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "WorkExperienceRecord":
+        now = utc_now_iso()
+        return cls(
+            experience_id=f"exp_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            employer=str(employer).strip(),
+            job_title=str(job_title).strip(),
+            location=str(location).strip(),
+            start_date=str(start_date).strip(),
+            end_date=str(end_date).strip(),
+            employment_type=str(employment_type).strip(),
+            description=str(description).strip(),
+            source_kind=str(source_kind or WORK_EXPERIENCE_SOURCE_KIND_MANUAL).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            status=WORK_EXPERIENCE_STATUS_ACTIVE,
+            merged_into_id="",
+            sort_order=int(sort_order or 0),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experience_id": self.experience_id,
+            "profile_id": self.profile_id,
+            "employer": self.employer,
+            "job_title": self.job_title,
+            "location": self.location,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "employment_type": self.employment_type,
+            "description": self.description,
+            "source_kind": self.source_kind,
+            "source_asset_ids": list(self.source_asset_ids),
+            "status": self.status,
+            "merged_into_id": self.merged_into_id,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WorkExperienceRecord":
+        return cls(
+            experience_id=str(payload.get("experience_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            employer=str(payload.get("employer") or ""),
+            job_title=str(payload.get("job_title") or ""),
+            location=str(payload.get("location") or ""),
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+            employment_type=str(payload.get("employment_type") or ""),
+            description=str(payload.get("description") or ""),
+            source_kind=str(payload.get("source_kind") or WORK_EXPERIENCE_SOURCE_KIND_MANUAL),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            status=str(payload.get("status") or WORK_EXPERIENCE_STATUS_ACTIVE),
+            merged_into_id=str(payload.get("merged_into_id") or ""),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class MergeSuggestion:
+    """A suggestion to merge two or more work experience records."""
+    suggestion_id: str
+    profile_id: str
+    experience_ids: list[str] = field(default_factory=list)
+    suggested_merged_record: dict[str, Any] = field(default_factory=dict)
+    match_score: float = 0.0
+    match_reason: str = ""
+    status: str = MERGE_SUGGESTION_STATUS_PENDING
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        experience_ids: list[str],
+        suggested_merged_record: Mapping[str, Any] | None = None,
+        match_score: float = 0.0,
+        match_reason: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "MergeSuggestion":
+        now = utc_now_iso()
+        return cls(
+            suggestion_id=f"merge_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            experience_ids=list(experience_ids),
+            suggested_merged_record=dict(suggested_merged_record or {}),
+            match_score=float(match_score or 0.0),
+            match_reason=str(match_reason).strip(),
+            status=MERGE_SUGGESTION_STATUS_PENDING,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "suggestion_id": self.suggestion_id,
+            "profile_id": self.profile_id,
+            "experience_ids": list(self.experience_ids),
+            "suggested_merged_record": dict(self.suggested_merged_record),
+            "match_score": self.match_score,
+            "match_reason": self.match_reason,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "MergeSuggestion":
+        return cls(
+            suggestion_id=str(payload.get("suggestion_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            experience_ids=[str(a).strip() for a in payload.get("experience_ids") or [] if str(a).strip()],
+            suggested_merged_record=dict(payload.get("suggested_merged_record") or {}),
+            match_score=float(payload.get("match_score") or 0.0),
+            match_reason=str(payload.get("match_reason") or ""),
+            status=str(payload.get("status") or MERGE_SUGGESTION_STATUS_PENDING),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+
+
+# --- Evidence Library (CP-015) ---
+
+EVIDENCE_VERIFICATION_STATE_UNVERIFIED = "unverified"
+EVIDENCE_VERIFICATION_STATE_VERIFIED = "verified"
+EVIDENCE_VERIFICATION_STATE_DISPUTED = "disputed"
+EVIDENCE_VERIFICATION_STATES = {
+    EVIDENCE_VERIFICATION_STATE_UNVERIFIED,
+    EVIDENCE_VERIFICATION_STATE_VERIFIED,
+    EVIDENCE_VERIFICATION_STATE_DISPUTED,
+}
+
+EVIDENCE_TYPE_ACHIEVEMENT = "achievement"
+EVIDENCE_TYPE_RESPONSIBILITY = "responsibility"
+EVIDENCE_TYPE_PROJECT = "project"
+EVIDENCE_TYPE_LEARNING = "learning"
+EVIDENCE_TYPE_LEADERSHIP = "leadership"
+EVIDENCE_TYPE_COLLABORATION = "collaboration"
+EVIDENCE_TYPE_PROBLEM_SOLVING = "problem_solving"
+EVIDENCE_TYPE_OTHER = "other"
+EVIDENCE_TYPES = {
+    EVIDENCE_TYPE_ACHIEVEMENT,
+    EVIDENCE_TYPE_RESPONSIBILITY,
+    EVIDENCE_TYPE_PROJECT,
+    EVIDENCE_TYPE_LEARNING,
+    EVIDENCE_TYPE_LEADERSHIP,
+    EVIDENCE_TYPE_COLLABORATION,
+    EVIDENCE_TYPE_PROBLEM_SOLVING,
+    EVIDENCE_TYPE_OTHER,
+}
+
+EVIDENCE_SOURCE_KIND_MANUAL = "manual"
+EVIDENCE_SOURCE_KIND_EXTRACTED = "extracted"
+EVIDENCE_SOURCE_KIND_IMPORTED = "imported"
+EVIDENCE_SOURCE_KINDS = {
+    EVIDENCE_SOURCE_KIND_MANUAL,
+    EVIDENCE_SOURCE_KIND_EXTRACTED,
+    EVIDENCE_SOURCE_KIND_IMPORTED,
+}
+
+
+@dataclass(slots=True)
+class EvidenceRecord:
+    """A reusable evidence item stored under a work experience.
+
+    This is a private evidence library — items are NOT automatically
+    shown in a CV.  They exist so you can capture more detail than a
+    short baseline CV bullet allows, and later select which evidence
+    to include when tailoring.
+    """
+
+    evidence_id: str
+    experience_id: str
+    profile_id: str
+    action: str = ""
+    why_it_mattered: str = ""
+    tools: str = ""
+    stakeholders: str = ""
+    challenge: str = ""
+    result: str = ""
+    metric: str = ""
+    source: str = EVIDENCE_SOURCE_KIND_MANUAL
+    source_asset_ids: list[str] = field(default_factory=list)
+    verification_state: str = EVIDENCE_VERIFICATION_STATE_UNVERIFIED
+    evidence_type: str = EVIDENCE_TYPE_ACHIEVEMENT
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        experience_id: str,
+        profile_id: str,
+        action: str = "",
+        why_it_mattered: str = "",
+        tools: str = "",
+        stakeholders: str = "",
+        challenge: str = "",
+        result: str = "",
+        metric: str = "",
+        source: str = EVIDENCE_SOURCE_KIND_MANUAL,
+        source_asset_ids: list[str] | None = None,
+        verification_state: str = EVIDENCE_VERIFICATION_STATE_UNVERIFIED,
+        evidence_type: str = EVIDENCE_TYPE_ACHIEVEMENT,
+        sort_order: int = 0,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "EvidenceRecord":
+        now = utc_now_iso()
+        return cls(
+            evidence_id=f"evid_{uuid4().hex[:16]}",
+            experience_id=str(experience_id).strip(),
+            profile_id=str(profile_id).strip(),
+            action=str(action).strip(),
+            why_it_mattered=str(why_it_mattered).strip(),
+            tools=str(tools).strip(),
+            stakeholders=str(stakeholders).strip(),
+            challenge=str(challenge).strip(),
+            result=str(result).strip(),
+            metric=str(metric).strip(),
+            source=str(source or EVIDENCE_SOURCE_KIND_MANUAL).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            verification_state=str(verification_state or EVIDENCE_VERIFICATION_STATE_UNVERIFIED).strip(),
+            evidence_type=str(evidence_type or EVIDENCE_TYPE_ACHIEVEMENT).strip(),
+            sort_order=int(sort_order or 0),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence_id": self.evidence_id,
+            "experience_id": self.experience_id,
+            "profile_id": self.profile_id,
+            "action": self.action,
+            "why_it_mattered": self.why_it_mattered,
+            "tools": self.tools,
+            "stakeholders": self.stakeholders,
+            "challenge": self.challenge,
+            "result": self.result,
+            "metric": self.metric,
+            "source": self.source,
+            "source_asset_ids": list(self.source_asset_ids),
+            "verification_state": self.verification_state,
+            "evidence_type": self.evidence_type,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceRecord":
+        return cls(
+            evidence_id=str(payload.get("evidence_id") or ""),
+            experience_id=str(payload.get("experience_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            action=str(payload.get("action") or ""),
+            why_it_mattered=str(payload.get("why_it_mattered") or ""),
+            tools=str(payload.get("tools") or ""),
+            stakeholders=str(payload.get("stakeholders") or ""),
+            challenge=str(payload.get("challenge") or ""),
+            result=str(payload.get("result") or ""),
+            metric=str(payload.get("metric") or ""),
+            source=str(payload.get("source") or EVIDENCE_SOURCE_KIND_MANUAL),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            verification_state=str(payload.get("verification_state") or EVIDENCE_VERIFICATION_STATE_UNVERIFIED),
+            evidence_type=str(payload.get("evidence_type") or EVIDENCE_TYPE_ACHIEVEMENT),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+# --- Job Application Binding (CP-017) ---
+
+EVIDENCE_SOURCE_KIND_IMPORTED = "imported"
+EVIDENCE_SOURCE_KINDS = {
+    EVIDENCE_SOURCE_KIND_MANUAL,
+    EVIDENCE_SOURCE_KIND_EXTRACTED,
+    EVIDENCE_SOURCE_KIND_IMPORTED,
+}
+
+
+
+# --- Job Application Binding (CP-017) ---
+
+APPLICATION_TYPE_TAILORED = "tailored"
+APPLICATION_TYPE_REUSABLE = "reusable"
+APPLICATION_TYPE_QUICK_APPLY = "quick_apply"
+APPLICATION_TYPES = {
+    APPLICATION_TYPE_TAILORED,
+    APPLICATION_TYPE_REUSABLE,
+    APPLICATION_TYPE_QUICK_APPLY,
+}
+
+REQUIREMENT_CATEGORY_SKILL = "skill"
+REQUIREMENT_CATEGORY_EXPERIENCE = "experience"
+REQUIREMENT_CATEGORY_EDUCATION = "education"
+REQUIREMENT_CATEGORY_LANGUAGE = "language"
+REQUIREMENT_CATEGORY_CERTIFICATION = "certification"
+REQUIREMENT_CATEGORY_TOOL = "tool"
+REQUIREMENT_CATEGORY_DOMAIN = "domain"
+REQUIREMENT_CATEGORY_OTHER = "other"
+REQUIREMENT_CATEGORIES = {
+    REQUIREMENT_CATEGORY_SKILL,
+    REQUIREMENT_CATEGORY_EXPERIENCE,
+    REQUIREMENT_CATEGORY_EDUCATION,
+    REQUIREMENT_CATEGORY_LANGUAGE,
+    REQUIREMENT_CATEGORY_CERTIFICATION,
+    REQUIREMENT_CATEGORY_TOOL,
+    REQUIREMENT_CATEGORY_DOMAIN,
+    REQUIREMENT_CATEGORY_OTHER,
+}
+
+MATCH_STATUS_STRONG = "strong"
+MATCH_STATUS_PARTIAL = "partial"
+MATCH_STATUS_MISSING = "missing"
+MATCH_STATUSES = {MATCH_STATUS_STRONG, MATCH_STATUS_PARTIAL, MATCH_STATUS_MISSING}
+
+
+@dataclass(slots=True)
+class ProfileRequirementMatch:
+    """A match between a job requirement and profile evidence."""
+    requirement_id: str
+    requirement_text: str
+    requirement_category: str = REQUIREMENT_CATEGORY_OTHER
+    match_status: str = MATCH_STATUS_MISSING
+    matched_evidence_ids: list[str] = field(default_factory=list)
+    match_score: float = 0.0
+    match_detail: str = ""
+    evidence_snippets: list[dict[str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requirement_id": self.requirement_id,
+            "requirement_text": self.requirement_text,
+            "requirement_category": self.requirement_category,
+            "match_status": self.match_status,
+            "matched_evidence_ids": list(self.matched_evidence_ids),
+            "match_score": self.match_score,
+            "match_detail": self.match_detail,
+            "evidence_snippets": [dict(s) for s in self.evidence_snippets],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ProfileRequirementMatch":
+        return cls(
+            requirement_id=str(payload.get("requirement_id") or ""),
+            requirement_text=str(payload.get("requirement_text") or ""),
+            requirement_category=str(payload.get("requirement_category") or REQUIREMENT_CATEGORY_OTHER),
+            match_status=str(payload.get("match_status") or MATCH_STATUS_MISSING),
+            matched_evidence_ids=[str(e) for e in payload.get("matched_evidence_ids") or [] if str(e).strip()],
+            match_score=float(payload.get("match_score") or 0.0),
+            match_detail=str(payload.get("match_detail") or ""),
+            evidence_snippets=[dict(s) for s in payload.get("evidence_snippets") or [] if isinstance(s, dict)],
+        )
+
+
+
+@dataclass(slots=True)
+class JobApplicationBinding:
+    """A binding that connects a career profile to a specific job application."""
+    binding_id: str
+    profile_id: str
+    job_id: str
+    run_id: str = ""
+    job_title: str = ""
+    company: str = ""
+    location: str = ""
+    target_role: str = ""
+    application_type: str = APPLICATION_TYPE_TAILORED
+    description_text: str = ""
+    extracted_requirements: list[dict[str, Any]] = field(default_factory=list)
+    extracted_themes: list[str] = field(default_factory=list)
+    requirement_matches: list[ProfileRequirementMatch] = field(default_factory=list)
+    match_summary: str = ""
+    coverage_score: float = 0.0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        job_id: str,
+        run_id: str = "",
+        job_title: str = "",
+        company: str = "",
+        location: str = "",
+        target_role: str = "",
+        application_type: str = APPLICATION_TYPE_TAILORED,
+        description_text: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "JobApplicationBinding":
+        now = utc_now_iso()
+        return cls(
+            binding_id=f"bind_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            job_id=str(job_id).strip(),
+            run_id=str(run_id).strip(),
+            job_title=str(job_title).strip(),
+            company=str(company).strip(),
+            location=str(location).strip(),
+            target_role=str(target_role).strip(),
+            application_type=str(application_type or APPLICATION_TYPE_TAILORED).strip() or APPLICATION_TYPE_TAILORED,
+            description_text=str(description_text).strip(),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "binding_id": self.binding_id,
+            "profile_id": self.profile_id,
+            "job_id": self.job_id,
+            "run_id": self.run_id,
+            "job_title": self.job_title,
+            "company": self.company,
+            "location": self.location,
+            "target_role": self.target_role,
+            "application_type": self.application_type,
+            "description_text": self.description_text,
+            "extracted_requirements": [dict(r) for r in self.extracted_requirements],
+            "extracted_themes": list(self.extracted_themes),
+            "requirement_matches": [m.to_dict() for m in self.requirement_matches],
+            "match_summary": self.match_summary,
+            "coverage_score": self.coverage_score,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "JobApplicationBinding":
+        return cls(
+            binding_id=str(payload.get("binding_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            job_id=str(payload.get("job_id") or ""),
+            run_id=str(payload.get("run_id") or ""),
+            job_title=str(payload.get("job_title") or ""),
+            company=str(payload.get("company") or ""),
+            location=str(payload.get("location") or ""),
+            target_role=str(payload.get("target_role") or ""),
+            application_type=str(payload.get("application_type") or APPLICATION_TYPE_TAILORED),
+            description_text=str(payload.get("description_text") or ""),
+            extracted_requirements=[dict(r) for r in payload.get("extracted_requirements") or [] if isinstance(r, dict)],
+            extracted_themes=[str(t) for t in payload.get("extracted_themes") or [] if str(t).strip()],
+            requirement_matches=[
+                ProfileRequirementMatch.from_dict(m)
+                for m in payload.get("requirement_matches") or []
+                if isinstance(m, dict)
+            ],
+            match_summary=str(payload.get("match_summary") or ""),
+            coverage_score=float(payload.get("coverage_score") or 0.0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+# --- Evidence Items and Evidence Links (CP-014) ---
+
+EVIDENCE_STATUS_UNLINKED = "unlinked"
+EVIDENCE_STATUS_LINKED = "linked"
+EVIDENCE_STATUS_AMBIGUOUS = "ambiguous"
+EVIDENCE_STATUS_CONFLICT = "conflict"
+EVIDENCE_STATUSES = {
+    EVIDENCE_STATUS_UNLINKED, EVIDENCE_STATUS_LINKED,
+    EVIDENCE_STATUS_AMBIGUOUS, EVIDENCE_STATUS_CONFLICT,
+}
+
+EVIDENCE_LINK_TARGET_WORK_EXPERIENCE = "work_experience"
+EVIDENCE_LINK_TARGET_PROJECT = "project"
+EVIDENCE_LINK_TARGET_EDUCATION = "education"
+EVIDENCE_LINK_TARGET_CERTIFICATION = "certification"
+EVIDENCE_LINK_TARGET_UNASSIGNED = "unassigned"
+EVIDENCE_LINK_TARGETS = {
+    EVIDENCE_LINK_TARGET_WORK_EXPERIENCE, EVIDENCE_LINK_TARGET_PROJECT,
+    EVIDENCE_LINK_TARGET_EDUCATION, EVIDENCE_LINK_TARGET_CERTIFICATION,
+    EVIDENCE_LINK_TARGET_UNASSIGNED,
+}
+
+
+@dataclass(slots=True)
+class EvidenceItem:
+    """A discrete piece of evidence extracted from a CV or supporting source."""
+    evidence_id: str
+    profile_id: str
+    text: str = ""
+    fact_type: str = ""
+    certainty: str = ""
+    source_asset_ids: list[str] = field(default_factory=list)
+    source_context: str = ""
+    extracted_employer: str = ""
+    extracted_role: str = ""
+    extracted_start_date: str = ""
+    extracted_end_date: str = ""
+    status: str = EVIDENCE_STATUS_UNLINKED
+    linked_target_count: int = 0
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, *, profile_id: str, text: str = "", fact_type: str = "",
+               certainty: str = "", source_asset_ids: list[str] | None = None,
+               source_context: str = "", extracted_employer: str = "",
+               extracted_role: str = "", extracted_start_date: str = "",
+               extracted_end_date: str = "", sort_order: int = 0,
+               metadata: Mapping[str, Any] | None = None) -> "EvidenceItem":
+        now = utc_now_iso()
+        return cls(
+            evidence_id=f"evd_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(), text=str(text).strip(),
+            fact_type=str(fact_type).strip(), certainty=str(certainty).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            source_context=str(source_context).strip(),
+            extracted_employer=str(extracted_employer).strip(),
+            extracted_role=str(extracted_role).strip(),
+            extracted_start_date=str(extracted_start_date).strip(),
+            extracted_end_date=str(extracted_end_date).strip(),
+            status=EVIDENCE_STATUS_UNLINKED, linked_target_count=0,
+            sort_order=int(sort_order or 0), created_at=now, updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence_id": self.evidence_id, "profile_id": self.profile_id,
+            "text": self.text, "fact_type": self.fact_type,
+            "certainty": self.certainty,
+            "source_asset_ids": list(self.source_asset_ids),
+            "source_context": self.source_context,
+            "extracted_employer": self.extracted_employer,
+            "extracted_role": self.extracted_role,
+            "extracted_start_date": self.extracted_start_date,
+            "extracted_end_date": self.extracted_end_date,
+            "status": self.status,
+            "linked_target_count": self.linked_target_count,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at, "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceItem":
+        return cls(
+            evidence_id=str(payload.get("evidence_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            text=str(payload.get("text") or ""),
+            fact_type=str(payload.get("fact_type") or ""),
+            certainty=str(payload.get("certainty") or ""),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            source_context=str(payload.get("source_context") or ""),
+            extracted_employer=str(payload.get("extracted_employer") or ""),
+            extracted_role=str(payload.get("extracted_role") or ""),
+            extracted_start_date=str(payload.get("extracted_start_date") or ""),
+            extracted_end_date=str(payload.get("extracted_end_date") or ""),
+            status=str(payload.get("status") or EVIDENCE_STATUS_UNLINKED),
+            linked_target_count=int(payload.get("linked_target_count") or 0),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+    @property
+    def is_linked(self) -> bool:
+        return self.status == EVIDENCE_STATUS_LINKED
+
+    @property
+    def needs_resolution(self) -> bool:
+        return self.status in (EVIDENCE_STATUS_UNLINKED, EVIDENCE_STATUS_AMBIGUOUS, EVIDENCE_STATUS_CONFLICT)
+
+
+
+@dataclass(slots=True)
+class EvidenceLink:
+    """A link from an evidence item to a concrete target."""
+    link_id: str
+    evidence_id: str
+    profile_id: str
+    target_type: str = ""
+    target_id: str = ""
+    target_label: str = ""
+    confidence: float = 0.0
+    suggestion_reason: str = ""
+    is_suggested: bool = True
+    is_primary: bool = False
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, *, evidence_id: str, profile_id: str,
+               target_type: str = EVIDENCE_LINK_TARGET_UNASSIGNED,
+               target_id: str = "", target_label: str = "",
+               confidence: float = 0.0, suggestion_reason: str = "",
+               is_suggested: bool = True, is_primary: bool = False,
+               sort_order: int = 0,
+               metadata: Mapping[str, Any] | None = None) -> "EvidenceLink":
+        now = utc_now_iso()
+        return cls(
+            link_id=f"elink_{uuid4().hex[:16]}",
+            evidence_id=str(evidence_id).strip(),
+            profile_id=str(profile_id).strip(),
+            target_type=str(target_type).strip() or EVIDENCE_LINK_TARGET_UNASSIGNED,
+            target_id=str(target_id).strip(),
+            target_label=str(target_label).strip(),
+            confidence=float(confidence or 0.0),
+            suggestion_reason=str(suggestion_reason).strip(),
+            is_suggested=bool(is_suggested), is_primary=bool(is_primary),
+            sort_order=int(sort_order or 0), created_at=now, updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "link_id": self.link_id, "evidence_id": self.evidence_id,
+            "profile_id": self.profile_id, "target_type": self.target_type,
+            "target_id": self.target_id, "target_label": self.target_label,
+            "confidence": self.confidence,
+            "suggestion_reason": self.suggestion_reason,
+            "is_suggested": self.is_suggested, "is_primary": self.is_primary,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at, "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceLink":
+        return cls(
+            link_id=str(payload.get("link_id") or ""),
+            evidence_id=str(payload.get("evidence_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            target_type=str(payload.get("target_type") or EVIDENCE_LINK_TARGET_UNASSIGNED),
+            target_id=str(payload.get("target_id") or ""),
+            target_label=str(payload.get("target_label") or ""),
+            confidence=float(payload.get("confidence") or 0.0),
+            suggestion_reason=str(payload.get("suggestion_reason") or ""),
+            is_suggested=bool(payload.get("is_suggested", True)),
+            is_primary=bool(payload.get("is_primary") or False),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "rc002-3001",
+    "text": "Data Analyst",
+    "hostedUrl": "https://jobs.lever.co/rc002-large/rc002-3001",
+    "applyUrl": "https://jobs.lever.co/rc002-large/rc002-3001/apply",
+    "categories": {
+      "location": "Munich, Germany",
+      "department": "Data",
+      "team": "Analytics",
+      "commitment": "Full-time"
+    },
+    "workplaceType": "hybrid",
+    "salaryRange": {"min": 70000, "max": 90000, "currency": "EUR"},
+    "customFields": {"language": "German"},
+    "updatedAt": "2026-08-10T09:00:00Z",
+    "descriptionPlain": "Explore product data and publish reliable insights."
+  }
+]

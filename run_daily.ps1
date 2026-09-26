@@ -1,11 +1,20 @@
 param(
+    [string]$WorkspaceId = "",
     [string]$PythonPath = ".\.venv\Scripts\python.exe",
     [string]$ProjectDir = $PSScriptRoot,
-    [string]$ExcelMode = "new-sheet"
+    [string]$DataDir = ".backend_data",
+    [ValidateSet("sqlite", "file")]
+    [string]$Storage = "sqlite",
+    [string]$OverrideJson = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not $WorkspaceId) {
+    Write-Host "ERROR: -WorkspaceId is required."
+    exit 1
+}
 
 Set-Location $ProjectDir
 
@@ -15,21 +24,36 @@ if (-not (Test-Path $logsDir)) {
 }
 
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-$logFile = Join-Path $logsDir "pipeline_$timestamp.log"
+$logFile = Join-Path $logsDir "workspace_run_$timestamp.log"
 
-Write-Host "Running daily pipeline..."
+Write-Host "Running workspace through unified backend..."
 Write-Host "ProjectDir: $ProjectDir"
+Write-Host "WorkspaceId: $WorkspaceId"
 Write-Host "PythonPath: $PythonPath"
-Write-Host "ExcelMode: $ExcelMode"
+Write-Host "Storage: $Storage"
+Write-Host "DataDir: $DataDir"
 Write-Host "Log: $logFile"
 
-& $PythonPath orchestrator.py --stage4-excel-mode $ExcelMode 2>&1 | Tee-Object -FilePath $logFile
+$cmd = @(
+    $PythonPath,
+    "workspace_runner.py",
+    "--data-dir", $DataDir,
+    "--storage", $Storage,
+    "run",
+    "--workspace", $WorkspaceId
+)
+
+if ($OverrideJson) {
+    $cmd += @("--override-json", $OverrideJson)
+}
+
+& $cmd 2>&1 | Tee-Object -FilePath $logFile
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -ne 0) {
-    Write-Host "Pipeline failed with exit code $exitCode"
+    Write-Host "Workspace run failed with exit code $exitCode"
     exit $exitCode
 }
 
-Write-Host "Pipeline completed successfully."
+Write-Host "Workspace run completed successfully."
 exit 0

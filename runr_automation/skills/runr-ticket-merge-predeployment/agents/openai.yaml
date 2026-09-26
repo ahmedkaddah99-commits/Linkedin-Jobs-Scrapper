@@ -1,0 +1,6 @@
+interface:
+  display_name: Runr Merge Predeployment
+  short_description: Promote one reviewed Runr issue to predeployment
+  default_prompt: Use the Runr predeployment merge skill for this issue.
+policy:
+  allow_implicit_invocation: false

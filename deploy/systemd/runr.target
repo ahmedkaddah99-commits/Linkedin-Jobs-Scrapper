@@ -1,0 +1,16 @@
+[Unit]
+Description=Runr application stack
+Wants=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-frontend.service
+After=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-frontend.service
+# The independent timers below are the only schedule owners. The conflicts
+# keep legacy combined/worker/export units from being active with this target.
+Conflicts=runr-acquisition-cycle.service runr-acquisition-cycle.timer runr-acquisition-export.service runr-acquisition-export.timer runr-acquisition-worker.service
+
+# Machine-readable ownership contract. Keep this block in sync with Wants= and
+# the three timer Unit= directives; comments are ignored by systemd.
+# RUNR_ACQUISITION_SCHEDULE_MANIFEST_BEGIN
+# {"schema_version":"runr.acquisition.schedule-manifest.v1","schedules":{"linkedin":{"owner_timer":"runr-acquisition-linkedin.timer","owner_service":"runr-acquisition-linkedin.service","calendar":"*-*-* 02:00:00"},"employer":{"owner_timer":"runr-acquisition-employer.timer","owner_service":"runr-acquisition-employer.service","calendar":"*-*-* 02:30:00"},"publisher":{"owner_timer":"runr-acquisition-publisher.timer","owner_service":"runr-acquisition-publisher.service","calendar":"*-*-* 04:00:00"}},"disabled_units":["runr-acquisition-cycle.service","runr-acquisition-cycle.timer","runr-acquisition-export.service","runr-acquisition-export.timer","runr-acquisition-worker.service"],"runtime_contract":{"overlap":{"lock":"flock -n per-source lock; publisher also takes both source locks","exit_code":75,"systemd_success":true},"timeout":{"source_seconds":900,"publisher_seconds":900,"timeout_exit_code":124,"receipt_status":"failed"},"failure":{"nonzero_exit_preserved":true,"receipt_status":"failed"}}}
+# RUNR_ACQUISITION_SCHEDULE_MANIFEST_END
+
+[Install]
+WantedBy=multi-user.target

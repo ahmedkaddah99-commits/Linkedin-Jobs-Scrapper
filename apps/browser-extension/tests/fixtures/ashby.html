@@ -1,0 +1,51 @@
+<!doctype html>
+<!--
+  Sanitized ashby application fixture.
+
+  Reproduces the control mix and labelling of a real ashby application form so
+  provider support is proven by inspection and filling, not by URL detection.
+  Employer, job, and identifiers are fictional; no candidate data appears here.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Backend Engineer | Application</title>
+    <meta property="og:title" content="Backend Engineer" />
+    <meta property="og:site_name" content="Northwind Industries" />
+  </head>
+  <body>
+    <main class="ashby-application-form">
+      <h1>Backend Engineer</h1>
+      <form id="application">
+        <label for="_systemfield_name">Full name *</label>
+        <input id="_systemfield_name" name="_systemfield_name" type="text" required />
+        <label for="_systemfield_email">Email *</label>
+        <input id="_systemfield_email" name="_systemfield_email" type="email" required />
+        <label for="_systemfield_phone">Phone</label>
+        <input id="_systemfield_phone" name="_systemfield_phone" type="tel" />
+        <label for="linkedin">LinkedIn URL</label>
+        <input id="linkedin" name="linkedin" type="text" />
+        <label for="website">Website</label>
+        <input id="website" name="website" type="text" />
+
+        <label for="resume">Resume/CV *</label>
+        <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+
+        <label for="cover-letter">Cover Letter</label>
+        <input id="cover-letter" name="cover_letter" type="file" accept=".pdf,.doc,.docx" />
+
+        <label for="work-auth">Are you authorized to work in this country? *</label>
+        <select id="work-auth" name="work_authorization" required>
+          <option value="">Select an option</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+
+        <label for="why">Why are you interested in this role?</label>
+        <textarea id="why" name="why"></textarea>
+
+        <button type="submit" id="send">Submit application</button>
+      </form>
+    </main>
+  </body>
+</html>

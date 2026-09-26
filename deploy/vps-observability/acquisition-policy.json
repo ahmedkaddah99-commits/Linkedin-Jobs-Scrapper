@@ -1,0 +1,8 @@
+{
+  "owner": "Ahmed Kaddah",
+  "decided_at": "2026-09-26",
+  "purpose": "Keep VPS acquisition running unattended for end-to-end validation; there are currently no customers.",
+  "required_enabled_timers": ["runr-acquisition-linkedin.timer", "runr-acquisition-employer.timer", "runr-acquisition-publisher.timer"],
+  "legacy_scheduler_disabled": true,
+  "agent_instruction": "Do not silently disable, mask, pause, reduce budgets, or change these schedules because the app is deployed or because customers are assumed. Keep the dedicated collectors and publisher enabled across reboots and deployments. A temporary owner-approved maintenance pause requires /etc/runr/acquisition-pause.json with approved_by, reason, and expires_at; report the pause and restore execution afterwards. Preserve existing finite request budgets, locks, timeouts, and publication validity rules."
+}

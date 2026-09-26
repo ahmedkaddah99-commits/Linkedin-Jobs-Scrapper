@@ -1,0 +1,255 @@
+{
+  "description": "Representative employer coverage scenarios for receipt classification tests.",
+  "scenarios": [
+    {
+      "name": "greenhouse_paginated_complete",
+      "family": "ats_native",
+      "expected_classification": "confirmed_complete",
+      "result": {
+        "company": {"canonical_company_id": "greenhouse-co", "company_name": "Greenhouse Co", "website_url": "https://greenhouse.example"},
+        "jobs": [{"source_job_id": "g1", "title": "Engineer"}],
+        "targets": [
+          {
+            "url": "https://boards.greenhouse.io/greenhouse-co",
+            "provider": "greenhouse",
+            "discovery_method": "ats_signature",
+            "status": "complete_with_jobs",
+            "counts": {"jobs_observed": 1, "jobs_accepted": 1, "requests": 3, "pages": 3, "detail_failures": 0},
+            "extraction_methods": ["ats_api"],
+            "stop_reason": "pagination_complete",
+            "complete_snapshot": true,
+            "completeness_evidence": {"complete_snapshot": true, "pagination_complete": true, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "complete_with_jobs",
+        "coverage": {"outcome": "complete_with_jobs", "stop_reason": "collection_completed", "completeness_evidence": {"complete_snapshot": true}}
+      }
+    },
+    {
+      "name": "lever_complete_zero",
+      "family": "ats_native",
+      "expected_classification": "confirmed_complete",
+      "result": {
+        "company": {"canonical_company_id": "lever-co", "company_name": "Lever Co", "website_url": "https://lever.example"},
+        "jobs": [],
+        "targets": [
+          {
+            "url": "https://jobs.lever.co/lever-co",
+            "provider": "lever",
+            "discovery_method": "ats_signature",
+            "status": "confirmed_zero",
+            "counts": {"jobs_observed": 0, "jobs_accepted": 0, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["ats_api"],
+            "stop_reason": "pagination_complete",
+            "complete_snapshot": true,
+            "completeness_evidence": {"complete_snapshot": true, "pagination_complete": true, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "confirmed_zero",
+        "coverage": {"outcome": "confirmed_zero", "stop_reason": "collection_completed", "completeness_evidence": {"complete_snapshot": true}}
+      }
+    },
+    {
+      "name": "workday_paginated_complete",
+      "family": "ats_expansion",
+      "expected_classification": "confirmed_complete",
+      "result": {
+        "company": {"canonical_company_id": "workday-co", "company_name": "Workday Co", "website_url": "https://workday.example"},
+        "jobs": [{"source_job_id": "w1", "title": "Analyst"}],
+        "targets": [
+          {
+            "url": "https://workday.wd101.myworkdayjobs.com/workday-co",
+            "provider": "workday",
+            "discovery_method": "ats_signature",
+            "status": "complete_with_jobs",
+            "counts": {"jobs_observed": 1, "jobs_accepted": 1, "requests": 2, "pages": 2, "detail_failures": 0},
+            "extraction_methods": ["ats_api"],
+            "stop_reason": "pagination_complete",
+            "complete_snapshot": true,
+            "completeness_evidence": {"complete_snapshot": true, "pagination_complete": true, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "complete_with_jobs",
+        "coverage": {"outcome": "complete_with_jobs", "stop_reason": "collection_completed", "completeness_evidence": {"complete_snapshot": true}}
+      }
+    },
+    {
+      "name": "personio_paginated_complete",
+      "family": "ats_expansion",
+      "expected_classification": "confirmed_complete",
+      "result": {
+        "company": {"canonical_company_id": "personio-co", "company_name": "Personio Co", "website_url": "https://personio.example"},
+        "jobs": [{"source_job_id": "p1", "title": "Manager"}],
+        "targets": [
+          {
+            "url": "https://personio-co.jobs.personio.de",
+            "provider": "personio",
+            "discovery_method": "ats_signature",
+            "status": "complete_with_jobs",
+            "counts": {"jobs_observed": 1, "jobs_accepted": 1, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["ats_api"],
+            "stop_reason": "pagination_complete",
+            "complete_snapshot": true,
+            "completeness_evidence": {"complete_snapshot": true, "pagination_complete": true, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "complete_with_jobs",
+        "coverage": {"outcome": "complete_with_jobs", "stop_reason": "collection_completed", "completeness_evidence": {"complete_snapshot": true}}
+      }
+    },
+    {
+      "name": "generic_jsonld_single_page_partial",
+      "family": "generic_direct",
+      "expected_classification": "partial",
+      "result": {
+        "company": {"canonical_company_id": "generic-co", "company_name": "Generic Co", "website_url": "https://generic.example"},
+        "jobs": [{"source_job_id": "j1", "title": "Designer"}],
+        "targets": [
+          {
+            "url": "https://generic.example/careers",
+            "provider": "generic_employer_site",
+            "discovery_method": "homepage_link",
+            "status": "partial",
+            "counts": {"jobs_observed": 1, "jobs_accepted": 1, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["json_ld"],
+            "stop_reason": "pagination_unverified",
+            "complete_snapshot": false,
+            "completeness_evidence": {"complete_snapshot": false, "pagination_complete": false, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "partial",
+        "coverage": {"outcome": "partial", "stop_reason": "collection_uncertain", "completeness_evidence": {"complete_snapshot": false}}
+      }
+    },
+    {
+      "name": "generic_browser_rendered_partial",
+      "family": "generic_browser",
+      "expected_classification": "partial",
+      "result": {
+        "company": {"canonical_company_id": "browser-co", "company_name": "Browser Co", "website_url": "https://browser.example"},
+        "jobs": [{"source_job_id": "b1", "title": "Frontend"}],
+        "targets": [
+          {
+            "url": "https://browser.example/jobs",
+            "provider": "generic_employer_site",
+            "discovery_method": "browser_rendered_discovery",
+            "status": "partial",
+            "counts": {"jobs_observed": 1, "jobs_accepted": 1, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["browser_rendered"],
+            "stop_reason": "pagination_unverified",
+            "complete_snapshot": false,
+            "completeness_evidence": {"complete_snapshot": false, "pagination_complete": false, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "partial",
+        "coverage": {"outcome": "partial", "stop_reason": "collection_uncertain", "completeness_evidence": {"complete_snapshot": false}}
+      }
+    },
+    {
+      "name": "blocked_captcha",
+      "family": "generic_direct",
+      "expected_classification": "blocked",
+      "result": {
+        "company": {"canonical_company_id": "blocked-co", "company_name": "Blocked Co", "website_url": "https://blocked.example"},
+        "jobs": [],
+        "targets": [
+          {
+            "url": "https://blocked.example/careers",
+            "provider": "generic_employer_site",
+            "discovery_method": "homepage_link",
+            "status": "blocked",
+            "counts": {"jobs_observed": 0, "jobs_accepted": 0, "requests": 1, "pages": 0, "detail_failures": 0},
+            "extraction_methods": [],
+            "stop_reason": "challenge_page",
+            "complete_snapshot": false,
+            "completeness_evidence": {"complete_snapshot": false, "credible_evidence": false}
+          }
+        ],
+        "failures": [{"stage": "source", "error": "cf-chl- challenge page"}],
+        "outcome": "blocked",
+        "coverage": {"outcome": "blocked", "stop_reason": "challenge_page"}
+      }
+    },
+    {
+      "name": "failed_timeout",
+      "family": "generic_browser",
+      "expected_classification": "failed",
+      "result": {
+        "company": {"canonical_company_id": "timeout-co", "company_name": "Timeout Co", "website_url": "https://timeout.example"},
+        "jobs": [],
+        "targets": [
+          {
+            "url": "https://timeout.example/careers",
+            "provider": "generic_employer_site",
+            "discovery_method": "homepage_link",
+            "status": "browser_failed",
+            "counts": {"jobs_observed": 0, "jobs_accepted": 0, "requests": 1, "pages": 0, "detail_failures": 0},
+            "extraction_methods": ["browser_rendered"],
+            "stop_reason": "timeout",
+            "complete_snapshot": false,
+            "completeness_evidence": {"complete_snapshot": false, "credible_evidence": false}
+          }
+        ],
+        "failures": [{"stage": "source", "error": "timeout"}],
+        "outcome": "failed",
+        "coverage": {"outcome": "failed", "stop_reason": "timeout"}
+      }
+    },
+    {
+      "name": "empty_authoritative_source",
+      "family": "ats_native",
+      "expected_classification": "confirmed_complete",
+      "result": {
+        "company": {"canonical_company_id": "empty-co", "company_name": "Empty Co", "website_url": "https://empty.example"},
+        "jobs": [],
+        "targets": [
+          {
+            "url": "https://boards.greenhouse.io/empty-co",
+            "provider": "greenhouse",
+            "discovery_method": "ats_signature",
+            "status": "confirmed_zero",
+            "counts": {"jobs_observed": 0, "jobs_accepted": 0, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["ats_api"],
+            "stop_reason": "pagination_complete",
+            "complete_snapshot": true,
+            "completeness_evidence": {"complete_snapshot": true, "pagination_complete": true, "credible_evidence": true}
+          }
+        ],
+        "failures": [],
+        "outcome": "confirmed_zero",
+        "coverage": {"outcome": "confirmed_zero", "stop_reason": "collection_completed"}
+      }
+    },
+    {
+      "name": "suspicious_empty_not_complete",
+      "family": "generic_direct",
+      "expected_classification": "partial",
+      "result": {
+        "company": {"canonical_company_id": "suspicious-co", "company_name": "Suspicious Co", "website_url": "https://suspicious.example"},
+        "jobs": [],
+        "targets": [
+          {
+            "url": "https://suspicious.example/careers",
+            "provider": "generic_employer_site",
+            "discovery_method": "homepage_link",
+            "status": "completed",
+            "counts": {"jobs_observed": 0, "jobs_accepted": 0, "requests": 1, "pages": 1, "detail_failures": 0},
+            "extraction_methods": ["static_html"],
+            "stop_reason": "pagination_unverified",
+            "complete_snapshot": false,
+            "completeness_evidence": {"complete_snapshot": false, "pagination_complete": false, "credible_evidence": false}
+          }
+        ],
+        "failures": [],
+        "outcome": "partial",
+        "coverage": {"outcome": "partial", "stop_reason": "collection_uncertain"}
+      }
+    }
+  ]
+}

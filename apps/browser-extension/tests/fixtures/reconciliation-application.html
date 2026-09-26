@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head><meta charset="UTF-8"><title>AA-202 reconciliation fixture</title></head>
+  <body>
+    <main id="reconciliation-fixture" data-aa202-remounts="0">
+      <h1>Sanitized reconciliation fixture</h1>
+      <section id="entries" aria-label="Visible ATS entries"></section>
+    </main>
+    <script>
+      const initialEntries = [
+        { atsEntryId: "exp-acme-senior", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Senior Engineer", startDate: "2020-01", endDate: "2022-06", current: false, location: "Berlin", content: "Built platform foundations." },
+        { atsEntryId: "exp-acme-engineer", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Engineer", startDate: "2022-07", current: true, location: "Berlin", content: "Maintained services." },
+        { atsEntryId: "exp-beta-engineer", kind: "experience", employerOrInstitution: "Beta Labs", titleOrDegree: "Engineer", startDate: "2021-01", endDate: "2023-12", current: false, location: "Paris", content: "Built data tooling." },
+        { atsEntryId: "edu-uni", kind: "education", employerOrInstitution: "University of Example", titleOrDegree: "BSc Computer Science", startDate: "2014-09", endDate: "2018-06", location: "Berlin", content: "Computer science degree." },
+      ];
+      const stateKey = "aa202-reconciliation-state";
+      const readState = () => JSON.parse(localStorage.getItem(stateKey) || JSON.stringify(initialEntries));
+      const render = () => {
+        document.getElementById("entries").innerHTML = readState().map((entry) => `
+          <article data-ats-entry-id="${entry.atsEntryId}" data-kind="${entry.kind}">
+            <span data-field="employer-or-institution">${entry.employerOrInstitution}</span>
+            <span data-field="title-or-degree">${entry.titleOrDegree}</span>
+            <span data-field="start-date">${entry.startDate || ""}</span>
+            <span data-field="end-date">${entry.endDate || ""}</span>
+            <span data-field="current">${entry.current ? "current" : "past"}</span>
+            <span data-field="location">${entry.location || ""}</span>
+            <span data-field="content">${entry.content || ""}</span>
+          </article>`).join("");
+      };
+      window.__aa202Fixture = {
+        readEntries: () => readState(),
+        applyEntries: (entries) => { localStorage.setItem(stateKey, JSON.stringify(entries)); render(); },
+        remount: () => { document.getElementById("reconciliation-fixture").dataset.aa202Remounts = String(Number(document.getElementById("reconciliation-fixture").dataset.aa202Remounts || "0") + 1); render(); },
+        reset: () => { localStorage.removeItem(stateKey); render(); },
+      };
+      render();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+interface:
+  display_name: Runr Ticket Implementation
+  short_description: Implement one Runr issue independently
+  default_prompt: Use the standalone Runr ticket implementation skill for this issue.
+policy:
+  allow_implicit_invocation: false
+

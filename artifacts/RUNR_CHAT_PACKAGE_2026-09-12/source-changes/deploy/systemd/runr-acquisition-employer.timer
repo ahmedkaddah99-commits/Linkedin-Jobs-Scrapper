@@ -1,0 +1,11 @@
+[Unit]
+Description=Runr daily employer-site acquisition timer
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=runr-acquisition-employer.service
+
+[Install]
+WantedBy=timers.target
