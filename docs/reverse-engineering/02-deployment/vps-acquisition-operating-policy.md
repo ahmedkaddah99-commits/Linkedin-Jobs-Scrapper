@@ -7,7 +7,7 @@ This supersedes earlier precautionary stops based on assumed customer traffic.
 
 ## Every agent and deployment
 
-- Keep the dedicated LinkedIn, employer, and publisher timers enabled and active
+- Keep the dedicated LinkedIn, employer, publisher, and off-host backup timers enabled and active
   across sessions, reboots, verification, and deployments. Inactive oneshot
   services between scheduled runs are normal; disabled timers are not.
 - Do not silently disable/mask those timers, turn off their network access,
@@ -28,8 +28,14 @@ This supersedes earlier precautionary stops based on assumed customer traffic.
 installed `/opt/runr-ops/observe.py` runs through `runr-acquisition-health.timer`
 every minute, restores accidentally disabled dedicated timers, and records
 repairs in its snapshot and journal. It lives outside `/opt/runr` so replacing
-application code does not replace it. The three source timers remain daily,
-with their existing finite limits; this policy does not create unbounded loops.
+application code does not replace it. The three source timers and the off-host
+backup timer remain daily, with their existing finite limits; this policy does
+not create unbounded loops.
+
+**Owner decision, 2026-09-26:** `runr-acquisition-backup.timer` may not be
+disabled, stopped, masked, or omitted by an agent or deployment unless Ahmed
+Kaddah explicitly instructs it. The independently installed health guard
+enforces this timer alongside the LinkedIn, employer, and publisher timers.
 
 An explicitly owner-approved maintenance pause uses
 `/etc/runr/acquisition-pause.json`, containing `approved_by: "Ahmed Kaddah"`,
@@ -152,6 +158,30 @@ installation require their credentials and cannot be claimed without them.
 Focused tests: `.venv\Scripts\python.exe -m pytest -q tests/test_vps_observability.py`.
 The installer validates Alloy before restart and keeps timestamped backups under
 `/etc/alloy`. A live disable/guard-repair test restored the LinkedIn timer.
+
+## Continuous acquisition and manifest synchronization (2026-09-28)
+
+The dedicated source timers run bounded rounds repeatedly. LinkedIn and
+employer wait ten minutes after a round becomes inactive; the publisher retries
+every minute. Exit 75 is an expected lock-overlap retry for all three services
+and is accepted by systemd. Employer rounds are limited to ten companies after
+a 100-company live round hit the enforced one-hour timeout without producing a
+completed metrics payload.
+
+`runr-acquisition-manifest-refresh.timer` rebuilds the immutable eligibility
+bundle every six hours from preserved producer evidence plus every live
+canonical company. Catalog-only fields become eligible only with verified
+provenance; company-table presence alone is insufficient. The refresh validates
+the manifest and sidecar before atomically switching the `active` symlink.
+Unverified and conflicting identities remain explicit blocked decisions.
+
+Employer rounds currently run in easy-first mode: browser fallback is deferred,
+direct/ATS/structured methods use a ten-second request timeout, and traversal is
+bounded to five targets and five ATS pages per company. Inspect
+`/srv/runr/exports/employer/employer_company_method_audit.jsonl` for the exact
+methods attempted, succeeded, completed without jobs, or deferred for each
+company. Hard cases remain retryable and can later be processed by a separate
+browser-enabled policy without slowing the easy queue.
 
 Preserve `/opt/runr-ops`, its units, and current Alloy configuration during upgrades.
 To undo only the publisher binding, rename the exact `50-owner-approved-catalog.conf`

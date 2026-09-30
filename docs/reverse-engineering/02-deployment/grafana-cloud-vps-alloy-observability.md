@@ -6,6 +6,20 @@ Grafana Alloy runs on the `runr-vps` host and sends host metrics to Grafana Clou
 
 Application-level checks were installed on 2026-09-26. Read [vps-acquisition-operating-policy.md](vps-acquisition-operating-policy.md) for per-source outcomes, agent JSON queries, the timer guard, and the publisher's shared catalog binding. The prepared dashboard is `deploy/vps-observability/dashboard.json`.
 
+## Aggregate company and job pipeline overview
+
+The owner-requested overview is at https://pluckyhovercraft81.grafana.net/d/runr-data-pipeline .
+It adds aggregate company completeness/readiness, manifest inclusion and exclusion
+reasons, source outcomes versus configured limits, producer inventory, import
+backlog proxies, catalog/publication counts, resolver inactivity and infrastructure.
+It does not load job/company rows into Grafana or change scraper budgets.
+
+`runr-pipeline-overview.timer` refreshes SQL/streamed summaries every five minutes;
+Alloy ships `/var/lib/runr/observability/pipeline.prom` through the existing textfile
+collector. Section health and last-success age distinguish stale/unavailable data
+from zero. Public HTTP availability is not authenticated UI correctness.
+Implementation, deployment and interpretation: [PIPELINE.md](../../../deploy/vps-observability/PIPELINE.md).
+
 - Local staging file: `user_config/grafana-cloud-alloy-vps-token.txt`. It contains only the Grafana Cloud access-policy token value, with no quotes, key name, or other text. This is a local secret file and must never be committed, printed, or pasted into chat.
 - Recommended Grafana token display name: `runr-vps-prod-alloy-telemetry`. This is metadata in Grafana, not part of the token value. Do not rotate a working token solely to change its display name.
 - The local file is a staging copy for an operator/agent. The live VPS service reads `GCLOUD_RW_API_KEY` from `/etc/systemd/system/alloy.service.d/env.conf`; that file is root-owned and mode `0600`.

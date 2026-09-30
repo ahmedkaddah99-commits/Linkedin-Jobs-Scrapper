@@ -1,5 +1,11 @@
 # Live acquisition stage charts — design
 
+> Superseded in part by the owner's later 2026-09-28 direction: location
+> charts are removed. The operational dashboard now prioritizes latest source
+> run outcomes (full/partial/failed, valid cards, details written), stage
+> movement over time and publisher outcomes. The location requirements below
+> record the earlier approved version; they are no longer acceptance criteria.
+
 ## Purpose and approved scope
 
 The owner needs to see real job volume over time, split by LinkedIn versus employer-site collection, location and the **collection pipeline stage**: collected → detailed → imported → published. This is an operational diagnostic view: it should reveal where jobs stop moving without loading individual jobs into Grafana or consuming enrichment credits. “Location” means city; show the top ten cities plus Other and Unknown. The owner manually refreshes the browser when needed. Underlying aggregates must continue to be produced from current data, not screenshot numbers or hardcoded values.

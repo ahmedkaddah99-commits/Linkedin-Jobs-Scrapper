@@ -162,7 +162,7 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
                 "Company_Enrich_API_URL_v999": "slot-nine-nine-nine-token",
                 "Company_Enrich_API_URL_not_numeric": "ignored",
             },
-            clear=False,
+            clear=True,
         ):
             credentials = discover_company_enrich_credentials()
 
@@ -455,6 +455,11 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
                 os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = original
         self.assertIsInstance(provider, WebshareLinkedInCompanyProvider)
 
+    def test_webshare_linkedin_provider_fails_closed_without_scrapeops_fallback(self):
+        provider = WebshareLinkedInCompanyProvider()
+        with self.assertRaisesRegex(RuntimeError, "webshare_linkedin_transport_unavailable"):
+            provider._proxy_fetch("https://www.linkedin.com/company/acme")
+
     def test_webshare_linkedin_provider_fetches_and_validates_linkedin_logo(self):
         html = """
         <html><head>
@@ -487,6 +492,84 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["logo_bytes"], VALID_SVG)
         self.assertEqual(result["logo_content_type"], "image/svg+xml")
         self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
+
+    def test_linkedin_provider_extracts_explicit_about_website_redirect(self):
+        html = """
+        <html><head><meta property="og:title" content="Acme GmbH | LinkedIn"></head>
+        <body><div data-test-id="about-us__website">
+          <a href="https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fwww.acme.example%2F&amp;trk=about_website">
+            https://www.acme.example/
+          </a>
+        </div></body></html>
+        """
+        provider = WebshareLinkedInCompanyProvider()
+        parsed = provider._parse_linkedin_page(
+            company={"canonical_name": "Acme GmbH"},
+            linkedin_url="https://www.linkedin.com/company/acme",
+            html_text=html,
+            final_url="https://www.linkedin.com/company/acme",
+        )
+        self.assertEqual(parsed[0]["website"], "https://www.acme.example/")
+        self.assertEqual(parsed[1]["linkedin_website"], "https://www.acme.example/")
+
+    def test_linkedin_provider_uses_external_jsonld_same_as_not_linkedin_url(self):
+        html = """
+        <html><head><meta property="og:title" content="Acme GmbH | LinkedIn">
+          <script type="application/ld+json">
+          {"@type":"Organization","url":"https://www.linkedin.com/company/acme","sameAs":"http://acme.example/"}
+          </script>
+        </head></html>
+        """
+        provider = WebshareLinkedInCompanyProvider()
+        parsed = provider._parse_linkedin_page(
+            company={"canonical_name": "Acme GmbH"},
+            linkedin_url="https://www.linkedin.com/company/acme",
+            html_text=html,
+            final_url="https://www.linkedin.com/company/acme",
+        )
+        self.assertEqual(parsed[0]["website"], "http://acme.example/")
+
+    def test_linkedin_provider_does_not_infer_website_from_feed_links(self):
+        html = """
+        <html><head><meta property="og:title" content="Acme GmbH | LinkedIn"></head>
+        <body><a href="https://unrelated.example/post">Post link</a></body></html>
+        """
+        provider = WebshareLinkedInCompanyProvider()
+        parsed = provider._parse_linkedin_page(
+            company={"canonical_name": "Acme GmbH"},
+            linkedin_url="https://www.linkedin.com/company/acme",
+            html_text=html,
+            final_url="https://www.linkedin.com/company/acme",
+        )
+        self.assertEqual(parsed[0]["website"], "")
+
+    def test_linkedin_provider_extracts_explicit_about_fields(self):
+        html = """
+        <html><head><meta property="og:title" content="Acme GmbH | LinkedIn"></head><body>
+          <div data-test-id="about-us__description">Builds useful things.</div>
+          <div data-test-id="about-us__industry">Industry Software Development</div>
+          <div data-test-id="about-us__size">Company size 1,001-5,000 employees</div>
+          <div data-test-id="about-us__headquarters">Headquarters Berlin</div>
+          <div data-test-id="about-us__organizationType">Type Privately Held</div>
+          <div data-test-id="about-us__foundedOn">Founded 1987</div>
+          <div data-test-id="about-us__specialties">Specialties Software, Data, and Security</div>
+        </body></html>
+        """
+        provider = WebshareLinkedInCompanyProvider()
+        parsed = provider._parse_linkedin_page(
+            company={"canonical_name": "Acme GmbH"},
+            linkedin_url="https://www.linkedin.com/company/acme",
+            html_text=html,
+            final_url="https://www.linkedin.com/company/acme",
+        )
+        fields, extra = parsed
+        self.assertEqual(fields["industry"], "Software Development")
+        self.assertEqual(fields["company_size"], "1,001-5,000 employees")
+        self.assertEqual(fields["headquarters"], "Berlin")
+        self.assertEqual(fields["founded_year"], 1987)
+        self.assertEqual(extra["linkedin_description"], "Builds useful things.")
+        self.assertEqual(extra["linkedin_company_type"], "Privately Held")
+        self.assertEqual(extra["linkedin_specialties"], ["Software", "Data", "Security"])
 
     def test_webshare_linkedin_provider_falls_back_to_free_logo_from_discovered_website(self):
         html = """

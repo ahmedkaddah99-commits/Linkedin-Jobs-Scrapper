@@ -94,6 +94,16 @@ sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.service" /etc/sys
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer" /etc/systemd/system/runr-acquisition-employer.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.service" /etc/systemd/system/runr-acquisition-publisher.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer" /etc/systemd/system/runr-acquisition-publisher.timer
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-linkedin.timer.d/continuous.conf
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-employer.timer.d/continuous.conf
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-publisher.timer.d/continuous.conf
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.service.d/lock-retry.conf" /etc/systemd/system/runr-acquisition-linkedin.service.d/70-lock-retry.conf
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.service.d/continuous-bounds.conf" /etc/systemd/system/runr-acquisition-employer.service.d/70-continuous-bounds.conf
+sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.service.d/lock-retry.conf" /etc/systemd/system/runr-acquisition-publisher.service.d/70-lock-retry.conf
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-manifest-refresh.service" /etc/systemd/system/runr-acquisition-manifest-refresh.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-manifest-refresh.timer" /etc/systemd/system/runr-acquisition-manifest-refresh.timer
+sudo install -D -m 0755 "$INSTALL_DIR/scripts/refresh_live_company_manifest.py" /opt/runr-ops/refresh_live_company_manifest.py
+sudo install -D -m 0755 "$INSTALL_DIR/deploy/refresh-acquisition-manifest.sh" /opt/runr-ops/refresh-acquisition-manifest.sh
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-backup.service" /etc/systemd/system/runr-acquisition-backup.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-backup.timer" /etc/systemd/system/runr-acquisition-backup.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-frontend.service" /etc/systemd/system/runr-frontend.service
@@ -110,6 +120,7 @@ sudo systemctl enable runr.target
 # The off-host backup timer is enabled directly (not via runr.target) so a
 # failed backup unit is always visible in `systemctl list-timers`.
 sudo systemctl enable --now runr-acquisition-backup.timer
+sudo systemctl enable --now runr-acquisition-manifest-refresh.timer
 
 cat <<'EOF'
 Next steps:

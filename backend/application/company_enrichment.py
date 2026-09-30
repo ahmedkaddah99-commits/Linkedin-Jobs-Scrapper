@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import html as html_module
 import json
 import os
 import re
@@ -842,9 +843,8 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         else:
             employee_value = employee
             employee_min = employee_max = None
-        website = data.get("url") if isinstance(data.get("url"), str) else ""
-        if str(website).casefold().find("linkedin.com") >= 0:
-            website = ""
+        about = self._linkedin_about_fields(html_text)
+        website = self._linkedin_external_website(html_text, data)
         founding_date = data.get("foundingDate")
         founding_year = None
         year_match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2})\b", str(founding_date or ""))
@@ -852,22 +852,25 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             founding_year = int(year_match.group(1))
         fields = {
             "website": website,
-            "industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry"),
-            "company_size": employee_value or meta.get("linkedin:company_size"),
-            "headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters"),
-            "founded_year": founding_year,
+            "industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry") or about.get("industry"),
+            "company_size": employee_value or meta.get("linkedin:company_size") or about.get("company_size"),
+            "headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters") or about.get("headquarters"),
+            "founded_year": founding_year or about.get("founded_year"),
         }
         logo = data.get("logo") if isinstance(data.get("logo"), str) else meta.get("og:image")
         extra = {
             "linkedin_company_url": linkedin_url,
             "linkedin_name": page_name,
-            "linkedin_description": data.get("description") or meta.get("og:description") or meta.get("description"),
-            "linkedin_industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry"),
-            "linkedin_company_size": employee_value or meta.get("linkedin:company_size"),
+            "linkedin_description": data.get("description") or meta.get("og:description") or meta.get("description") or about.get("description"),
+            "linkedin_industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry") or about.get("industry"),
+            "linkedin_company_size": employee_value or meta.get("linkedin:company_size") or about.get("company_size"),
             "linkedin_employee_min": employee_min,
             "linkedin_employee_max": employee_max,
-            "linkedin_headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters"),
-            "linkedin_founded_year": founding_year,
+            "linkedin_headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters") or about.get("headquarters"),
+            "linkedin_founded_year": founding_year or about.get("founded_year"),
+            "linkedin_company_type": about.get("company_type"),
+            "linkedin_specialties": about.get("specialties"),
+            "linkedin_revenue": data.get("annualRevenue") or about.get("revenue"),
             "linkedin_logo_url": logo,
             "linkedin_website": website,
             "linkedin_jsonld": data,
@@ -875,6 +878,82 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             "linkedin_lookup_status": "matched",
         }
         return fields, extra
+
+    @staticmethod
+    def _linkedin_about_fields(html_text: str) -> dict[str, Any]:
+        """Read only explicitly labelled fields from LinkedIn's About panel."""
+
+        soup = BeautifulSoup(html_text, "html.parser")
+        selectors = {
+            "description": ("about-us__description", ""),
+            "industry": ("about-us__industry", "Industry"),
+            "company_size": ("about-us__size", "Company size"),
+            "headquarters": ("about-us__headquarters", "Headquarters"),
+            "company_type": ("about-us__organizationType", "Type"),
+            "founded_year": ("about-us__foundedOn", "Founded"),
+            "specialties": ("about-us__specialties", "Specialties"),
+            "revenue": ("about-us__revenue", "Revenue"),
+        }
+        result: dict[str, Any] = {}
+        for field, (test_id, label) in selectors.items():
+            node = soup.find(attrs={"data-test-id": test_id})
+            if node is None:
+                continue
+            value = " ".join(node.get_text(" ", strip=True).split())
+            if label and value.casefold().startswith(label.casefold()):
+                value = value[len(label):].strip()
+            if not value:
+                continue
+            if field == "founded_year":
+                match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2})\b", value)
+                if match:
+                    result[field] = int(match.group(1))
+            elif field == "specialties":
+                result[field] = [item.strip() for item in re.split(r",|\band\b", value) if item.strip()]
+            else:
+                result[field] = value
+        return result
+
+    @staticmethod
+    def _linkedin_external_website(html_text: str, data: Mapping[str, Any]) -> str:
+        """Extract the explicit external website from a public company page.
+
+        LinkedIn commonly puts its own company URL in JSON-LD ``url`` and the
+        official site in ``sameAs`` and the About section.  Do not infer a site
+        from arbitrary feed links, email domains, or text mentions.
+        """
+
+        candidates: list[Any] = []
+        soup = BeautifulSoup(html_text, "html.parser")
+        website_section = soup.find(attrs={"data-test-id": "about-us__website"})
+        if website_section is not None:
+            anchor = website_section.find("a", href=True)
+            if anchor is not None:
+                href = str(anchor.get("href") or "").strip()
+                parsed_href = urlparse(href)
+                if (parsed_href.hostname or "").casefold().endswith("linkedin.com"):
+                    candidates.extend(parse_qs(parsed_href.query).get("url", []))
+                candidates.append(anchor.get_text(" ", strip=True))
+        same_as = data.get("sameAs")
+        candidates.extend(
+            same_as
+            if isinstance(same_as, Sequence) and not isinstance(same_as, (str, bytes))
+            else [same_as]
+        )
+        candidates.append(data.get("url"))
+        for candidate in candidates:
+            value = html_module.unescape(unquote(str(candidate or "").strip()))
+            try:
+                parsed = urlparse(value)
+            except ValueError:
+                continue
+            host = (parsed.hostname or "").casefold().removeprefix("www.").rstrip(".")
+            if parsed.scheme not in {"http", "https"} or not host:
+                continue
+            if host == "linkedin.com" or host.endswith(".linkedin.com") or host.endswith(".licdn.com"):
+                continue
+            return parsed._replace(fragment="").geturl()
+        return ""
 
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
         del conditional
@@ -1016,6 +1095,23 @@ class WebshareLinkedInCompanyProvider(ScrapeOpsLinkedInCompanyProvider):
         if not self.webshare_proxy_url:
             return None
         return {"http": self.webshare_proxy_url, "https": self.webshare_proxy_url}
+
+    def _proxy_fetch(
+        self,
+        url: str,
+        *,
+        raw: bool = False,
+        timeout_seconds: int | None = None,
+    ) -> tuple[bytes, str, str, int, float]:
+        """Fail closed instead of inheriting the paid ScrapeOps fallback.
+
+        ``_direct_fetch`` is already routed through the configured Webshare
+        proxy by ``_direct_proxy_config``.  A provider selected explicitly as
+        Webshare-only must never spill failed requests into another provider.
+        """
+
+        del url, raw, timeout_seconds
+        raise RuntimeError("webshare_linkedin_transport_unavailable")
 
     def _free_logo_from_website(self, domain: str) -> tuple[bytes, str, str] | None:
         return self.official_provider._fetch_free_logo(domain)

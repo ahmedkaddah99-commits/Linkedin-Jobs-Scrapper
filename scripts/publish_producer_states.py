@@ -16,10 +16,12 @@ import os
 import re
 import sqlite3
 import sys
-from collections.abc import Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock, local
 from time import monotonic, sleep
 from urllib.parse import urlsplit
 
@@ -329,6 +331,9 @@ def _publisher_telemetry(
     }
 
 
+_PROGRESS_LOCK = Lock()
+
+
 def _progress(phase: str, **counts: int) -> None:
     """Optional bounded status file; does not change the final metrics format."""
     destination = os.getenv("RUNR_PUBLISHER_PROGRESS_FILE", "").strip()
@@ -337,12 +342,13 @@ def _progress(phase: str, **counts: int) -> None:
     path = Path(destination)
     payload = {"phase": phase, "timestamp": datetime.now(timezone.utc).isoformat(),
                "pid": os.getpid(), "counts": counts}
-    try:
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-        temporary.replace(path)
-    except OSError as error:
-        print(f"publisher_progress_write_failed:{type(error).__name__}", file=sys.stderr, flush=True)
+    with _PROGRESS_LOCK:
+        try:
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            temporary.replace(path)
+        except OSError as error:
+            print(f"publisher_progress_write_failed:{type(error).__name__}", file=sys.stderr, flush=True)
 
 
 def _text(value: object) -> str:
@@ -933,7 +939,7 @@ def _deliver_group(
     valid_snapshot: bool,
 ) -> dict[str, int | bool]:
     items = list(observations)
-    batches = list(iter_observation_batches(items, max_batch_size=100))
+    batches = list(iter_observation_batches(items, max_batch_size=20))
     transport = SqliteAcquisitionTransport(store, cycle_id=cycle_id, task_id=task_id, target_id=target_id)
     if not batches:
         receipt = transport.send_final(
@@ -954,6 +960,118 @@ def _deliver_group(
         closure_safe=closure_safe,
     )
     return dict(receipt.store_result)
+
+
+def _terminal_cycle_task_statuses(
+    store: SqliteAcquisitionStore,
+    cycle_id: str,
+) -> dict[str, str]:
+    """Return targets already durably delivered by an earlier cycle attempt."""
+
+    with store._connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT target_id, status
+            FROM acquisition_tasks
+            WHERE cycle_id = ? AND status IN ('completed', 'partial')
+            """,
+            (cycle_id,),
+        ).fetchall()
+    return {
+        _text(row["target_id"]): _text(row["status"])
+        for row in rows
+        if _text(row["target_id"])
+    }
+
+
+def _source_state_target_ids(store: SqliteAcquisitionStore) -> set[str]:
+    with store._connect() as connection:
+        rows = connection.execute("SELECT DISTINCT target_id FROM job_source_states").fetchall()
+    return {_text(row["target_id"]) for row in rows if _text(row["target_id"])}
+
+
+def _bulk_complete_empty_tasks(
+    store: SqliteAcquisitionStore,
+    tasks: Iterable[tuple[str, bool, bool, str]],
+) -> None:
+    """Complete safe no-op tasks with one bounded remote batch."""
+
+    now = datetime.now(timezone.utc).isoformat()
+    parameters = [
+        (
+            status,
+            now,
+            int(valid_snapshot),
+            int(credible_evidence),
+            json.dumps({"complete_snapshot": True, "closure_safe": credible_evidence}, separators=(",", ":")),
+            now,
+            task_id,
+        )
+        for task_id, valid_snapshot, credible_evidence, status in tasks
+        if task_id
+    ]
+    if not parameters:
+        return
+
+    def write(connection) -> None:
+        connection.executemany(
+            """
+            UPDATE acquisition_tasks
+            SET status=?, completed_at=?, complete_snapshot=1,
+                valid_snapshot=?, credible_evidence=?,
+                requests_avoided=0, credits_avoided=0,
+                jobs_observed=0, jobs_new=0, jobs_updated=0,
+                jobs_unchanged=0, jobs_closed=0, jobs_rejected=0,
+                jobs_duplicates=0, reconciliation_json='{}',
+                quality_warnings_json='[]', collection_metadata_json=?,
+                error_code='', error_message='', last_error_code='',
+                last_error_message='', lease_owner='', lease_token='',
+                lease_expires_at='', updated_at=?
+            WHERE task_id=?
+            """,
+            parameters,
+        )
+
+    store._run_transaction(write)
+
+
+def _delivery_transaction_batches(
+    items: Iterable[tuple[str, str]],
+    *,
+    source_rows: Callable[[str, str], int],
+    max_companies: int,
+    max_rows: int,
+) -> Iterable[list[tuple[str, str]]]:
+    """Pack small companies into bounded shared database transactions.
+
+    A company larger than ``max_rows`` remains a one-company batch. Its
+    observation chunks are deliberately committed independently by
+    ``_deliver_group`` so a large source snapshot cannot create an oversized
+    libSQL transaction.
+    """
+
+    batch: list[tuple[str, str]] = []
+    batch_rows = 0
+    for item in items:
+        row_count = max(0, source_rows(*item))
+        if row_count > max_rows:
+            if batch:
+                yield batch
+                batch = []
+                batch_rows = 0
+            yield [item]
+            continue
+        if batch and (
+            len(batch) >= max_companies
+            or batch_rows + row_count > max_rows
+        ):
+            yield batch
+            batch = []
+            batch_rows = 0
+        batch.append(item)
+        batch_rows += row_count
+    if batch:
+        yield batch
 
 
 def _run_delivery_legacy(
@@ -1454,7 +1572,10 @@ def run_delivery(
         )
     assert store is not None
     _progress("targets_registration", targets=len(targets))
-    store.ensure_targets(targets)
+    existing_target_ids = store.list_target_ids()
+    store.ensure_targets(
+        target for target in targets if _text(target.get("target_id")) not in existing_target_ids
+    )
     marker = "|".join(
         [
             _text(manifest.get("manifest_hash")),
@@ -1503,16 +1624,22 @@ def run_delivery(
         "source_row_batch_size": batch_size,
         "telemetry": telemetry,
     }
-    partial = False
-    valid_target_ids: list[str] = []
+    terminal_task_statuses = _terminal_cycle_task_statuses(store, cycle_id)
+    current_target_ids = {_text(target.get("target_id")) for target in targets}
+    resumed_target_ids = current_target_ids.intersection(terminal_task_statuses)
+    partial = any(terminal_task_statuses[target_id] == "partial" for target_id in resumed_target_ids)
+    valid_target_ids: list[str] = sorted(resumed_target_ids)
     failures = 0
     companies_attempted = 0
     stop_reason = ""
     stop_requested = False
     next_allowed_delivery = 0.0
 
-    def deliver_company(source: str, company_id: str) -> dict[str, object]:
-        nonlocal partial
+    def deliver_company(
+        source: str,
+        company_id: str,
+        delivery_store: SqliteAcquisitionStore = store,
+    ) -> dict[str, object]:
         company = companies_by_source[source][company_id]
         target_id = _text(_target(company, source, policy_version=policy_version)["target_id"])
         task_id = _text(cycle_task_ids.get(target_id)) or f"producer_task:{target_id}"
@@ -1540,16 +1667,29 @@ def run_delivery(
             closure_safe = classification == "confirmed_complete"
             valid_snapshot = status.casefold() not in FAILED_EMPLOYER_STATUSES
         deliverable = [item for item in observations if item.canonical_company_id not in {"", UNKNOWN, "//"}]
-        result = _deliver_group(
-            store,
-            cycle_id=cycle_id,
-            task_id=task_id,
-            target_id=target_id,
-            observations=deliverable,
-            closure_safe=closure_safe,
-            valid_snapshot=valid_snapshot,
-        )
-        store.complete_task(
+        if not deliverable and not closure_safe and valid_snapshot:
+            # An incomplete empty snapshot cannot add observations or authorize
+            # absence. Persist the task evidence without a no-op ingest round trip.
+            result = {
+                "observed": 0,
+                "new": 0,
+                "updated": 0,
+                "unchanged": 0,
+                "closed": 0,
+                "rejected": 0,
+                "duplicates": 0,
+            }
+        else:
+            result = _deliver_group(
+                delivery_store,
+                cycle_id=cycle_id,
+                task_id=task_id,
+                target_id=target_id,
+                observations=deliverable,
+                closure_safe=closure_safe,
+                valid_snapshot=valid_snapshot,
+            )
+        delivery_store.complete_task(
             task_id,
             status="completed" if closure_safe else "partial",
             result={
@@ -1566,9 +1706,9 @@ def run_delivery(
                 },
             },
         )
-        valid_target_ids.append(target_id)
-        partial = partial or not closure_safe
         return {
+            "source": source,
+            "target_id": target_id,
             "jobs_delivered": len(deliverable),
             "unresolved_observations": len(observations) - len(deliverable),
             "closure_safe": closure_safe,
@@ -1576,8 +1716,11 @@ def run_delivery(
         }
 
     try:
-        delivered_companies = 0
-        _progress("delivery", companies_completed=0, targets=len(targets))
+        delivered_companies = len(resumed_target_ids)
+        _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
+        delivery_items: list[tuple[str, str]] = []
+        bulk_empty_items: list[tuple[str, str, str, bool, bool, str]] = []
+        source_state_target_ids = _source_state_target_ids(store)
         for source, changed_ids in changed_by_source.items():
             source_metrics[source]["companies_pending_source_state"] = 0
             source_metrics[source]["jobs_delivered"] = 0
@@ -1586,41 +1729,186 @@ def run_delivery(
             for company_id in sorted(changed_ids):
                 if skip_status_only and not (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id):
                     continue
-                if controls.max_companies is not None and companies_attempted >= controls.max_companies:
-                    stop_reason = "max_companies"
-                    stop_requested = True
-                    break
+                target_id = _text(_target(companies_by_source[source][company_id], source, policy_version=policy_version)["target_id"])
+                if target_id in resumed_target_ids:
+                    continue
+                raw_rows = (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, [])
+                if not raw_rows:
+                    if source == SOURCE_LINKEDIN:
+                        status_values = {
+                            _text(li_statuses.get(source_id))
+                            for source_id, canonical_id in linkedin_org_to_canonical.items()
+                            if canonical_id == company_id and li_statuses.get(source_id)
+                        }
+                        closure_safe = bool(next_linkedin_checkpoint.get("bootstrap_complete")) and bool(status_values) and status_values.issubset(COMPLETE_LINKEDIN_SCAN_STATUSES)
+                        valid_snapshot = True
+                    else:
+                        status, classification = employer_statuses.get(company_id, ("", ""))
+                        closure_safe = classification == "confirmed_complete"
+                        valid_snapshot = status.casefold() not in FAILED_EMPLOYER_STATUSES
+                    if (not closure_safe and valid_snapshot) or target_id not in source_state_target_ids:
+                        task_id = _text(cycle_task_ids.get(target_id)) or f"producer_task:{target_id}"
+                        bulk_empty_items.append((
+                            source,
+                            target_id,
+                            task_id,
+                            valid_snapshot,
+                            closure_safe,
+                            "completed" if closure_safe else "partial",
+                        ))
+                        continue
+                delivery_items.append((source, company_id))
+        if controls.max_companies is not None and len(delivery_items) > controls.max_companies:
+            delivery_items = delivery_items[: controls.max_companies]
+            stop_reason = "max_companies"
+            stop_requested = True
+
+        try:
+            delivery_batch_size = int(os.getenv("RUNR_PUBLISHER_DELIVERY_BATCH_SIZE", "1000"))
+        except ValueError:
+            delivery_batch_size = 1000
+        try:
+            delivery_workers = int(os.getenv("RUNR_PUBLISHER_DELIVERY_WORKERS", "1"))
+        except ValueError:
+            delivery_workers = 1
+        delivery_batch_size = max(1, min(1000, delivery_batch_size))
+        delivery_workers = max(1, min(8, delivery_workers))
+        try:
+            transaction_companies = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "50"))
+        except ValueError:
+            transaction_companies = 50
+        try:
+            transaction_rows = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "20"))
+        except ValueError:
+            transaction_rows = 20
+        transaction_companies = max(1, min(100, transaction_companies))
+        transaction_rows = max(1, min(20, transaction_rows))
+        worker_state = local()
+
+        def source_row_count(source: str, company_id: str) -> int:
+            return len((linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, []))
+
+        def deliver_with_worker_store(source: str, company_id: str) -> dict[str, object]:
+            worker_store = getattr(worker_state, "store", None)
+            if worker_store is None:
+                worker_store = SqliteAcquisitionStore(data_dir / "backend.sqlite3", initialize=False)
+                worker_state.store = worker_store
+            raw_rows = (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, [])
+            _progress(
+                "delivery_company",
+                companies_completed=delivered_companies,
+                targets=len(targets),
+                source=source,
+                company_id=company_id,
+                source_rows=len(raw_rows),
+            )
+            return deliver_company(source, company_id, worker_store)
+
+        def record_delivery(source: str, delivered: Mapping[str, object]) -> None:
+            nonlocal delivered_companies, partial
+            delivered_companies += 1
+            valid_target_ids.append(_text(delivered.get("target_id")))
+            partial = partial or not bool(delivered["closure_safe"])
+            source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
+            source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
+            if bool(delivered["failed"]):
+                source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+            if not bool(delivered["closure_safe"]):
+                source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+
+        for bulk_start in range(0, len(bulk_empty_items), 250):
+            bulk = bulk_empty_items[bulk_start : bulk_start + 250]
+            _bulk_complete_empty_tasks(
+                store,
+                ((task_id, valid_snapshot, closure_safe, status) for _source, _target_id, task_id, valid_snapshot, closure_safe, status in bulk),
+            )
+            delivered_companies += len(bulk)
+            companies_attempted += len(bulk)
+            for source, target_id, _task_id, valid_snapshot, closure_safe, _status in bulk:
+                valid_target_ids.append(target_id)
+                if not closure_safe:
+                    partial = True
+                    source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+                if not valid_snapshot:
+                    source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+            _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
+
+        if delivery_workers == 1 and not controls.rate_per_second:
+            transaction_batches = _delivery_transaction_batches(
+                delivery_items,
+                source_rows=source_row_count,
+                max_companies=transaction_companies,
+                max_rows=transaction_rows,
+            )
+            for transaction_batch in transaction_batches:
                 if controls.timeout_seconds is not None and monotonic() - started_monotonic >= controls.timeout_seconds:
                     stop_reason = "timeout"
                     stop_requested = True
                     break
-                if controls.rate_per_second:
-                    wait_seconds = next_allowed_delivery - monotonic()
-                    if wait_seconds > 0:
-                        sleep(wait_seconds)
-                    next_allowed_delivery = monotonic() + (1.0 / controls.rate_per_second)
-                companies_attempted += 1
+                companies_attempted += len(transaction_batch)
+                committed: list[tuple[str, Mapping[str, object]]] = []
                 try:
-                    delivered = deliver_company(source, company_id)
+                    # Large companies retain the existing <=20-observation
+                    # commits. Small companies share one bounded transaction,
+                    # eliminating one remote commit per company.
+                    use_shared_transaction = not (
+                        len(transaction_batch) == 1
+                        and source_row_count(*transaction_batch[0]) > transaction_rows
+                    )
+                    if use_shared_transaction:
+                        with store.transaction_scope():
+                            for source, company_id in transaction_batch:
+                                committed.append((source, deliver_company(source, company_id, store)))
+                    else:
+                        source, company_id = transaction_batch[0]
+                        committed.append((source, deliver_company(source, company_id, store)))
+                    for source, delivered in committed:
+                        record_delivery(source, delivered)
+                    _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
                 except Exception as exc:
                     failures += 1
                     partial = True
-                    source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
-                    source_metrics[source]["last_error"] = type(exc).__name__.casefold()
-                    if controls.max_failures == 0 or failures >= controls.max_failures:
+                    for source, _company_id in transaction_batch:
+                        source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+                        source_metrics[source]["last_error"] = type(exc).__name__.casefold()
+                    stop_reason = "max_failures"
+                    stop_requested = True
+                    break
+
+        for batch_start in range(0, len(delivery_items), delivery_batch_size):
+            if delivery_workers == 1 and not controls.rate_per_second:
+                break
+            if controls.timeout_seconds is not None and monotonic() - started_monotonic >= controls.timeout_seconds:
+                stop_reason = "timeout"
+                stop_requested = True
+                break
+            batch = delivery_items[batch_start : batch_start + delivery_batch_size]
+            companies_attempted += len(batch)
+            effective_workers = 1 if controls.rate_per_second else delivery_workers
+            with ThreadPoolExecutor(max_workers=min(effective_workers, len(batch))) as executor:
+                future_sources = {
+                    executor.submit(deliver_with_worker_store, source, company_id): source
+                    for source, company_id in batch
+                }
+                for future in as_completed(future_sources):
+                    source = future_sources[future]
+                    try:
+                        record_delivery(source, future.result())
+                        _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
+                    except Exception as exc:
+                        failures += 1
+                        partial = True
+                        source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
+                        source_metrics[source]["last_error"] = type(exc).__name__.casefold()
                         stop_reason = "max_failures"
                         stop_requested = True
-                        break
-                    continue
-                delivered_companies += 1
-                _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
-                source_metrics[source]["jobs_delivered"] = int(source_metrics[source]["jobs_delivered"]) + int(delivered["jobs_delivered"])
-                source_metrics[source]["unresolved_observations"] = int(source_metrics[source].get("unresolved_observations") or 0) + int(delivered["unresolved_observations"])
-                if bool(delivered["failed"]):
-                    source_metrics[source]["failed_companies"] = int(source_metrics[source]["failed_companies"]) + 1
-                if not bool(delivered["closure_safe"]):
-                    source_metrics[source]["partial_companies"] = int(source_metrics[source]["partial_companies"]) + 1
+                        if controls.max_failures == 0 or failures >= controls.max_failures:
+                            break
             if stop_requested:
+                break
+            if failures and (controls.max_failures == 0 or failures >= controls.max_failures):
+                stop_reason = "max_failures"
+                stop_requested = True
                 break
         if not stop_requested and deferred_companies:
             stop_reason = "max_companies"

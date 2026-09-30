@@ -77,21 +77,22 @@ def test_read_only_does_not_enable_timers(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_guard_repairs_only_dedicated_timers_and_respects_owner_pause(tmp_path, monkeypatch):
+def test_guard_repairs_owner_required_timers_and_respects_owner_pause(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(observe, "unit_state", lambda unit: {"query_ok": True, "ActiveState": "inactive", "UnitFileState": "disabled"})
     monkeypatch.setattr(observe, "command", lambda *args: (calls.append(args) or (0, "")))
     pause = tmp_path / "pause.json"
     now = observe.epoch("2026-09-26T03:00:00Z")
     data = observe.snapshot(tmp_path, enforce=True, pause_path=pause, now=now)
-    assert len(data["repairs"]) == 3
+    assert len(data["repairs"]) == 4
+    assert any(call[-1] == "runr-acquisition-backup.timer" for call in calls)
     assert all("cycle" not in call[-1] and "export" not in call[-1] for call in calls)
     calls.clear()
     pause.write_text(json.dumps({"approved_by": "Ahmed Kaddah", "reason": "owner maintenance", "expires_at": "2026-09-26T04:00:00Z"}))
     data = observe.snapshot(tmp_path, enforce=True, pause_path=pause, now=now)
     assert data["paused"] and not calls
     data = observe.snapshot(tmp_path, enforce=True, pause_path=pause, now=now + 7200)
-    assert not data["paused"] and len(calls) == 3
+    assert not data["paused"] and len(calls) == 4
 
 
 def test_missing_or_stale_receipts_and_failures_remain_visible(tmp_path, monkeypatch):

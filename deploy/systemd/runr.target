@@ -1,7 +1,7 @@
 [Unit]
 Description=Runr application stack
-Wants=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-frontend.service
-After=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-frontend.service
+Wants=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-acquisition-manifest-refresh.timer runr-frontend.service
+After=runr-api.service runr-worker.service runr-acquisition-linkedin.timer runr-acquisition-employer.timer runr-acquisition-publisher.timer runr-acquisition-manifest-refresh.timer runr-frontend.service
 # The independent timers below are the only schedule owners. The conflicts
 # keep legacy combined/worker/export units from being active with this target.
 Conflicts=runr-acquisition-cycle.service runr-acquisition-cycle.timer runr-acquisition-export.service runr-acquisition-export.timer runr-acquisition-worker.service

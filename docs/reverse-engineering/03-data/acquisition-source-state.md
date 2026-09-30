@@ -45,6 +45,7 @@ Correction N-3 applies: these are **INPUTS**, not disposable output.
 |---|---|
 | `/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json` | schema `runr_source_eligibility_manifest_v1`, manifest hash, sidecar hash, unresolved-ownership gate |
 | `/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl` | sidecar schema `runr_source_eligibility_raw_sidecar_v1`, exact SHA-256 (17,601 rows) |
+| `/srv/runr/shared/inputs/manifest-generations/<UTC>/` | immutable catalog-complete snapshot, manifest, raw sidecar and refresh report; `active` changes only after integrity validation |
 | `/srv/runr/shared/inputs/linkedin/linkedin_endpoint_pagination_validation.json` | exact SHA-256, endpoint match, numeric page step, bounded max start |
 | `/srv/runr/shared/inputs/linkedin/linkedin_guest_endpoint_filter_validation.json` | exact SHA-256, endpoint match, only explicitly SUPPORTED filters enabled |
 

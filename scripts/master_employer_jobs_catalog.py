@@ -71,6 +71,7 @@ DEFAULT_INPUT_CSV = (
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Jobs-Urls" / "master linkedin jobs url"
 DEFAULT_TIMEOUT_SECONDS = 25
 DEFAULT_LIMIT = 25
+EMPLOYER_CSV_VALIDATION_FIELD_LIMIT = 16 * 1024 * 1024
 NATIVE_ATS_CONNECTORS = {"greenhouse", "lever", *EXPANSION_CONNECTORS}
 PLACEHOLDER_IDENTIFIERS = {"", "//", "-", "—", "none", "null", "nan", "n/a"}
 EMPLOYER_OUTCOMES = {
@@ -422,6 +423,7 @@ class CollectorLimits:
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     max_pages: int = 20
     max_browser_requests: int = 10
+    allow_browser_fallback: bool = True
     proxy_url: str = ""
     transport_gate: TransportGate | None = field(default=None, compare=False, repr=False)
 
@@ -1097,6 +1099,18 @@ def collect_company(
     """Discover and fetch one company's public employer job sources."""
 
     result = EmployerCollectionResult(company=company)
+    method_attempts: list[dict[str, Any]] = []
+
+    def record_method(method: str, url: str, status: str, **details: Any) -> None:
+        method_attempts.append(
+            {
+                "method": method,
+                "url": url,
+                "status": status,
+                "recorded_at": utc_now(),
+                **{key: value for key, value in details.items() if value not in (None, "")},
+            }
+        )
 
     def browser_snapshot(url: str) -> Mapping[str, Any]:
         browser_kwargs: dict[str, Any] = {
@@ -1128,6 +1142,7 @@ def collect_company(
         candidates = [SimpleCandidate(company.verified_ats_url, "verified_ats_target", detect_ats_type(company.verified_ats_url))]
         source_inventory: list[dict[str, Any]] = []
     else:
+        record_method("career_discovery_direct", company.website_url, "attempted")
         discovery = discover_career_url(
             homepage_url=company.website_url,
             homepage_provenance=company.website_provenance,
@@ -1174,6 +1189,15 @@ def collect_company(
     rendered_homepage_snapshot: Mapping[str, Any] | None = None
     candidates_from_rendered_discovery = False
     if not candidates:
+        if not limits.allow_browser_fallback:
+            record_method("browser_rendered_discovery", company.website_url, "deferred", reason="easy_first_policy")
+            result.failures.append({"stage": "rendered_discovery", "error": "deferred_by_easy_first_policy"})
+            _finalize_coverage(result, [])
+            result.coverage["source_inventory"] = source_inventory
+            result.coverage["method_attempts"] = method_attempts
+            result.status = "discovery_failed"
+            return result
+        record_method("browser_rendered_discovery", company.website_url, "attempted")
         homepage_browser = browser_snapshot(company.website_url)
         rendered_html = str(homepage_browser.get("rendered_html") or "")
         rendered_candidates = extract_career_links_from_html(
@@ -1243,6 +1267,7 @@ def collect_company(
             if candidate_index == 0 and rendered_homepage_snapshot is not None:
                 snapshots.append(rendered_homepage_snapshot)
             if detected_provider:
+                record_method("ats_connector", target_url, "attempted", provider=detected_provider)
                 ats_snapshot = dict(fetch_ats_snapshot(
                     target_url,
                     detected_provider,
@@ -1264,6 +1289,7 @@ def collect_company(
                 and _snapshot_is_complete(snapshots[-1], source_kind="ats")
             )
             if not ats_snapshot_complete and not (company.verified_ats_url and snapshots[-1].get("jobs")):
+                record_method("direct_http", target_url, "attempted")
                 direct_page = fetcher(target_url)
             if (not ats_snapshot_complete or direct_page is not None) and not (company.verified_ats_url and snapshots[-1].get("jobs")) and not (
                 candidates_from_rendered_discovery and direct_page is None
@@ -1295,6 +1321,11 @@ def collect_company(
                     timeout_seconds=limits.timeout_seconds,
                 ))
                 generic_snapshot.setdefault("_source_kind", "generic")
+                record_method(
+                    "generic_structured_extraction",
+                    target_url,
+                    "succeeded" if generic_snapshot.get("jobs") else "completed_without_jobs",
+                )
                 if generic_snapshot:
                     snapshots.append(generic_snapshot)
 
@@ -1329,7 +1360,12 @@ def collect_company(
                 )
                 for snapshot in snapshots
             )
-            if not complete_snapshot_available and (direct_page is not None or candidates_from_rendered_discovery):
+            if (
+                not complete_snapshot_available
+                and (direct_page is not None or candidates_from_rendered_discovery)
+                and limits.allow_browser_fallback
+            ):
+                record_method("browser_rendered_collection", target_url, "attempted")
                 rendered_snapshot = dict(preloaded_browser_snapshots.pop(target_url, None) or browser_snapshot(target_url))
                 rendered_snapshot.setdefault("_source_kind", "browser")
                 snapshots.append(rendered_snapshot)
@@ -1353,6 +1389,8 @@ def collect_company(
                     result.jobs.append(row)
                     accepted_jobs += 1
                     extraction_methods.add(_text(row.get("extraction_method")))
+            elif not complete_snapshot_available and (direct_page is not None or candidates_from_rendered_discovery):
+                record_method("browser_rendered_collection", target_url, "deferred", reason="easy_first_policy")
             target, _snapshot_outcomes = _coverage_target(
                 target_url=target_url,
                 provider=provider,
@@ -1426,6 +1464,7 @@ def collect_company(
             entry["traversal_status"] = "deferred"
             entry["deferred_reason"] = "traversal_not_reached"
     result.coverage["source_inventory"] = source_inventory
+    result.coverage["method_attempts"] = method_attempts
     result.coverage["counts"].update(
         {
             "union_jobs": len(result.jobs),
@@ -1907,6 +1946,29 @@ class EmployerState:
         for row in cursor:
             yield json.loads(row["payload_json"])
 
+    def iter_company_method_audit(self) -> Iterable[dict[str, Any]]:
+        """Yield the durable per-company method trail used by collection."""
+
+        rows = self.connection.execute(
+            "SELECT company_key,payload_json,status,updated_at FROM companies ORDER BY company_key"
+        )
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            coverage = payload.get("coverage") if isinstance(payload, Mapping) else {}
+            yield {
+                "company_key": str(row["company_key"]),
+                "company_name": _text((payload.get("company") or {}).get("company_name")) if isinstance(payload, Mapping) else "",
+                "website_url": _text((payload.get("company") or {}).get("website_url")) if isinstance(payload, Mapping) else "",
+                "status": str(row["status"] or ""),
+                "outcome": _text(coverage.get("outcome")) if isinstance(coverage, Mapping) else "",
+                "method_attempts": list(coverage.get("method_attempts") or []) if isinstance(coverage, Mapping) else [],
+                "source_inventory": list(coverage.get("source_inventory") or []) if isinstance(coverage, Mapping) else [],
+                "updated_at": str(row["updated_at"] or ""),
+            }
+
     def job_count(self) -> int:
         row = self.connection.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()
         return int(row["count"] if row else 0)
@@ -1966,15 +2028,20 @@ def _write_metrics_temp(path: Path, metrics: Mapping[str, Any]) -> None:
 def _validate_employer_temps(
     csv_path: Path, jsonl_path: Path, metrics_path: Path, expected_rows: int
 ) -> None:
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames != EMPLOYER_FIELDS:
-            raise ValueError(f"employer CSV header mismatch in {csv_path}")
-        csv_rows = 0
-        for row in reader:
-            if None in row:
-                raise ValueError(f"employer CSV contains malformed row {csv_rows + 1}")
-            csv_rows += 1
+    previous_field_limit = csv.field_size_limit()
+    csv.field_size_limit(max(previous_field_limit, EMPLOYER_CSV_VALIDATION_FIELD_LIMIT))
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != EMPLOYER_FIELDS:
+                raise ValueError(f"employer CSV header mismatch in {csv_path}")
+            csv_rows = 0
+            for row in reader:
+                if None in row:
+                    raise ValueError(f"employer CSV contains malformed row {csv_rows + 1}")
+                csv_rows += 1
+    finally:
+        csv.field_size_limit(previous_field_limit)
     if csv_rows != expected_rows:
         raise ValueError(f"employer CSV row count mismatch: expected {expected_rows}, got {csv_rows}")
 
@@ -2067,6 +2134,14 @@ def export_employer_catalog_from_state(
         }
     )
     outputs = write_employer_outputs(state.iter_jobs(), output_dir, metrics=export_metrics)
+    method_audit_path = output_dir / "employer_company_method_audit.jsonl"
+    _atomic_write(
+        method_audit_path,
+        lambda path: path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in state.iter_company_method_audit()),
+            encoding="utf-8",
+        ),
+    )
     exported_jobs = int(export_metrics.get("persisted_jobs", state.job_count()) or 0)
     return {
         "exported_jobs": exported_jobs,
@@ -2077,6 +2152,7 @@ def export_employer_catalog_from_state(
             "employer_csv": str(outputs["csv"]),
             "employer_jsonl": str(outputs["jsonl"]),
             "employer_metrics": str(outputs["metrics"]),
+            "employer_method_audit": str(method_audit_path),
         },
     }
 
@@ -2189,6 +2265,7 @@ def run_collection(
     browser_concurrency: int = 1,
     account_concurrency: int = 4,
     per_origin_concurrency: int = 1,
+    easy_first: bool = False,
     autocomplete: Any | None = None,
 ) -> dict[str, Any]:
     load_project_dotenv()
@@ -2206,6 +2283,14 @@ def run_collection(
         if not company_id or len(companies) != 1 or parsed_ats.scheme != "https" or not detect_ats_type(verified_ats_url):
             raise ValueError("A verified HTTPS ATS target requires one exact eligible company ID.")
         companies = [replace(companies[0], verified_ats_url=verified_ats_url)]
+    if easy_first:
+        companies = sorted(
+            companies,
+            key=lambda company: (
+                0 if company.verified_ats_url else 1,
+                0 if detect_ats_type(company.website_url) else 1,
+            ),
+        )
     selected = companies if limit <= 0 else companies[:limit]
     request_budget = max(0, int(max_requests)) if max_requests is not None else None
     accounting = RequestAccounting(max_attempts=request_budget)
@@ -2251,6 +2336,7 @@ def run_collection(
         ),
         "output_dir": str(output_dir),
         "dry_run": dry_run,
+        "collection_policy": "easy_first" if easy_first else "full_fallback",
     }
     state_path = (Path(state_dir) if state_dir is not None else Path(output_dir)) / "master_employer_jobs_state.db"
     if require_existing_state and not state_path.is_file():
@@ -2281,6 +2367,7 @@ def run_collection(
             max_job_links=max_job_links,
             max_pages=max(1, int(max_pages)),
             max_browser_requests=max(1, int(max_browser_requests)),
+            allow_browser_fallback=not easy_first,
             timeout_seconds=timeout_seconds,
             proxy_url=proxy_url,
             transport_gate=transport_gate,

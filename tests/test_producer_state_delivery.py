@@ -12,6 +12,7 @@ from scripts.publish_producer_states import (
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
     _crosswalk_already_applied,
+    _delivery_transaction_batches,
     _enrich_source_groups,
     _verified_company_registry,
     _target,
@@ -20,6 +21,26 @@ from scripts.publish_producer_states import (
 
 import pytest
 from datetime import datetime, timezone
+
+
+def test_delivery_transaction_batches_pack_small_companies_and_isolate_large_ones():
+    rows = {"small-1": 3, "small-2": 4, "large": 21, "empty": 0, "small-3": 5}
+    items = [("employer", company_id) for company_id in rows]
+
+    batches = list(
+        _delivery_transaction_batches(
+            items,
+            source_rows=lambda _source, company_id: rows[company_id],
+            max_companies=2,
+            max_rows=20,
+        )
+    )
+
+    assert batches == [
+        [("employer", "small-1"), ("employer", "small-2")],
+        [("employer", "large")],
+        [("employer", "empty"), ("employer", "small-3")],
+    ]
 
 
 def test_publisher_uses_only_verified_registry_and_explicit_job_evidence(tmp_path):

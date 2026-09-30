@@ -1079,6 +1079,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-job-links", type=int, default=25)
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-browser-requests", type=int, default=10)
+    parser.add_argument(
+        "--easy-first",
+        action="store_true",
+        help="collect direct/ATS/structured sources first and audit browser-required companies for a later hard-case pass",
+    )
     parser.add_argument("--max-targets", type=int, default=25)
     parser.add_argument(
         "--max-requests",
@@ -1087,6 +1092,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bound total HTTP/browser attempts for this company collection.",
     )
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--company-concurrency", type=int, default=2)
+    parser.add_argument("--max-pending", type=int, default=4)
+    parser.add_argument("--http-concurrency", type=int, default=4)
+    parser.add_argument("--account-concurrency", type=int, default=4)
+    parser.add_argument("--per-origin-concurrency", type=int, default=1)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -1238,6 +1248,12 @@ def main(argv: list[str] | None = None) -> int:
                 max_targets=args.max_targets,
                 max_requests=args.max_requests or None,
                 timeout_seconds=args.timeout,
+                easy_first=args.easy_first,
+                company_concurrency=args.company_concurrency,
+                max_pending=args.max_pending,
+                http_concurrency=args.http_concurrency,
+                account_concurrency=args.account_concurrency,
+                per_origin_concurrency=args.per_origin_concurrency,
             )
         metrics.update(
             {

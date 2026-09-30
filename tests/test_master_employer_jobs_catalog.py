@@ -740,6 +740,52 @@ def test_collect_company_uses_browser_xhr_after_direct_methods_miss(monkeypatch:
     assert result.jobs[0]["extraction_endpoint"] == "https://acme.example/api/jobs"
 
 
+def test_easy_first_defers_browser_and_records_method_trail(monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    monkeypatch.setattr(
+        catalog,
+        "discover_career_url",
+        lambda **_: _discovery(url="https://acme.example/careers", source="common_path"),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda *_args, **_kwargs: {
+            "jobs": [],
+            "status": "partial",
+            "request_url": "https://acme.example/careers",
+            "resolved_url": "https://acme.example/careers",
+        },
+    )
+    monkeypatch.setattr(
+        catalog,
+        "fetch_browser_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("easy-first collection must not launch a browser"),
+    )
+    direct = SimpleNamespace(
+        requested_url="https://acme.example/careers",
+        final_url="https://acme.example/careers",
+        text="<html></html>",
+    )
+
+    result = collect_company(
+        _company(),
+        lambda _: direct,
+        CollectorLimits(max_targets=1, allow_browser_fallback=False),
+    )
+
+    attempts = result.coverage["method_attempts"]
+    assert [attempt["method"] for attempt in attempts] == [
+        "career_discovery_direct",
+        "direct_http",
+        "generic_structured_extraction",
+        "browser_rendered_collection",
+    ]
+    assert attempts[-1]["status"] == "deferred"
+    assert attempts[-1]["reason"] == "easy_first_policy"
+
+
 def test_collect_company_merges_browser_jobs_with_direct_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     import scripts.master_employer_jobs_catalog as catalog
 
@@ -910,6 +956,7 @@ def test_run_collection_saves_two_company_checkpoints_and_exports_once_after_col
     with (output_dir / "master_employer_jobs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
         assert sum(1 for _ in csv.DictReader(handle)) == 2
     assert not (output_dir / "master_jobs.csv").exists()
+    assert (output_dir / "employer_company_method_audit.jsonl").is_file()
 
 
 def test_progress_job_counts_do_not_load_all_state_jobs_after_each_company(
@@ -1134,6 +1181,27 @@ def test_export_only_keeps_all_snapshots_when_temporary_validation_fails(
     assert employer_main(["--export-only", "--output-dir", str(output_dir)]) == 2
     assert {name: (output_dir / name).read_text(encoding="utf-8") for name in snapshots} == snapshots
     assert not list(output_dir.glob(".*.tmp"))
+
+
+def test_employer_export_validates_fields_larger_than_python_csv_default(tmp_path: Path) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    output_dir = tmp_path / "out"
+    oversized_description = "x" * (csv.field_size_limit() + 1)
+
+    outputs = catalog.write_employer_outputs(
+        [{"source_job_id": "large-job", "description": oversized_description}],
+        output_dir,
+    )
+
+    previous_field_limit = csv.field_size_limit()
+    csv.field_size_limit(catalog.EMPLOYER_CSV_VALIDATION_FIELD_LIMIT)
+    try:
+        with outputs["csv"].open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    finally:
+        csv.field_size_limit(previous_field_limit)
+    assert rows[0]["description"] == oversized_description
 
 
 def test_employer_export_rolls_back_when_promotion_is_interrupted(

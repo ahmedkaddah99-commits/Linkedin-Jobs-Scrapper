@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SOURCES = ("linkedin", "employer", "publisher")
+OWNER_REQUIRED_TIMERS = tuple(f"runr-acquisition-{source}.timer" for source in SOURCES) + (
+    "runr-acquisition-backup.timer",
+)
 COUNTS = {
     "jobs_written", "jobs_published", "jobs_rejected", "exported_jobs", "persisted_jobs",
     "companies_input", "companies_completed", "companies_failed", "companies_processed",
@@ -129,12 +132,16 @@ def snapshot(receipts, *, enforce=False, pause_path=Path("/etc/runr/acquisition-
     now = now or datetime.now(timezone.utc).timestamp()
     paused, pause_reason = pause_state(pause_path, now)
     sources, repairs = {}, []
+    if enforce and not paused:
+        for timer_name in OWNER_REQUIRED_TIMERS:
+            timer = unit_state(timer_name)
+            if timer.get("ActiveState") != "active" or timer.get("UnitFileState") != "enabled":
+                code, _ = command("systemctl", "enable", "--now", timer_name)
+                repairs.append({"unit": timer_name, "action": "restore_owner_approved_timer", "succeeded": code == 0})
     for source in SOURCES:
         timer_name = f"runr-acquisition-{source}.timer"
         timer, service = unit_state(timer_name), unit_state(f"runr-acquisition-{source}.service")
-        if enforce and not paused and (timer.get("ActiveState") != "active" or timer.get("UnitFileState") != "enabled"):
-            code, _ = command("systemctl", "enable", "--now", timer_name)
-            repairs.append({"unit": timer_name, "action": "restore_owner_approved_timer", "succeeded": code == 0})
+        if enforce and not paused:
             timer = unit_state(timer_name)
         receipt_path = receipts / f"{source}-latest.json"
         try:

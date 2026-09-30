@@ -150,6 +150,24 @@ Never run the NET-OPS scripts (`apply_known_company_websites.py`, `discover_webs
 
 ## 10. Confirmed gaps and unresolved questions
 
+### Owner-authorized existing-data reconciliation, 2026-09-28
+
+`scripts/apply_company_reuse_and_validate_boards.py` applies audited missing-only
+values with optimistic profile comparison, retains before-images, and validates
+bounded public career URL evidence with redirect host checks. Live read-back
+confirmed 118 domains, 13 LinkedIn IDs, 105 selected homepages, and 116 distinct
+career URLs for 57 companies. It does not overwrite known values, resolve website
+conflicts, or establish exhaustive job-board coverage. All 149 original proposed
+description gaps were false gaps caused by the audit fallback masking populated
+additional fields; no description was overwritten. Five safety tests are in
+`tests/test_company_reuse_apply.py`. Evidence and corrected interpretation:
+`data/audit/publication_reuse_2026-09-28/REPORT.md` and `reuse_apply_receipt.json`.
+
+Live publisher diagnosis found 184,897 pending LinkedIn source observations at
+a 250-row daily bootstrap batch, and a publication query limited to current-cycle
+observations plus the previous head. Diagnosis only: no publisher changes were
+authorized or deployed. Do not infer that additional enrichment alone fixes this.
+
 | ID | Gap |
 |---|---|
 | **WS3-G11** | `backend/enrichment` foundation has no runtime consumer at the baseline (activation flags referenced only within the package + offline trial scripts). Confirm whether it is dead code or awaiting an integration owner decision. |

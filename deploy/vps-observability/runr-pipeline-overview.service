@@ -1,0 +1,16 @@
+[Unit]
+Description=Runr aggregate data pipeline observer (read-only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/runr/.venv/bin/python /opt/runr-ops/pipeline.py
+TimeoutStartSec=360
+Nice=10
+MemoryMax=512M
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/runr/observability
