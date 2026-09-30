@@ -58,10 +58,12 @@ test("real Jobs view never exposes a LinkedIn job-detail Apply URL", () => {
     title: "Analyst",
     company: "Gamma",
     apply_url: "https://jobs.linkedin.com/jobs/view/3",
+    user_facing_url: "https://www.linkedin.com/jobs/view/3",
   });
 
   assert.equal(view.applyUrl, "");
   assert.equal(view.directApplyUrl, "");
+  assert.equal(view.viewJobUrl, "https://www.linkedin.com/jobs/view/3");
 });
 
 test("real Jobs view preserves a server-approved external Apply URL from a LinkedIn-sourced job", () => {

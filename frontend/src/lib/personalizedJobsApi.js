@@ -297,6 +297,16 @@ function approvedApplyUrl(job) {
   return value;
 }
 
+function approvedViewJobUrl(job) {
+  const value = text(job.user_facing_url || job.job_detail_url);
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 export function evaluationLabel(evaluation = {}) {
   const status = text(evaluation.status).toLowerCase();
   if (status === "eligible") return "Eligible match";
@@ -341,6 +351,7 @@ export function toPersonalizedJobView(job = {}) {
     ? `${Number(exactApplicantCount).toLocaleString()} applicants`
     : text(latestApplicants.label) || (applicantIntelligence.state === "available" ? "Applicant data available in Runr Pro" : "Unknown");
   const applyUrl = approvedApplyUrl(safeJob);
+  const viewJobUrl = approvedViewJobUrl(safeJob);
   const companyLogoUrl = text(companyProfile.logo_url || companyProfile.fields?.logo?.value);
   const companyMonogram = text(companyProfile.monogram);
   return {
@@ -367,6 +378,7 @@ export function toPersonalizedJobView(job = {}) {
     lastVerifiedAt: safeJob.last_verified_at || "",
     applyUrl,
     directApplyUrl: applyUrl,
+    viewJobUrl,
     lifecycleState: unknown(safeJob.lifecycle_state),
     userState: text(safeJob.user_state) || "none",
     evaluation,
