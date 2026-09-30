@@ -171,7 +171,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         migration_ids = [migration.migration_id for migration in MIGRATIONS]
         self.assertEqual(migration_ids, sorted(migration_ids))
         self.assertEqual(len(migration_ids), len(set(migration_ids)))
-        self.assertEqual(current_migration_head(), "063_acquisition_bulk_ingest_projection_index")
+        self.assertEqual(current_migration_head(), "064_acquisition_publication_target_scope")
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
 
     def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
@@ -539,6 +539,29 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertIsNotNone(applied)
         self.assertIsNotNone(projection_index)
         self.assertEqual(len(str(applied[0])), 64)
+
+    def test_publication_target_scope_is_transaction_owned_and_indexed(self):
+        db_path = self._db_path("publication_target_scope")
+
+        with self._local_environment():
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(acquisition_publication_target_scope)"
+                ).fetchall()
+            }
+            indexes = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA index_list(acquisition_publication_target_scope)"
+                ).fetchall()
+            }
+
+        self.assertEqual(columns, {"scope_id", "target_id"})
+        self.assertIn("idx_acquisition_publication_target_scope_target", indexes)
 
 
 if __name__ == "__main__":

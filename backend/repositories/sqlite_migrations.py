@@ -3308,6 +3308,22 @@ def _apply_acquisition_bulk_ingest_projection_index_migration(connection: Databa
     )
 
 
+def _apply_acquisition_publication_target_scope_migration(connection: DatabaseConnection) -> None:
+    """Persist a transaction-owned target set for read-efficient publication."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_publication_target_scope (
+            scope_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            PRIMARY KEY (scope_id, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_publication_target_scope_target
+            ON acquisition_publication_target_scope(target_id, scope_id);
+        """
+    )
+
+
 def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
     """Persist source-identity resolution and transactional company merges."""
 
@@ -3686,6 +3702,11 @@ MIGRATIONS = (
         "063_acquisition_bulk_ingest_projection_index",
         "Index bounded staging lookups used by canonical job projection.",
         _apply_acquisition_bulk_ingest_projection_index_migration,
+    ),
+    Migration.from_callable(
+        "064_acquisition_publication_target_scope",
+        "Create durable transaction-owned target scopes for read-efficient publication.",
+        _apply_acquisition_publication_target_scope_migration,
     ),
 )
 

@@ -127,9 +127,13 @@ class PhaseAPersistenceTests(unittest.TestCase):
                     "SELECT actual_requests, actual_credits FROM acquisition_cycles WHERE cycle_id = ?",
                     (cycle_id,),
                 ).fetchone()
+                publication_scope_rows = connection.execute(
+                    "SELECT COUNT(*) FROM acquisition_publication_target_scope"
+                ).fetchone()[0]
 
             self.assertEqual(counts, {table: 1 for table in counts})
             self.assertEqual((actual["actual_requests"], actual["actual_credits"]), (1, 0))
+            self.assertEqual(publication_scope_rows, 0)
 
 
 if __name__ == "__main__":
