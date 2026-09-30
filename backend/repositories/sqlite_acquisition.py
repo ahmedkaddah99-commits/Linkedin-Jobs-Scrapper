@@ -4042,6 +4042,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
         batch_size: int = 1000,
         dry_run: bool = False,
+        validate_completeness: bool = True,
     ) -> str | dict[str, Any]:
         """Publish the currently stored active catalog after a fresh gate check.
 
@@ -4059,6 +4060,8 @@ class SqliteAcquisitionStore(_SqliteStore):
         normalized_created_by = str(created_by or "system").strip()
         normalized_scheduled_run_id = str(scheduled_run_id or "").strip()
         policy = get_publication_policy(policy_version)
+        if not validate_completeness and policy.completeness_mode == "blocking":
+            raise ValueError("A blocking publication policy cannot skip completeness validation.")
 
         def publish(connection):
             candidate_query = """
@@ -4120,6 +4123,20 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ORDER BY j.title, j.canonical_job_id
                 LIMIT ? OFFSET ?
             """
+            if not validate_completeness:
+                candidate_query = """
+                    SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                           j.title, j.location, j.canonical_url,
+                           COALESCE(v.apply_url, '') AS apply_url,
+                           j.lifecycle_state, j.current_version_id,
+                           '' AS version_description, '' AS version_location
+                    FROM canonical_jobs j
+                    JOIN canonical_companies c ON c.company_id = j.company_id
+                    LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+                    WHERE j.lifecycle_state != 'closed'
+                    ORDER BY j.title, j.canonical_job_id
+                    LIMIT ? OFFSET ?
+                """
             snapshot: list[dict[str, Any]] = []
             candidate_count = 0
             rejected_count = 0
@@ -4136,6 +4153,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 page_snapshot, rejected_rows = self._publication_rows_with_completeness(
                     candidate_rows,
                     policy=policy,
+                    validate_completeness=validate_completeness,
                 )
                 snapshot.extend(page_snapshot)
                 if not dry_run:

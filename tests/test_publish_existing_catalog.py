@@ -31,11 +31,19 @@ def test_publish_existing_catalog_defaults_to_display_first_policy() -> None:
 
 def test_publish_existing_catalog_parser_exposes_bounded_dry_run_and_rollback_controls() -> None:
     args = build_parser().parse_args(
-        ["--dry-run", "--batch-size", "1", "--rollback-publication", "acq_republish_previous"]
+        [
+            "--dry-run",
+            "--batch-size",
+            "1",
+            "--skip-completeness-audit",
+            "--rollback-publication",
+            "acq_republish_previous",
+        ]
     )
 
     assert args.dry_run is True
     assert args.batch_size == 1
+    assert args.skip_completeness_audit is True
     assert args.rollback_publication == "acq_republish_previous"
 
 
@@ -135,6 +143,48 @@ def test_report_only_policy_keeps_incomplete_jobs_visible(tmp_path: Path) -> Non
     publication_id = store.publish_existing_catalog_snapshot(
         created_by="test",
         policy_version="publication_policy_v1",
+    )
+
+    assert publication_id
+    assert store.get_public_catalog()["total"] == 1
+
+
+def test_report_only_recovery_can_skip_redundant_completeness_audit(tmp_path: Path) -> None:
+    app = create_backend(tmp_path, storage_backend="sqlite")
+    store = app.repositories.acquisition_store
+    target = _target()
+    store.ensure_targets([target])
+    cycle = store.claim_due_cycle(
+        window_key="fast-report-only-catalog-cycle",
+        lease_owner="test",
+        scheduled_at="2026-09-12T00:00:00Z",
+    )
+    assert cycle is not None
+    store.ensure_cycle_tasks(str(cycle["cycle_id"]), [target])
+    task = store.claim_next_task(cycle_id=str(cycle["cycle_id"]), lease_owner="test")
+    assert task is not None
+    store.ingest_snapshot(
+        cycle_id=str(cycle["cycle_id"]),
+        task_id=str(task["task_id"]),
+        target_id=str(target["target_id"]),
+        jobs=[
+            {
+                "job_id": "current-fast-path",
+                "title": "Current Fast Path Engineer",
+                "location": "Berlin",
+                "url": "https://jobs.example/current-fast-path",
+                "description": "",
+                "source_ats": "fixture",
+            }
+        ],
+        complete_snapshot=True,
+        valid_snapshot=True,
+    )
+
+    publication_id = store.publish_existing_catalog_snapshot(
+        created_by="test",
+        policy_version="publication_policy_v1",
+        validate_completeness=False,
     )
 
     assert publication_id

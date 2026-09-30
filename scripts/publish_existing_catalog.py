@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-version", default="publication_policy_v1")
     parser.add_argument("--batch-size", type=int, default=1000)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-completeness-audit", action="store_true")
     parser.add_argument("--rollback-publication")
     parser.add_argument("--expected-head-publication", default="")
     parser.add_argument("--actor-user-id", default=os.getenv("RUNR_ACTOR_USER_ID", "catalog_recovery"))
@@ -97,6 +98,7 @@ def main(argv: list[str] | None = None) -> None:
             policy_version=args.policy_version,
             batch_size=args.batch_size,
             dry_run=True,
+            validate_completeness=not args.skip_completeness_audit,
         )
         assert isinstance(preview, dict)
         preview["limits"] = {"batch_size": int(preview["batch_size"])}
@@ -107,6 +109,7 @@ def main(argv: list[str] | None = None) -> None:
         origin=args.origin,
         policy_version=args.policy_version,
         batch_size=args.batch_size,
+        validate_completeness=not args.skip_completeness_audit,
     )
     assert isinstance(publication_id, str)
     with store._connect() as connection:
