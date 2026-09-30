@@ -7679,9 +7679,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                     _json(preflight), policy.version,
                 ),
             )
-            connection.executemany(
-                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
-                [(publication_id, _snapshot_job_id(item)) for item in snapshot if _snapshot_job_id(item)],
+            _insert_publication_jobs_batched(
+                connection,
+                publication_id=publication_id,
+                canonical_job_ids=(
+                    _snapshot_job_id(item) for item in snapshot if _snapshot_job_id(item)
+                ),
             )
             if current_id:
                 changed = connection.execute(
