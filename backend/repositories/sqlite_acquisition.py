@@ -3797,24 +3797,19 @@ class SqliteAcquisitionStore(_SqliteStore):
                                     COALESCE(v.description, '') AS version_description,
                                     COALESCE(v.location, '') AS version_location,
                                     COALESCE(v.payload_json, '{{}}') AS version_payload_json,
-                                    (SELECT o.external_job_id FROM job_source_observations o
-                                     WHERE o.canonical_job_id = j.canonical_job_id
-                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
-                                    (SELECT o.source_ats FROM job_source_observations o
-                                     WHERE o.canonical_job_id = j.canonical_job_id
-                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
-                                    (SELECT o.observed_at FROM job_source_observations o
-                                     WHERE o.canonical_job_id = j.canonical_job_id
-                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
-                                    (SELECT o.target_id FROM job_source_observations o
-                                     WHERE o.canonical_job_id = j.canonical_job_id
-                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
-                                    (SELECT o.task_id FROM job_source_observations o
-                                     WHERE o.canonical_job_id = j.canonical_job_id
-                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
+                                    latest_o.external_job_id AS source_job_id,
+                                    latest_o.source_ats AS source_ats,
+                                    latest_o.observed_at AS observation_observed_at,
+                                    latest_o.target_id AS source_target_id,
+                                    latest_o.task_id AS source_task_id
                     FROM canonical_jobs j
                     JOIN canonical_companies c ON c.company_id = j.company_id
                     LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+                    LEFT JOIN job_source_observations latest_o ON latest_o.observation_id = (
+                        SELECT o.observation_id FROM job_source_observations o
+                        WHERE o.canonical_job_id = j.canonical_job_id
+                        ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1
+                    )
                     WHERE j.canonical_job_id > ?
                       AND j.lifecycle_state != 'closed'
                       AND (
