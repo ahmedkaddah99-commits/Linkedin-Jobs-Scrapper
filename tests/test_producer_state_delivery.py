@@ -15,6 +15,7 @@ from scripts.publish_producer_states import (
     _delivery_transaction_batches,
     _enrich_source_groups,
     _publisher_transaction_limits,
+    _publisher_cycle_key,
     _split_large_bulk_snapshot,
     _verified_company_registry,
     _target,
@@ -96,6 +97,18 @@ def test_publisher_transaction_limits_default_to_bounded_set_based_batch(monkeyp
     monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "999")
     monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "999")
     assert _publisher_transaction_limits() == (50, 100)
+
+
+def test_publisher_cycle_key_allows_only_explicit_bounded_producer_override(monkeypatch):
+    monkeypatch.delenv("RUNR_PUBLISHER_RESUME_CYCLE_KEY", raising=False)
+    assert _publisher_cycle_key("producer:calculated") == "producer:calculated"
+
+    monkeypatch.setenv("RUNR_PUBLISHER_RESUME_CYCLE_KEY", "producer:durable-cycle")
+    assert _publisher_cycle_key("producer:calculated") == "producer:durable-cycle"
+
+    monkeypatch.setenv("RUNR_PUBLISHER_RESUME_CYCLE_KEY", "unrelated:cycle")
+    with pytest.raises(ValueError, match="producer cycle key"):
+        _publisher_cycle_key("producer:calculated")
 
 
 def test_large_bulk_snapshot_only_authorizes_closure_on_final_chunk():

@@ -1093,6 +1093,17 @@ def _publisher_initializes_database() -> bool:
     }
 
 
+def _publisher_cycle_key(calculated_key: str) -> str:
+    """Allow an operator to finish one explicitly identified durable cycle."""
+
+    override = os.getenv("RUNR_PUBLISHER_RESUME_CYCLE_KEY", "").strip()
+    if not override:
+        return calculated_key
+    if not override.startswith("producer:") or len(override) > 128:
+        raise ValueError("RUNR_PUBLISHER_RESUME_CYCLE_KEY must be a bounded producer cycle key")
+    return override
+
+
 def _split_large_bulk_snapshot(
     snapshot: Mapping[str, object],
     *,
@@ -1214,7 +1225,9 @@ def _run_delivery_legacy(
         target for target in targets if _text(target.get("target_id")) not in existing_target_ids
     )
     marker = "|".join([_text(manifest.get("manifest_hash")), linkedin_marker, employer_marker, source_version])
-    cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    cycle_key = _publisher_cycle_key(
+        "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    )
     cycle = store.claim_due_cycle(
         window_key=cycle_key,
         lease_owner=f"producer_bridge:{os.getpid()}",
@@ -1645,7 +1658,9 @@ def run_delivery(
             policy_version,
         ]
     )
-    cycle_key = "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    cycle_key = _publisher_cycle_key(
+        "producer:" + hashlib.sha256(marker.encode("utf-8")).hexdigest()[:24]
+    )
     _progress("cycle_claim")
     cycle = store.claim_due_cycle(
         window_key=cycle_key,
