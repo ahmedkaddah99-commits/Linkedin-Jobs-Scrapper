@@ -231,10 +231,11 @@ class SqliteWorkspaceRepository(_SqliteStore):
         *,
         seeded_templates: Iterable[WorkflowTemplate] | None = None,
         seeded_workspaces: Iterable[WorkspaceDefinition] | None = None,
+        initialize: bool = True,
     ):
         self._seeded_templates = list(seeded_templates or DEFAULT_WORKFLOW_TEMPLATES)
         self._seeded_workspaces = list(seeded_workspaces or DEFAULT_WORKSPACES)
-        super().__init__(db_path)
+        super().__init__(db_path, initialize=initialize)
         self._ensure_seed_data()
 
     def _ensure_seed_data(self) -> None:

@@ -44,6 +44,7 @@ case "$role" in
       serve-api \
       --host "${RUNR_API_HOST:-0.0.0.0}" \
       --port "${PORT:-8000}" \
+      --skip-database-initialization \
       "$@"
     ;;
   worker)

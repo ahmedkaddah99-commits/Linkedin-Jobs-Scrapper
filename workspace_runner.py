@@ -178,6 +178,11 @@ def main() -> int:
     serve_parser = subparsers.add_parser("serve-api", help="Start the minimal JSON API.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--skip-database-initialization",
+        action="store_true",
+        help="Start after a separate release migration has already succeeded.",
+    )
 
     args = parser.parse_args()
     validate_environment()
@@ -187,7 +192,13 @@ def main() -> int:
     )
 
     if args.command == "serve-api":
-        serve_api(host=args.host, port=args.port, data_dir=args.data_dir, storage_backend=args.storage)
+        serve_api(
+            host=args.host,
+            port=args.port,
+            data_dir=args.data_dir,
+            storage_backend=args.storage,
+            initialize_schema=not args.skip_database_initialization,
+        )
         return 0
 
     application = create_backend(args.data_dir, storage_backend=args.storage)

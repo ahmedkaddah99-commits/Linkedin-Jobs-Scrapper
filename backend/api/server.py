@@ -9351,10 +9351,15 @@ def serve_api(
     port: int = 8000,
     data_dir: str = ".backend_data",
     storage_backend: str = "sqlite",
+    initialize_schema: bool = True,
 ) -> None:
     load_project_dotenv()
     validate_environment()
-    application = create_backend(data_dir, storage_backend=storage_backend)
+    application = create_backend(
+        data_dir,
+        storage_backend=storage_backend,
+        initialize_schema=initialize_schema,
+    )
     allowed_origins, allow_all_origins = _parse_allowed_origins(os.getenv("BACKEND_ALLOWED_ORIGINS", ""))
     allowed_extension_origins = _parse_allowed_extension_origins(
         os.getenv("RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS", "")

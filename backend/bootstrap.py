@@ -260,7 +260,12 @@ def _resolve_sqlite_path(base_path: Path) -> Path:
     return base_path / "backend.sqlite3"
 
 
-def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepositories:
+def _build_repositories(
+    base_path: Path,
+    *,
+    storage_backend: str,
+    initialize_schema: bool = True,
+) -> BackendRepositories:
     if storage_backend == "file":
         return BackendRepositories(
             workspace_repository=FileWorkspaceRepository(base_path),
@@ -283,24 +288,25 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
         )
     if storage_backend == "sqlite":
         db_path = _resolve_sqlite_path(base_path)
-        initialize_database(db_path)
+        if initialize_schema:
+            initialize_database(db_path)
         return BackendRepositories(
-            workspace_repository=SqliteWorkspaceRepository(db_path),
-            run_repository=SqliteRunRepository(db_path),
-            job_store=SqliteJobStore(db_path),
-            artifact_store=SqliteArtifactStore(db_path),
-            review_store=SqliteReviewStore(db_path),
-            auth_repository=SqliteAuthRepository(db_path),
-            secret_store=SqliteSecretStore(db_path),
-            worker_store=SqliteWorkerStore(db_path),
-            analytics_store=SqliteAnalyticsStore(db_path),
-            config_store=SqliteConfigStore(db_path),
-            source_policy_store=SqliteSourcePolicyStore(db_path),
-            career_profile_store=SqliteCareerProfileStore(db_path),
-            evidence_store=SqliteEvidenceStore(db_path),
-            acquisition_store=SqliteAcquisitionStore(db_path),
-            acquisition_audit_store=SqliteAcquisitionAuditStore(db_path),
-            personalized_jobs_store=SqlitePersonalizedJobsStore(db_path),
+            workspace_repository=SqliteWorkspaceRepository(db_path, initialize=False),
+            run_repository=SqliteRunRepository(db_path, initialize=False),
+            job_store=SqliteJobStore(db_path, initialize=False),
+            artifact_store=SqliteArtifactStore(db_path, initialize=False),
+            review_store=SqliteReviewStore(db_path, initialize=False),
+            auth_repository=SqliteAuthRepository(db_path, initialize=False),
+            secret_store=SqliteSecretStore(db_path, initialize=False),
+            worker_store=SqliteWorkerStore(db_path, initialize=False),
+            analytics_store=SqliteAnalyticsStore(db_path, initialize=False),
+            config_store=SqliteConfigStore(db_path, initialize=False),
+            source_policy_store=SqliteSourcePolicyStore(db_path, initialize=False),
+            career_profile_store=SqliteCareerProfileStore(db_path, initialize=False),
+            evidence_store=SqliteEvidenceStore(db_path, initialize=False),
+            acquisition_store=SqliteAcquisitionStore(db_path, initialize=False),
+            acquisition_audit_store=SqliteAcquisitionAuditStore(db_path, initialize=False),
+            personalized_jobs_store=SqlitePersonalizedJobsStore(db_path, initialize=False),
 
 
         )
@@ -313,11 +319,16 @@ def create_backend(
     *,
     storage_backend: str = "sqlite",
     test_mode: bool = False,
+    initialize_schema: bool = True,
 ) -> BackendApplication:
     base_path = Path(base_dir)
     if test_mode or _is_test_context():
         _assert_test_database_boundary(base_path, storage_backend=storage_backend)
-    repositories = _build_repositories(base_path, storage_backend=storage_backend)
+    repositories = _build_repositories(
+        base_path,
+        storage_backend=storage_backend,
+        initialize_schema=initialize_schema,
+    )
     storage_environment = dict(os.environ)
     object_storage_backend = str(storage_environment.get("OBJECT_STORAGE_BACKEND") or "local").strip().lower()
     if object_storage_backend == "local":
