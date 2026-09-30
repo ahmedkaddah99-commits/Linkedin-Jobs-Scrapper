@@ -10,6 +10,7 @@ class AtsRouterTests(unittest.TestCase):
         cases = {
             "https://boards.greenhouse.io/acme/jobs/1": "greenhouse",
             "https://jobs.lever.co/acme/role": "lever",
+            "https://jobs.ashbyhq.com/acme/role": "ashby",
             "https://acme.wd1.myworkdayjobs.com/en-US/careers": "workday",
             "https://acme.jobs.personio.de/": "personio",
             "https://acme.recruitee.com/": "recruitee",
@@ -73,6 +74,26 @@ class AtsRouterTests(unittest.TestCase):
         for ats in ("workday", "personio", "recruitee", "smartrecruiters"):
             with self.subTest(ats=ats):
                 self.assertEqual(fetch_ats_jobs("https://example.invalid/jobs", ats), [])
+
+    def test_ashby_public_board_preserves_official_application_url(self):
+        response = MagicMock()
+        response.status_code = 200
+        response.url = "https://api.ashbyhq.com/posting-api/job-board/acme"
+        response.json.return_value = {"jobs": [{
+            "id": "role-1", "title": "Engineer", "location": "Berlin",
+            "jobUrl": "https://jobs.ashbyhq.com/acme/role-1",
+            "applyUrl": "https://jobs.ashbyhq.com/acme/role-1/application",
+            "descriptionPlain": "Build things.",
+        }]}
+        requester = MagicMock(return_value=response)
+
+        snapshot = fetch_ats_snapshot("https://jobs.ashbyhq.com/acme", "ashby", requester=requester)
+
+        self.assertTrue(snapshot["complete_snapshot"])
+        self.assertEqual(snapshot["source_reported_count"], 1)
+        self.assertEqual(snapshot["jobs"][0]["application_url"],
+                         "https://jobs.ashbyhq.com/acme/role-1/application")
+        requester.assert_called_once_with(response.url, timeout=20, allow_redirects=False)
 
     def test_fixture_softgarden_board_is_classified_and_report_only(self):
         self.assertEqual(detect_ats("https://acme.softgarden.io"), "softgarden")

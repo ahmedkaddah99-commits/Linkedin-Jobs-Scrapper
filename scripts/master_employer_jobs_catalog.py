@@ -72,7 +72,7 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Jobs-Urls" / "master linkedin jobs url"
 DEFAULT_TIMEOUT_SECONDS = 25
 DEFAULT_LIMIT = 25
 EMPLOYER_CSV_VALIDATION_FIELD_LIMIT = 16 * 1024 * 1024
-NATIVE_ATS_CONNECTORS = {"greenhouse", "lever", *EXPANSION_CONNECTORS}
+NATIVE_ATS_CONNECTORS = {"greenhouse", "lever", "ashby", *EXPANSION_CONNECTORS}
 PLACEHOLDER_IDENTIFIERS = {"", "//", "-", "—", "none", "null", "nan", "n/a"}
 EMPLOYER_OUTCOMES = {
     "complete_with_jobs",

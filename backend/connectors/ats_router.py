@@ -27,6 +27,8 @@ def detect_ats(url: str) -> str | None:
         return "greenhouse"
     if _host_matches(host, "lever.co"):
         return "lever"
+    if _host_matches(host, "ashbyhq.com"):
+        return "ashby"
     if _host_matches(host, "myworkdayjobs.com", "myworkdaysite.com", "workdayjobs.com"):
         return "workday"
     if _host_matches(host, "personio.de", "personio.com"):
@@ -215,6 +217,53 @@ def fetch_ats_snapshot(
                 "target_ats": target_ats,
                 "requested_ats": normalized_ats,
             },
+        }
+    if normalized_ats == "ashby":
+        board_token = _path_segment(url)
+        if not board_token:
+            return {"jobs": [], "status": "invalid_target", "complete_snapshot": False,
+                    "credible_evidence": False, "request_url": url}
+        request_url = f"https://api.ashbyhq.com/posting-api/job-board/{quote(board_token, safe='')}"
+        try:
+            response = request(request_url, timeout=timeout_seconds, allow_redirects=False)
+            response.raise_for_status()
+            payload = response.json()
+            raw_jobs = payload.get("jobs") if isinstance(payload, dict) else None
+            if not isinstance(raw_jobs, list):
+                raise ValueError("Ashby response has no jobs list")
+        except (requests.RequestException, ValueError) as exc:
+            LOGGER.warning("Ashby API request failed for %s: %s", url, exc)
+            return {"jobs": [], "status": "failed", "complete_snapshot": False,
+                    "credible_evidence": False, "request_url": request_url, "error": str(exc)}
+        jobs = []
+        for job in raw_jobs:
+            if not isinstance(job, dict):
+                continue
+            job_url = str(job.get("jobUrl") or "").strip()
+            apply_url = str(job.get("applyUrl") or "").strip()
+            if not job_url or not apply_url:
+                continue
+            jobs.append({
+                "job_id": str(job.get("id") or stable_manual_job_id(job_url, prefix="ashby")),
+                "title": str(job.get("title") or "").strip(),
+                "url": job_url, "link": job_url, "source_url": job_url,
+                "job_detail_url": job_url, "application_url": apply_url,
+                "apply_link": apply_url, "apply_link_source": "ashby",
+                "company": board_token, "source_token": board_token,
+                "location": str(job.get("location") or "").strip(),
+                "location_raw": str(job.get("location") or "").strip(),
+                "department": str(job.get("department") or "").strip(),
+                "employment_type": str(job.get("employmentType") or "").strip(),
+                "full_description": str(job.get("descriptionPlain") or job.get("descriptionHtml") or ""),
+                "source_ats": "ashby", "source_raw_payload": dict(job),
+            })
+        return {
+            "jobs": jobs, "status": "completed", "status_code": response.status_code,
+            "complete_snapshot": len(jobs) == len(raw_jobs), "pagination_complete": True,
+            "credible_evidence": True, "stop_reason": "pagination_complete",
+            "request_url": request_url, "resolved_url": str(getattr(response, "url", "") or request_url),
+            "pages_fetched": 1, "requests_made": 1,
+            "source_reported_count": len(raw_jobs),
         }
     if normalized_ats == "greenhouse":
         board_token = _greenhouse_board_token(url)
