@@ -63,3 +63,16 @@ test("real Jobs view never exposes a LinkedIn job-detail Apply URL", () => {
   assert.equal(view.applyUrl, "");
   assert.equal(view.directApplyUrl, "");
 });
+
+test("real Jobs view preserves a server-approved external Apply URL from a LinkedIn-sourced job", () => {
+  const view = toPersonalizedJobView({
+    canonical_job_id: "job-4",
+    source: "linkedin",
+    title: "Engineer",
+    company: "Gamma",
+    apply_url: "https://jobs.ashbyhq.com/gamma/role/application",
+  });
+
+  assert.equal(view.applyUrl, "https://jobs.ashbyhq.com/gamma/role/application");
+  assert.equal(view.directApplyUrl, "https://jobs.ashbyhq.com/gamma/role/application");
+});

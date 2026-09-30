@@ -294,7 +294,6 @@ function isLinkedInJobDetailUrl(value) {
 function approvedApplyUrl(job) {
   const value = text(job.apply_url || job.direct_apply_url);
   if (!value || isLinkedInJobDetailUrl(value)) return "";
-  if (text(job.source).toLowerCase() === "linkedin" && text(job.easy_apply_status).toLowerCase() !== "false") return "";
   return value;
 }
 
