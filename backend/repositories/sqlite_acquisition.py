@@ -137,6 +137,62 @@ def _insert_publication_jobs_batched(
         )
 
 
+def _insert_publication_target_scope_batched(
+    connection,
+    *,
+    scope_id: str,
+    target_ids: Iterable[str],
+    batch_size: int = 400,
+) -> None:
+    ids = [str(value) for value in target_ids if str(value).strip()]
+    for offset in range(0, len(ids), max(1, int(batch_size))):
+        batch = ids[offset : offset + max(1, int(batch_size))]
+        values = ",".join("(?, ?)" for _ in batch)
+        parameters = tuple(item for target_id in batch for item in (scope_id, target_id))
+        connection.execute(
+            f"INSERT OR IGNORE INTO acquisition_publication_target_scope "
+            f"(scope_id, target_id) VALUES {values}",
+            parameters,
+        )
+
+
+def _update_publication_task_counts_batched(
+    connection,
+    *,
+    publication_id: str,
+    cycle_id: str,
+    now: str,
+    batch_size: int = 400,
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT o.target_id, COUNT(DISTINCT pj.canonical_job_id) AS jobs_published
+        FROM acquisition_publication_jobs pj
+        JOIN job_source_observations o ON o.canonical_job_id=pj.canonical_job_id
+        WHERE pj.publication_id=? AND o.cycle_id=?
+        GROUP BY o.target_id
+        """,
+        (publication_id, cycle_id),
+    ).fetchall()
+    connection.execute(
+        "UPDATE acquisition_tasks SET jobs_published=0, updated_at=? WHERE cycle_id=?",
+        (now, cycle_id),
+    )
+    counts = [(str(row["target_id"]), int(row["jobs_published"] or 0)) for row in rows]
+    for offset in range(0, len(counts), max(1, int(batch_size))):
+        batch = counts[offset : offset + max(1, int(batch_size))]
+        cases = " ".join("WHEN ? THEN ?" for _ in batch)
+        placeholders = ",".join("?" for _ in batch)
+        case_parameters = tuple(item for target_id, count in batch for item in (target_id, count))
+        target_parameters = tuple(target_id for target_id, _count in batch)
+        connection.execute(
+            f"UPDATE acquisition_tasks SET jobs_published=CASE target_id {cases} "
+            f"ELSE jobs_published END, updated_at=? "
+            f"WHERE cycle_id=? AND target_id IN ({placeholders})",
+            (*case_parameters, now, cycle_id, *target_parameters),
+        )
+
+
 def _decode(value: str | bytes | None, default: Any) -> Any:
     if value in (None, ""):
         return default
@@ -3754,10 +3810,10 @@ class SqliteAcquisitionStore(_SqliteStore):
             scope_id = ""
             if len(target_ids) > 500:
                 scope_id = publication_id
-                connection.executemany(
-                    "INSERT OR IGNORE INTO acquisition_publication_target_scope "
-                    "(scope_id, target_id) VALUES (?, ?)",
-                    [(scope_id, target_id) for target_id in target_ids],
+                _insert_publication_target_scope_batched(
+                    connection,
+                    scope_id=scope_id,
+                    target_ids=target_ids,
                 )
                 target_scope = (
                     "EXISTS (SELECT 1 FROM acquisition_publication_target_scope pts "
@@ -3850,9 +3906,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                     normalized_scheduled_run_id, _json(preflight), policy.version,
                 ),
             )
-            connection.executemany(
-                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
-                [(publication_id, str(row["canonical_job_id"])) for row in snapshot],
+            _insert_publication_jobs_batched(
+                connection,
+                publication_id=publication_id,
+                canonical_job_ids=(str(row["canonical_job_id"]) for row in snapshot),
+                batch_size=400,
             )
             if previous_publication_id:
                 changed = connection.execute(
@@ -3889,20 +3947,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "UPDATE acquisition_cycles SET jobs_published = ?, publication_id = ?, updated_at = ? WHERE cycle_id = ?",
                 (len(snapshot), publication_id, now, cycle_id),
             )
-            for target_id in target_ids:
-                target_published = connection.execute(
-                    """
-                    SELECT COUNT(DISTINCT pj.canonical_job_id) AS count
-                    FROM acquisition_publication_jobs pj
-                    JOIN job_source_observations o ON o.canonical_job_id = pj.canonical_job_id
-                    WHERE pj.publication_id = ? AND o.target_id = ? AND o.cycle_id = ?
-                    """,
-                    (publication_id, target_id, cycle_id),
-                ).fetchone()["count"]
-                connection.execute(
-                    "UPDATE acquisition_tasks SET jobs_published = ?, updated_at = ? WHERE cycle_id = ? AND target_id = ?",
-                    (int(target_published or 0), now, cycle_id, target_id),
-                )
+            _update_publication_task_counts_batched(
+                connection,
+                publication_id=publication_id,
+                cycle_id=cycle_id,
+                now=now,
+            )
             return publication_id
 
         return self._run_transaction(publish)

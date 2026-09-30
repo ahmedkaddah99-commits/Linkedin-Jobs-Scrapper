@@ -4,9 +4,61 @@ from pathlib import Path
 
 from backend.acquisition.manifest import load_phase_a_manifest
 from backend.bootstrap import create_backend
+from backend.repositories.sqlite_acquisition import (
+    _insert_publication_target_scope_batched,
+    _update_publication_task_counts_batched,
+)
+
+
+class _RowsCursor:
+    def __init__(self, rows=()):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _RecordingConnection:
+    def __init__(self, rows=()):
+        self.calls = []
+        self._rows = rows
+
+    def execute(self, sql, parameters=()):
+        self.calls.append((sql, tuple(parameters)))
+        return _RowsCursor(self._rows if sql.lstrip().startswith("SELECT") else ())
 
 
 class PhaseAPersistenceTests(unittest.TestCase):
+    def test_publication_scope_and_task_counts_use_bounded_statement_batches(self):
+        scope_connection = _RecordingConnection()
+        _insert_publication_target_scope_batched(
+            scope_connection,
+            scope_id="publication-1",
+            target_ids=(f"target-{index}" for index in range(1001)),
+            batch_size=400,
+        )
+        self.assertEqual(len(scope_connection.calls), 3)
+        self.assertTrue(
+            all("INSERT OR IGNORE INTO acquisition_publication_target_scope" in sql for sql, _ in scope_connection.calls)
+        )
+
+        count_rows = [
+            {"target_id": f"target-{index}", "jobs_published": index + 1}
+            for index in range(1001)
+        ]
+        count_connection = _RecordingConnection(count_rows)
+        _update_publication_task_counts_batched(
+            count_connection,
+            publication_id="publication-1",
+            cycle_id="cycle-1",
+            now="2026-09-30T00:00:00+00:00",
+            batch_size=400,
+        )
+        self.assertEqual(len(count_connection.calls), 5)
+        self.assertTrue(count_connection.calls[0][0].lstrip().startswith("SELECT"))
+        self.assertIn("jobs_published=0", count_connection.calls[1][0])
+        self.assertTrue(all("CASE target_id" in sql for sql, _ in count_connection.calls[2:]))
+
     def test_cycle_request_observation_version_and_publication_replay_are_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_backend(Path(temporary_directory), storage_backend="sqlite")
