@@ -298,13 +298,15 @@ function approvedApplyUrl(job) {
 }
 
 function approvedViewJobUrl(job) {
-  const value = text(job.user_facing_url || job.job_detail_url);
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? value : "";
-  } catch {
-    return "";
+  for (const value of [job.job_detail_url, job.user_facing_url]) {
+    try {
+      const parsed = new URL(text(value));
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") return text(value);
+    } catch {
+      // Try the next source-backed job URL.
+    }
   }
+  return "";
 }
 
 export function evaluationLabel(evaluation = {}) {

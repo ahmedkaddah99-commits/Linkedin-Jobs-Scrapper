@@ -59,11 +59,26 @@ test("real Jobs view never exposes a LinkedIn job-detail Apply URL", () => {
     company: "Gamma",
     apply_url: "https://jobs.linkedin.com/jobs/view/3",
     user_facing_url: "https://www.linkedin.com/jobs/view/3",
+    job_detail_url: "https://www.linkedin.com/jobs/view/3",
   });
 
   assert.equal(view.applyUrl, "");
   assert.equal(view.directApplyUrl, "");
   assert.equal(view.viewJobUrl, "https://www.linkedin.com/jobs/view/3");
+});
+
+test("View job prefers the original posting over a different application candidate", () => {
+  const view = toPersonalizedJobView({
+    canonical_job_id: "job-5",
+    source: "linkedin",
+    title: "Engineer",
+    company: "Gamma",
+    job_detail_url: "https://www.linkedin.com/jobs/view/5",
+    user_facing_url: "https://jobs.example.com/role-5/application",
+  });
+
+  assert.equal(view.applyUrl, "");
+  assert.equal(view.viewJobUrl, "https://www.linkedin.com/jobs/view/5");
 });
 
 test("real Jobs view preserves a server-approved external Apply URL from a LinkedIn-sourced job", () => {
