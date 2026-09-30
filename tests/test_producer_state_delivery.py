@@ -992,6 +992,37 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
     assert replay["publication_id"] == result["publication_id"]
 
 
+def test_runtime_publisher_does_not_rerun_database_initialization(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("RUNR_PUBLISHER_INITIALIZE_DATABASE", "0")
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
+    database_path = tmp_path / "backend" / "backend.sqlite3"
+    SqliteAcquisitionStore(database_path)
+    initialize_flags = []
+    original_init = SqliteAcquisitionStore.__init__
+
+    def recorded_init(self, db_path, *, initialize=True):
+        initialize_flags.append(initialize)
+        original_init(self, db_path, initialize=initialize)
+
+    monkeypatch.setattr(SqliteAcquisitionStore, "__init__", recorded_init)
+    result = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=tmp_path / "backend",
+        source_version="fixture-release-no-init",
+    )
+
+    assert result["publication_id"]
+    assert initialize_flags
+    assert all(flag is False for flag in initialize_flags)
+
+
 def test_dry_run_reports_eligibility_without_creating_catalog_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNR_ENV", "test")
     monkeypatch.setenv("DATABASE_BACKEND", "sqlite")

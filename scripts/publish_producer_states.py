@@ -1087,6 +1087,12 @@ def _publisher_transaction_limits() -> tuple[int, int]:
     return max(1, min(50, companies)), max(1, min(100, rows))
 
 
+def _publisher_initializes_database() -> bool:
+    return os.getenv("RUNR_PUBLISHER_INITIALIZE_DATABASE", "1").strip().casefold() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _split_large_bulk_snapshot(
     snapshot: Mapping[str, object],
     *,
@@ -1173,7 +1179,10 @@ def _run_delivery_legacy(
         li_connection.close()
         employer_connection.close()
 
-    store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+    store = SqliteAcquisitionStore(
+        data_dir / "backend.sqlite3",
+        initialize=_publisher_initializes_database(),
+    )
     crosswalk_result: dict[str, object] = {}
     if identity_crosswalk_document:
         crosswalk_report = identity_crosswalk_document.get("report")
@@ -1405,7 +1414,10 @@ def run_delivery(
     _progress("initializing_database")
     store: SqliteAcquisitionStore | None = None
     if not controls.dry_run:
-        store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+        store = SqliteAcquisitionStore(
+            data_dir / "backend.sqlite3",
+            initialize=_publisher_initializes_database(),
+        )
         _ensure_publisher_checkpoint_table(store)
     crosswalk_result: dict[str, object] = {}
     if identity_crosswalk_document and store is not None:
