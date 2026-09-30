@@ -3,7 +3,7 @@ from backend.application.source_eligibility_manifest import (
     read_master_snapshot,
     write_manifest_bundle,
 )
-from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
+from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore, _BulkTraceConnection
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState
 from scripts.master_linkedin_jobs_catalog import CATALOG_FIELDS, StateStore
 from scripts.publish_producer_states import (
@@ -23,6 +23,23 @@ from scripts.publish_producer_states import (
 
 import pytest
 from datetime import datetime, timezone
+
+
+def test_bulk_trace_reports_database_error_without_swallowing_it(capsys):
+    class FailingConnection:
+        def execute(self, _sql, _parameters):
+            raise ValueError("request exceeds protocol limit")
+
+    connection = _BulkTraceConnection(FailingConnection(), "batch-test")
+
+    with pytest.raises(ValueError, match="protocol limit"):
+        connection.execute("INSERT INTO example VALUES (?)", ("private-value",))
+
+    output = capsys.readouterr().out
+    assert '"event":"bulk_statement_error"' in output
+    assert '"error_type":"ValueError"' in output
+    assert "request exceeds protocol limit" in output
+    assert "private-value" not in output
 
 
 def test_delivery_transaction_batches_pack_small_companies_and_isolate_large_ones():

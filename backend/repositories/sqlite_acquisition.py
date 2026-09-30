@@ -78,7 +78,18 @@ class _BulkTraceConnection:
             "statement": statement,
         }), flush=True)
         started = monotonic()
-        result = callback()
+        try:
+            result = callback()
+        except Exception as exc:
+            print(_json({
+                "event": "bulk_statement_error",
+                "batch_id": self._batch_id,
+                "index": index,
+                "elapsed_seconds": round(monotonic() - started, 3),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:300],
+            }), flush=True)
+            raise
         print(_json({
             "event": "bulk_statement_complete",
             "batch_id": self._batch_id,
