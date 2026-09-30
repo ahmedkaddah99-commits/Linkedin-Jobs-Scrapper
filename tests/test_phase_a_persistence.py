@@ -96,10 +96,9 @@ class PhaseAPersistenceTests(unittest.TestCase):
             now="2026-09-30T00:00:00+00:00",
             batch_size=400,
         )
-        self.assertEqual(len(count_connection.calls), 5)
-        self.assertTrue(count_connection.calls[0][0].lstrip().startswith("SELECT"))
-        self.assertIn("jobs_published=0", count_connection.calls[1][0])
-        self.assertTrue(all("CASE target_id" in sql for sql, _ in count_connection.calls[2:]))
+        self.assertEqual(len(count_connection.calls), 1)
+        self.assertIn("WITH published_counts", count_connection.calls[0][0])
+        self.assertIn("UPDATE acquisition_tasks", count_connection.calls[0][0])
 
     def test_cycle_request_observation_version_and_publication_replay_are_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
