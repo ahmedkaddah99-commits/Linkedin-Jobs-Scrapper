@@ -3748,21 +3748,15 @@ class SqliteAcquisitionStore(_SqliteStore):
                     (int(published_count or 0), existing_id, now, cycle_id),
                 )
                 return existing_id
-            if len(target_ids) > 500:
-                connection.execute("DROP TABLE IF EXISTS temp.publication_target_ids")
-                connection.execute("CREATE TEMP TABLE publication_target_ids (target_id TEXT PRIMARY KEY)")
-                connection.executemany(
-                    "INSERT INTO publication_target_ids(target_id) VALUES (?)",
-                    [(target_id,) for target_id in target_ids],
-                )
-                target_scope = "EXISTS (SELECT 1 FROM temp.publication_target_ids pt WHERE pt.target_id = o.target_id)"
-                target_scope_params: tuple[Any, ...] = ()
-            else:
-                placeholders = ",".join("?" for _ in target_ids)
-                target_scope = f"o.target_id IN ({placeholders})"
-                target_scope_params = target_ids
-            candidate_rows = connection.execute(
-                f"""
+            # Hrana/libSQL does not support CREATE TEMP TABLE. Query the target
+            # scope in bounded parameter batches and merge by canonical ID;
+            # previous-publication carry-forward rows can appear in every batch.
+            candidate_by_id: dict[str, Any] = {}
+            for offset in range(0, len(target_ids), 500):
+                target_batch = target_ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in target_batch)
+                candidate_batch = connection.execute(
+                    f"""
                 SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                 j.title, j.location, j.canonical_url,
                                 COALESCE(v.apply_url, '') AS apply_url,
@@ -3794,7 +3788,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     EXISTS (
                         SELECT 1 FROM job_source_observations o
                         WHERE o.canonical_job_id = j.canonical_job_id
-                          AND {target_scope} AND o.cycle_id = ?
+                          AND o.target_id IN ({placeholders}) AND o.cycle_id = ?
                     )
                     OR EXISTS (
                         SELECT 1 FROM acquisition_publication_jobs previous_jobs
@@ -3806,8 +3800,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                   )
                 ORDER BY j.title, j.canonical_job_id
                 """,
-                (*target_scope_params, cycle_id),
-            ).fetchall()
+                    (*target_batch, cycle_id),
+                ).fetchall()
+                for row in candidate_batch:
+                    candidate_by_id[str(row["canonical_job_id"])] = row
+            candidate_rows = sorted(
+                candidate_by_id.values(),
+                key=lambda row: (str(row["title"]), str(row["canonical_job_id"])),
+            )
             snapshot, rejected_rows = self._publication_rows_with_completeness(
                 candidate_rows,
                 policy=policy,

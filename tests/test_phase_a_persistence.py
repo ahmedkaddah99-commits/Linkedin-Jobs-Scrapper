@@ -85,7 +85,12 @@ class PhaseAPersistenceTests(unittest.TestCase):
                 complete_snapshot=True,
                 valid_snapshot=True,
             )
-            publication_id = store.publish_valid_snapshot(cycle_id=cycle_id, valid_target_ids=[target["target_id"]])
+            # Exercise the >500-ID publication scope used by the producer
+            # bridge without relying on unsupported libSQL TEMP tables.
+            publication_id = store.publish_valid_snapshot(
+                cycle_id=cycle_id,
+                valid_target_ids=[target["target_id"]] * 501,
+            )
             replayed_publication_id = store.publish_valid_snapshot(
                 cycle_id=cycle_id, valid_target_ids=[target["target_id"]]
             )
