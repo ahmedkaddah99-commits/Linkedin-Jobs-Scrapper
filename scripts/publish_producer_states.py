@@ -1074,6 +1074,20 @@ def _delivery_transaction_batches(
         yield batch
 
 
+def _publisher_transaction_limits() -> tuple[int, int]:
+    """Return bounds for one set-based projection transaction."""
+
+    try:
+        companies = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "50"))
+    except ValueError:
+        companies = 50
+    try:
+        rows = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "100"))
+    except ValueError:
+        rows = 100
+    return max(1, min(50, companies)), max(1, min(100, rows))
+
+
 def _run_delivery_legacy(
     *,
     manifest_path: Path,
@@ -1832,16 +1846,7 @@ def run_delivery(
             delivery_workers = 1
         delivery_batch_size = max(1, min(1000, delivery_batch_size))
         delivery_workers = max(1, min(8, delivery_workers))
-        try:
-            transaction_companies = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "50"))
-        except ValueError:
-            transaction_companies = 50
-        try:
-            transaction_rows = int(os.getenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "20"))
-        except ValueError:
-            transaction_rows = 20
-        transaction_companies = max(1, min(100, transaction_companies))
-        transaction_rows = max(1, min(20, transaction_rows))
+        transaction_companies, transaction_rows = _publisher_transaction_limits()
         worker_state = local()
 
         def source_row_count(source: str, company_id: str) -> int:

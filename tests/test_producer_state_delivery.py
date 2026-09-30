@@ -14,6 +14,7 @@ from scripts.publish_producer_states import (
     _crosswalk_already_applied,
     _delivery_transaction_batches,
     _enrich_source_groups,
+    _publisher_transaction_limits,
     _verified_company_registry,
     _target,
     run_delivery,
@@ -41,6 +42,16 @@ def test_delivery_transaction_batches_pack_small_companies_and_isolate_large_one
         [("employer", "large")],
         [("employer", "empty"), ("employer", "small-3")],
     ]
+
+
+def test_publisher_transaction_limits_default_to_bounded_set_based_batch(monkeypatch):
+    monkeypatch.delenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", raising=False)
+    monkeypatch.delenv("RUNR_PUBLISHER_TRANSACTION_ROWS", raising=False)
+    assert _publisher_transaction_limits() == (50, 100)
+
+    monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "999")
+    monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "999")
+    assert _publisher_transaction_limits() == (50, 100)
 
 
 def test_bulk_staging_normalizes_and_resolves_duplicate_identity_setwise(tmp_path):
