@@ -3,7 +3,7 @@
 Collectors own their source SQLite databases. This command is the only bridge
 from those databases to the shared acquisition repository: it reads producer
 state, adapts rows to the source-observation contract, ingests each canonical
-company as an independent target, and creates one explicit v2 publication.
+company as an independent target, and creates one explicit publication.
 """
 
 from __future__ import annotations
@@ -48,12 +48,13 @@ from backend.application.company_identity_canonicalization import (
     resolve_company_id as resolve_company_identity,
 )
 from backend.acquisition.job_publication_completeness import validate_job_for_publication
+from backend.acquisition.publication import DEFAULT_PUBLICATION_POLICY_VERSION
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
 COMPLETE_LINKEDIN_SCAN_STATUSES = frozenset({"COMPLETE", "COMPLETE_ZERO_CONFIRMED", "SATURATED_RECOVERED"})
 FAILED_EMPLOYER_STATUSES = frozenset({"discovery_failed", "source_failed", "failed", "error"})
-RUNTIME_PUBLICATION_POLICY_VERSION = "publication_policy_v2"
+RUNTIME_PUBLICATION_POLICY_VERSION = DEFAULT_PUBLICATION_POLICY_VERSION
 REGISTERED_PUBLICATION_POLICY_VERSIONS = frozenset({"publication_policy_v1", "publication_policy_v2"})
 PUBLICATION_POLICY_VERSION_ENV = "RUNR_PUBLICATION_POLICY_VERSION"
 APPROVED_PUBLICATION_POLICIES_ENV = "RUNR_APPROVED_PUBLICATION_POLICIES"

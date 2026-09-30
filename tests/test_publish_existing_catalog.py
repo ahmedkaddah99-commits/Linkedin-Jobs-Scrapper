@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import backend.repositories.sqlite_acquisition as sqlite_acquisition
 from backend.bootstrap import create_backend
 from backend.acquisition.publication import RestorePublicationConfirmation
 from scripts.publish_existing_catalog import build_parser
@@ -97,6 +98,115 @@ def test_publish_existing_catalog_rechecks_blocking_completeness(tmp_path: Path)
 
     assert publication_id
     assert store.get_public_catalog()["total"] == 1
+
+
+def test_report_only_policy_keeps_incomplete_jobs_visible(tmp_path: Path) -> None:
+    app = create_backend(tmp_path, storage_backend="sqlite")
+    store = app.repositories.acquisition_store
+    target = _target()
+    store.ensure_targets([target])
+    cycle = store.claim_due_cycle(
+        window_key="report-only-catalog-cycle",
+        lease_owner="test",
+        scheduled_at="2026-09-12T00:00:00Z",
+    )
+    assert cycle is not None
+    store.ensure_cycle_tasks(str(cycle["cycle_id"]), [target])
+    task = store.claim_next_task(cycle_id=str(cycle["cycle_id"]), lease_owner="test")
+    assert task is not None
+    store.ingest_snapshot(
+        cycle_id=str(cycle["cycle_id"]),
+        task_id=str(task["task_id"]),
+        target_id=str(target["target_id"]),
+        jobs=[
+            {
+                "job_id": "incomplete-but-current",
+                "title": "Current Engineer",
+                "location": "Berlin",
+                "url": "https://jobs.example/current",
+                "description": "",
+                "source_ats": "fixture",
+            }
+        ],
+        complete_snapshot=True,
+        valid_snapshot=True,
+    )
+
+    publication_id = store.publish_existing_catalog_snapshot(
+        created_by="test",
+        policy_version="publication_policy_v1",
+    )
+
+    assert publication_id
+    assert store.get_public_catalog()["total"] == 1
+
+
+def test_catastrophic_publication_drop_keeps_existing_head(tmp_path: Path, monkeypatch) -> None:
+    app = create_backend(tmp_path, storage_backend="sqlite")
+    store = app.repositories.acquisition_store
+    target = _target()
+    store.ensure_targets([target])
+    cycle = store.claim_due_cycle(
+        window_key="drop-guard-catalog-cycle",
+        lease_owner="test",
+        scheduled_at="2026-09-12T00:00:00Z",
+    )
+    assert cycle is not None
+    store.ensure_cycle_tasks(str(cycle["cycle_id"]), [target])
+    task = store.claim_next_task(cycle_id=str(cycle["cycle_id"]), lease_owner="test")
+    assert task is not None
+    complete = {
+        "job_id": "complete",
+        "title": "Complete Engineer",
+        "location": "Berlin",
+        "url": "https://jobs.example/complete",
+        "application_url": "https://jobs.example/complete/apply",
+        "description": "This is a complete job description with enough detail for publication and a clear explanation of the role responsibilities.",
+        "seniority": "mid",
+        "employment_type": "full_time",
+        "workplace_arrangement": "hybrid",
+        "company_logo": "https://jobs.example/logo.png",
+        "company_enrichment": "verified",
+        "source_ats": "fixture",
+    }
+    incomplete = {
+        **complete,
+        "job_id": "incomplete",
+        "title": "Incomplete Engineer",
+        "url": "https://jobs.example/incomplete",
+        "description": "",
+    }
+    store.ingest_snapshot(
+        cycle_id=str(cycle["cycle_id"]),
+        task_id=str(task["task_id"]),
+        target_id=str(target["target_id"]),
+        jobs=[complete, incomplete],
+        complete_snapshot=True,
+        valid_snapshot=True,
+    )
+    first = store.publish_existing_catalog_snapshot(
+        created_by="test",
+        policy_version="publication_policy_v1",
+    )
+    monkeypatch.setattr(sqlite_acquisition, "PUBLICATION_DROP_GUARD_MINIMUM", 2)
+    monkeypatch.setattr(sqlite_acquisition, "PUBLICATION_DROP_GUARD_RETENTION_RATIO", 0.75)
+
+    try:
+        store.publish_existing_catalog_snapshot(
+            created_by="test",
+            policy_version="publication_policy_v2",
+        )
+    except sqlite_acquisition.CatastrophicPublicationDropError:
+        pass
+    else:
+        raise AssertionError("catastrophic publication drop was not blocked")
+
+    with store._connect() as connection:
+        head = connection.execute(
+            "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+        ).fetchone()
+    assert str(head["publication_id"]) == first
+    assert store.get_public_catalog()["total"] == 2
 
 
 def test_publication_head_can_roll_back_to_the_previous_catalog(tmp_path: Path) -> None:

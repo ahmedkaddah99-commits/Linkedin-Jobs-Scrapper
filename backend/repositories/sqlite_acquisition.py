@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from math import ceil
 from time import monotonic
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
@@ -56,6 +57,34 @@ from backend.repositories.sqlite_core import _SqliteStore
 
 class AcquisitionLeaseLostError(RuntimeError):
     """Raised when a worker writes after its cycle/task lease was fenced."""
+
+
+class CatastrophicPublicationDropError(RuntimeError):
+    """Raised before a publication would replace a healthy catalog with a tiny one."""
+
+
+PUBLICATION_DROP_GUARD_MINIMUM = 100
+PUBLICATION_DROP_GUARD_RETENTION_RATIO = 0.20
+
+
+def _assert_publication_size_is_safe(connection, *, previous_publication_id: str, next_count: int) -> None:
+    if not previous_publication_id:
+        return
+    previous_count = int(
+        connection.execute(
+            "SELECT COUNT(*) AS count FROM acquisition_publication_jobs WHERE publication_id=?",
+            (previous_publication_id,),
+        ).fetchone()["count"]
+        or 0
+    )
+    if previous_count < PUBLICATION_DROP_GUARD_MINIMUM:
+        return
+    minimum_count = max(1, ceil(previous_count * PUBLICATION_DROP_GUARD_RETENTION_RATIO))
+    if next_count < minimum_count:
+        raise CatastrophicPublicationDropError(
+            "Publication size guard blocked head advance: "
+            f"previous={previous_count}, next={next_count}, minimum={minimum_count}."
+        )
 
 
 class _BulkTraceConnection:
@@ -3669,7 +3698,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                             "status": result.status,
                         }
                     )
-                    continue
+                    if policy.completeness_mode == "blocking":
+                        continue
             snapshot.append(
                 {
                     "canonical_job_id": record["canonical_job_id"],
@@ -3925,6 +3955,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
             previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            _assert_publication_size_is_safe(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_count=len(snapshot),
+            )
             preflight = self._build_publication_preflight(
                 connection,
                 previous_publication_id=previous_publication_id,
@@ -4128,6 +4163,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
             previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            _assert_publication_size_is_safe(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_count=len(snapshot),
+            )
             preflight = self._build_publication_preflight(
                 connection,
                 previous_publication_id=previous_publication_id,

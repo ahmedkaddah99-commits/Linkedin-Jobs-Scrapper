@@ -1031,10 +1031,10 @@ def test_durable_producer_states_reach_shared_publication_and_replay(tmp_path, m
             ).fetchone()[0]
         assert "master-alpha" in companies
         assert {"linkedin", "greenhouse"}.issubset(sources)
-        # The listing-only LinkedIn row has no apply URL; runtime policy v2 blocks it.
+        # The listing-only row is reported for audit, but v1 keeps it visible.
         assert rejection_count == 1
         first_publication = store.get_public_catalog(limit=20, offset=0)
-        assert first_publication["total"] == 2
+        assert first_publication["total"] == 3
     finally:
         store.close() if hasattr(store, "close") else None
 
@@ -1253,7 +1253,7 @@ def test_crash_before_checkpoint_save_reruns_the_same_window_idempotently(tmp_pa
             observation_total = connection.execute(
                 "SELECT COUNT(*) FROM job_source_observations"
             ).fetchone()[0]
-        assert published == 2
+        assert published == 3
         assert duplicated_pairs == [], "replayed delivery must not duplicate catalog jobs"
         assert observation_total == 3
     finally:

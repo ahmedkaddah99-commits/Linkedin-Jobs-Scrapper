@@ -339,11 +339,15 @@ producer state through the publication gates:
 
 ## 13. Runtime wiring and audit evidence
 
-The incremental producer publisher uses `publication_policy_v2`, so the
-completeness gate is blocking before a publication head advances. The audit
-report includes `required_field_coverage` split into `job` and `company` groups
-and `policy_impact.trusted_linkedin_job_detail_url`, including additional
-eligible records by source plus precision/recall proxy notes.
+The incremental producer publisher defaults to `publication_policy_v1`.
+Completeness findings are recorded for audit, but they do not remove otherwise
+current jobs from the public snapshot. `publication_policy_v2` remains an
+explicitly approved blocking mode. Before either policy advances the head, a
+size guard rejects a snapshot below 20% of a prior publication containing at
+least 100 jobs. The audit report includes `required_field_coverage` split into
+`job` and `company` groups and
+`policy_impact.trusted_linkedin_job_detail_url`, including additional eligible
+records by source plus precision/recall proxy notes.
 
 ## 14. Frozen policy experiments and rollback
 
@@ -364,8 +368,8 @@ potential false-positive sample. The sample is a review proxy and exact
 precision/recall still requires labelled truth. Experiments never call a live
 provider and never mutate the input snapshot.
 
-The scheduled publisher keeps `publication_policy_v2` as its default. An
-alternative policy must be explicitly owner-approved through
+The scheduled publisher keeps `publication_policy_v1` as its display-first
+default. A blocking alternative must be explicitly owner-approved through
 `RUNR_APPROVED_PUBLICATION_POLICIES` or selected as a deliberate
 `--rollback-policy-version`; changing policy records the selected version in
 the target, cycle, and publication receipt. Rollback changes the policy for a

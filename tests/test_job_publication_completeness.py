@@ -558,8 +558,8 @@ def test_audit_reports_trusted_linkedin_url_relaxation_impact():
     assert impact["additional_publishable_by_source"] == {"linkedin": 1}
 
 
-def test_runtime_publisher_uses_blocking_publication_policy():
-    assert RUNTIME_PUBLICATION_POLICY_VERSION == "publication_policy_v2"
+def test_runtime_publisher_defaults_to_display_first_publication_policy():
+    assert RUNTIME_PUBLICATION_POLICY_VERSION == "publication_policy_v1"
 
 
 def test_policy_experiments_report_incremental_counts_samples_and_field_impact():
@@ -611,17 +611,17 @@ def test_policy_experiments_preserve_trust_gates():
 
 def test_runtime_policy_alternative_requires_owner_approval_or_explicit_rollback():
     with pytest.raises(ValueError, match="owner approval"):
-        resolve_runtime_publication_policy("publication_policy_v1")
+        resolve_runtime_publication_policy("publication_policy_v2")
 
     assert (
         resolve_runtime_publication_policy(
-            "publication_policy_v1", approved_versions={"publication_policy_v1"}
+            "publication_policy_v2", approved_versions={"publication_policy_v2"}
         )
-        == "publication_policy_v1"
+        == "publication_policy_v2"
     )
     assert (
-        resolve_runtime_publication_policy(rollback_to="publication_policy_v1")
-        == "publication_policy_v1"
+        resolve_runtime_publication_policy(rollback_to="publication_policy_v2")
+        == "publication_policy_v2"
     )
 
 
