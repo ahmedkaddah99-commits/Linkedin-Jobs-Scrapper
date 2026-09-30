@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from backend.acquisition.manifest import load_phase_a_manifest
 from backend.bootstrap import create_backend
 from backend.repositories.sqlite_acquisition import (
+    SqliteAcquisitionStore,
     _insert_publication_target_scope_batched,
     _update_publication_task_counts_batched,
 )
@@ -29,6 +31,46 @@ class _RecordingConnection:
 
 
 class PhaseAPersistenceTests(unittest.TestCase):
+    def test_publication_candidate_reads_advance_in_bounded_keyset_pages(self):
+        connection = _RecordingConnection()
+        pages = [
+            [{"canonical_job_id": "job-b"}, {"canonical_job_id": "job-c"}],
+            [{"canonical_job_id": "job-d"}],
+        ]
+
+        def execute(sql, parameters=()):
+            connection.calls.append((sql, tuple(parameters)))
+            return _RowsCursor(pages.pop(0))
+
+        connection.execute = execute
+        store = SqliteAcquisitionStore.__new__(SqliteAcquisitionStore)
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        store._connect = connect
+        store._publication_rows_with_completeness = lambda rows, policy: (
+            [
+                {"canonical_job_id": row["canonical_job_id"], "title": row["canonical_job_id"]}
+                for row in rows
+            ],
+            [],
+        )
+        snapshot, rejected = store._prepare_publication_snapshot(
+            cycle_id="cycle-1",
+            target_scope="o.target_id IN (?)",
+            target_scope_params=("target-1",),
+            policy=object(),
+            page_size=2,
+        )
+        self.assertEqual([row["canonical_job_id"] for row in snapshot], ["job-b", "job-c", "job-d"])
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(connection.calls), 2)
+        self.assertEqual(connection.calls[0][1][0], "")
+        self.assertEqual(connection.calls[1][1][0], "job-c")
+        self.assertTrue(all("LIMIT ?" in sql for sql, _ in connection.calls))
+
     def test_publication_scope_and_task_counts_use_bounded_statement_batches(self):
         scope_connection = _RecordingConnection()
         _insert_publication_target_scope_batched(

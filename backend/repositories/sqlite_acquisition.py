@@ -3743,6 +3743,91 @@ class SqliteAcquisitionStore(_SqliteStore):
                 tuple(value for row in batch for value in row),
             )
 
+    def _prepare_publication_snapshot(
+        self,
+        *,
+        cycle_id: str,
+        target_scope: str,
+        target_scope_params: tuple[Any, ...],
+        policy,
+        page_size: int = 400,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read and validate publication candidates in bounded remote pages.
+
+        The final head change still happens in one short transaction. Keeping
+        the large catalog read outside that transaction prevents a transient
+        libSQL stream expiry from replaying every candidate and scope write.
+        Producer locks keep the source projection stable while the final head
+        compare-and-swap protects against concurrent publication changes.
+        """
+
+        snapshot: list[dict[str, Any]] = []
+        rejected_rows: list[dict[str, Any]] = []
+        after_canonical_job_id = ""
+        bounded_page_size = max(1, min(500, int(page_size)))
+        while True:
+            with self._connect() as connection:
+                candidate_rows = connection.execute(
+                    f"""
+                    SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                                    j.title, j.location, j.canonical_url,
+                                    COALESCE(v.apply_url, '') AS apply_url,
+                                    j.lifecycle_state, j.first_seen_at, j.last_seen_at,
+                                    j.last_verified_at, j.current_version_id,
+                                    COALESCE(v.description, '') AS version_description,
+                                    COALESCE(v.location, '') AS version_location,
+                                    COALESCE(v.payload_json, '{{}}') AS version_payload_json,
+                                    (SELECT o.external_job_id FROM job_source_observations o
+                                     WHERE o.canonical_job_id = j.canonical_job_id
+                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
+                                    (SELECT o.source_ats FROM job_source_observations o
+                                     WHERE o.canonical_job_id = j.canonical_job_id
+                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
+                                    (SELECT o.observed_at FROM job_source_observations o
+                                     WHERE o.canonical_job_id = j.canonical_job_id
+                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
+                                    (SELECT o.target_id FROM job_source_observations o
+                                     WHERE o.canonical_job_id = j.canonical_job_id
+                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
+                                    (SELECT o.task_id FROM job_source_observations o
+                                     WHERE o.canonical_job_id = j.canonical_job_id
+                                     ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
+                    FROM canonical_jobs j
+                    JOIN canonical_companies c ON c.company_id = j.company_id
+                    LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+                    WHERE j.canonical_job_id > ?
+                      AND j.lifecycle_state != 'closed'
+                      AND (
+                        EXISTS (
+                            SELECT 1 FROM job_source_observations o
+                            WHERE o.canonical_job_id = j.canonical_job_id
+                              AND {target_scope} AND o.cycle_id = ?
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM acquisition_publication_jobs previous_jobs
+                            WHERE previous_jobs.canonical_job_id = j.canonical_job_id
+                              AND previous_jobs.publication_id = (
+                                  SELECT publication_id FROM acquisition_publication_head WHERE head_id=1
+                              )
+                        )
+                      )
+                    ORDER BY j.canonical_job_id
+                    LIMIT ?
+                    """,
+                    (after_canonical_job_id, *target_scope_params, cycle_id, bounded_page_size),
+                ).fetchall()
+            page_snapshot, page_rejected = self._publication_rows_with_completeness(
+                candidate_rows,
+                policy=policy,
+            )
+            snapshot.extend(page_snapshot)
+            rejected_rows.extend(page_rejected)
+            if not candidate_rows or len(candidate_rows) < bounded_page_size:
+                break
+            after_canonical_job_id = str(candidate_rows[-1]["canonical_job_id"])
+        snapshot.sort(key=lambda row: (str(row.get("title") or ""), str(row.get("canonical_job_id") or "")))
+        return snapshot, rejected_rows
+
     def publish_valid_snapshot(
         self,
         *,
@@ -3767,6 +3852,47 @@ class SqliteAcquisitionStore(_SqliteStore):
         normalized_scheduled_run_id = str(
             scheduled_run_id or (cycle_id if normalized_origin == "scheduled" else "")
         ).strip()
+
+        scope_id = ""
+        if len(target_ids) > 500:
+            scope_id = f"publication_candidate:{cycle_id}"
+
+            def replace_scope(connection):
+                connection.execute(
+                    "DELETE FROM acquisition_publication_target_scope WHERE scope_id=?",
+                    (scope_id,),
+                )
+                _insert_publication_target_scope_batched(
+                    connection,
+                    scope_id=scope_id,
+                    target_ids=target_ids,
+                )
+
+            self._run_transaction(replace_scope)
+            target_scope = (
+                "EXISTS (SELECT 1 FROM acquisition_publication_target_scope pts "
+                "WHERE pts.scope_id=? AND pts.target_id=o.target_id)"
+            )
+            target_scope_params: tuple[Any, ...] = (scope_id,)
+        else:
+            placeholders = ",".join("?" for _ in target_ids)
+            target_scope = f"o.target_id IN ({placeholders})"
+            target_scope_params = target_ids
+        try:
+            snapshot, rejected_rows = self._prepare_publication_snapshot(
+                cycle_id=cycle_id,
+                target_scope=target_scope,
+                target_scope_params=target_scope_params,
+                policy=policy,
+            )
+        finally:
+            if scope_id:
+                self._run_transaction(
+                    lambda connection: connection.execute(
+                        "DELETE FROM acquisition_publication_target_scope WHERE scope_id=?",
+                        (scope_id,),
+                    )
+                )
 
         def publish(connection):
             if lease_token:
@@ -3804,82 +3930,6 @@ class SqliteAcquisitionStore(_SqliteStore):
                     (int(published_count or 0), existing_id, now, cycle_id),
                 )
                 return existing_id
-            # Hrana/libSQL does not support TEMP tables. A durable scope table
-            # lives only for this transaction, trading cheap bounded writes for
-            # one indexed scan instead of repeatedly reading the catalog.
-            scope_id = ""
-            if len(target_ids) > 500:
-                scope_id = publication_id
-                _insert_publication_target_scope_batched(
-                    connection,
-                    scope_id=scope_id,
-                    target_ids=target_ids,
-                )
-                target_scope = (
-                    "EXISTS (SELECT 1 FROM acquisition_publication_target_scope pts "
-                    "WHERE pts.scope_id=? AND pts.target_id=o.target_id)"
-                )
-                target_scope_params: tuple[Any, ...] = (scope_id,)
-            else:
-                placeholders = ",".join("?" for _ in target_ids)
-                target_scope = f"o.target_id IN ({placeholders})"
-                target_scope_params = target_ids
-            candidate_rows = connection.execute(
-                f"""
-                SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
-                                j.title, j.location, j.canonical_url,
-                                COALESCE(v.apply_url, '') AS apply_url,
-                                j.lifecycle_state, j.first_seen_at, j.last_seen_at,
-                                j.last_verified_at, j.current_version_id,
-                                COALESCE(v.description, '') AS version_description,
-                                COALESCE(v.location, '') AS version_location,
-                                COALESCE(v.payload_json, '{{}}') AS version_payload_json,
-                                (SELECT o.external_job_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_job_id,
-                                (SELECT o.source_ats FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_ats,
-                                (SELECT o.observed_at FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS observation_observed_at,
-                                (SELECT o.target_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_target_id,
-                                (SELECT o.task_id FROM job_source_observations o
-                                 WHERE o.canonical_job_id = j.canonical_job_id
-                                 ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1) AS source_task_id
-                FROM canonical_jobs j
-                JOIN canonical_companies c ON c.company_id = j.company_id
-                LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
-                WHERE j.lifecycle_state != 'closed'
-                  AND (
-                    EXISTS (
-                        SELECT 1 FROM job_source_observations o
-                        WHERE o.canonical_job_id = j.canonical_job_id
-                          AND {target_scope} AND o.cycle_id = ?
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM acquisition_publication_jobs previous_jobs
-                        WHERE previous_jobs.canonical_job_id = j.canonical_job_id
-                          AND previous_jobs.publication_id = (
-                              SELECT publication_id FROM acquisition_publication_head WHERE head_id=1
-                          )
-                    )
-                  )
-                ORDER BY j.title, j.canonical_job_id
-                """,
-                (*target_scope_params, cycle_id),
-            ).fetchall()
-            if scope_id:
-                connection.execute(
-                    "DELETE FROM acquisition_publication_target_scope WHERE scope_id=?",
-                    (scope_id,),
-                )
-            snapshot, rejected_rows = self._publication_rows_with_completeness(
-                candidate_rows,
-                policy=policy,
-            )
             self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
             previous = connection.execute(
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
