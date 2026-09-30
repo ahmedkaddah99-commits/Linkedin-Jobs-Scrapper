@@ -8,6 +8,7 @@ test("real Jobs view exposes only approved Apply URL and user-safe fields", () =
     title: "Operations Analyst",
     company: "Acme",
     apply_url: "https://jobs.greenhouse.io/acme/jobs/1",
+    job_detail_url: "https://boards.example/jobs/1",
     canonical_url: "https://boards.example/jobs/1",
     source_ats: "greenhouse",
     observation_url: "https://boards.example/listing/1",
@@ -17,6 +18,7 @@ test("real Jobs view exposes only approved Apply URL and user-safe fields", () =
 
   assert.equal(view.dataMode, "real");
   assert.equal(view.applyUrl, "https://jobs.greenhouse.io/acme/jobs/1");
+  assert.equal(view.viewJobUrl, "https://boards.example/jobs/1");
   assert.equal(view.canonicalUrl, undefined);
   assert.equal(view.source, "greenhouse");
   assert.equal(view.observation_url, undefined);
