@@ -379,6 +379,8 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [busyAction, setBusyAction] = useState("");
   const [feedAttempt, setFeedAttempt] = useState(0);
   const listBodyRef = useRef(null);
+  const loadMoreSentinelRef = useRef(null);
+  const loadingMoreRef = useRef(false);
   const relevantJobEventRef = useRef("");
   const initialFeedRef = useRef(true);
   const skipNextFeedRef = useRef(false);
@@ -393,7 +395,24 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
-  const selectedRawJob = detailJob || rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId)) || (!routeJobId ? rawJobs[0] : null);
+  const cardJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId)) || (!routeJobId ? rawJobs[0] : null);
+  const selectedRawJob = detailJob ? {
+    ...cardJob,
+    ...detailJob,
+    company_detail: {
+      ...cardJob?.company_detail,
+      ...detailJob.company_detail,
+      profile: {
+        ...cardJob?.company_profile,
+        ...detailJob.company_detail?.profile,
+        logo_url: detailJob.company_detail?.profile?.logo_url || cardJob?.company_profile?.logo_url,
+      },
+    },
+    company_profile: detailJob.company_profile?.logo_url || detailJob.company_detail?.profile?.logo_url
+      ? (detailJob.company_profile || detailJob.company_detail.profile) : cardJob?.company_profile,
+    apply_url: detailJob.apply_url || cardJob?.apply_url,
+    direct_apply_url: detailJob.direct_apply_url || cardJob?.direct_apply_url,
+  } : cardJob;
   const selectedJob = selectedRawJob ? toPersonalizedJobView(selectedRawJob) : null;
   const personalizedDataMode = selectedJob?.dataMode || feed?.data_mode || "real";
   const activeFilterCount = countPersonalizedJobFilters(filters);
@@ -669,18 +688,33 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   async function loadMore() {
-    if (!feed?.next_cursor || loadingMore) return;
+    if (!feed?.next_cursor || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const query = buildPersonalizedJobsQuery(filters, { cursor: feed.next_cursor, limit: 25, view: "cards" });
+      const cursor = feed.next_cursor;
+      const query = buildPersonalizedJobsQuery(filters, { cursor, limit: 25, view: "cards" });
       const payload = await request(`/personalized-jobs?${query}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS });
-      setFeed((current) => current ? { ...payload, jobs: [...(current.jobs || []), ...(payload?.jobs || [])] } : payload);
+      setFeed((current) => current?.next_cursor === cursor
+        ? { ...payload, jobs: [...(current.jobs || []), ...(payload?.jobs || [])] } : current);
     } catch (error) {
       setFeedback(error?.message || "Unable to load more jobs.");
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   }
+
+  useEffect(() => {
+    const root = listBodyRef.current;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!root || !sentinel || !feed?.next_cursor || typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) void loadMore();
+    }, { root, rootMargin: "0px 0px 150px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [feed?.next_cursor, loadingMore, jobs.length, showMobileList]);
 
   function selectJob(job) {
     setSelectedJobId(job.id);
@@ -695,9 +729,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       setFeedback("No verified employer or official ATS Apply URL is available for this job.");
       return;
     }
-    window.open(selectedJob.applyUrl, "_blank", "noopener,noreferrer");
     logPersonalizedEvent("apply_link_opened", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
-    setFeedback("The verified employer application opened in a new tab.");
   }
 
   function openNetwork() {
@@ -705,7 +737,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   const detailContent = selectedJob ? <>
-    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "overview" ? "is-active" : ""} onClick={() => setActiveTab("overview")} type="button">Overview</button><button className={activeTab === "company" ? "is-active" : ""} onClick={() => setActiveTab("company")} type="button">Company</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button><button className="jobs-primary-button" disabled={!selectedJob.applyUrl} onClick={applyToJob} title={selectedJob.applyUrl ? "Open employer application" : "No verified Apply URL"} type="button"><Icon>bolt</Icon>Apply</button></div></div>
+    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "overview" ? "is-active" : ""} onClick={() => setActiveTab("overview")} type="button">Overview</button><button className={activeTab === "company" ? "is-active" : ""} onClick={() => setActiveTab("company")} type="button">Company</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.applyUrl ? <a className="jobs-primary-button" href={selectedJob.applyUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title="Open employer application"><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No verified Apply URL" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
     <div className="jobs-detail-scroll">{activeTab === "company" ? companyLoading ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading company details</strong></div> : companyError ? <div className="jobs-empty"><Icon>cloud_off</Icon><strong>{companyError}</strong></div> : <CompanyOverview company={companyDetail} job={selectedJob} onOpenNetwork={openNetwork} /> : <JobOverview job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onOpenNetwork={openNetwork} onPrepare={() => { setPreparing(true); logPersonalizedEvent("application_preparation_opened", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode }); }} onReport={() => setReportOpen(true)} rightPanelTab={rightPanelTab} setRightPanelTab={setRightPanelTab} />}{preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}{improveOpen && selectedJob ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}</div>
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
 
@@ -724,7 +756,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     {feedError ? <div className="jobs-feedback" role={feed ? "status" : "alert"}><Icon>cloud_off</Icon><span>{feed ? "Could not refresh the shared jobs catalog. The results below are the last verified page." : "Jobs are temporarily unavailable. Runr could not read the published catalog."}</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
       {!isMobile || !showMobileList ? <section className="jobs-detail-panel">{detailContent}</section> : null}
     </div>
     {filtersOpen ? <FilterDrawer capabilities={feed?.filter_capabilities || {}} filters={filters} onApply={() => setFiltersOpen(false)} onChange={updateFilter} onClear={clearFilters} onClose={() => setFiltersOpen(false)} /> : null}

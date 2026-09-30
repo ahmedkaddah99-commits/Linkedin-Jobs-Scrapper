@@ -32,12 +32,6 @@ const job = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    window.open = ((url: string) => {
-      (window as unknown as { __runrApplyUrl?: string }).__runrApplyUrl = url;
-      return null;
-    }) as typeof window.open;
-  });
   await page.route("**/v1/personalized-jobs/saved-search", (route) => route.fulfill({ json: { filters: {} } }));
   await page.route("**/v1/personalized-jobs?**", (route) => route.fulfill({ json: { jobs: [{ ...job, match_intelligence: { state: "pending" } }], total: 1, evaluation: { state: "partial" }, filter_capabilities: {} } }));
   const userState = { value: "none" };
@@ -108,12 +102,11 @@ test("Jobs production cutover is responsive, keyboard-accessible, truthful, and 
   await expect(page.locator("body")).not.toContainText("1,284");
 
   const saveButton = page.locator(".jobs-detail-toolbar__actions button").filter({ hasText: "Save" }).first();
-  const applyButton = page.locator(".jobs-detail-toolbar__actions button").filter({ hasText: "Apply" }).first();
+  const applyButton = page.locator(".jobs-detail-toolbar__actions a").filter({ hasText: "Apply" }).first();
   await saveButton.focus();
   await expect(page.locator(":focus")).toHaveAccessibleName(/Save/);
-  await expect(applyButton).toBeEnabled();
-  await applyButton.click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __runrApplyUrl?: string }).__runrApplyUrl)).toBe("https://jobs.greenhouse.io/acme/jobs/1");
+  await expect(applyButton).toHaveAttribute("href", "https://jobs.greenhouse.io/acme/jobs/1");
+  await expect(applyButton).toHaveAttribute("target", "_blank");
 
   await saveButton.click();
   await expect(page.locator(".jobs-detail-toolbar__actions button").filter({ hasText: "Saved" }).first()).toBeVisible();
