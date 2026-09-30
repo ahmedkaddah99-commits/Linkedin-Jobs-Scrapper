@@ -180,7 +180,7 @@ def _update_publication_task_counts_batched(
         WHERE cycle_id=?
         """,
         (publication_id, cycle_id, now, cycle_id),
-    ).fetchall()
+    )
 
 
 def _decode(value: str | bytes | None, default: Any) -> Any:
