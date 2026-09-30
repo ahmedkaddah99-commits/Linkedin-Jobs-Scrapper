@@ -88,6 +88,17 @@ def test_receipt_for_complete_ats_with_jobs() -> None:
     assert "gen-1" in receipt.to_json()
 
 
+def test_receipt_for_complete_ashby_board_with_jobs() -> None:
+    result = _complete_ats_result([{"job_id": "ashby-42", "title": "Engineer"}])
+    result["targets"][0]["url"] = "https://jobs.ashbyhq.com/company/ashby-42"
+    result["targets"][0]["provider"] = "ashby"
+
+    receipt = build_coverage_receipt(result, generation_id="gen-ashby")
+
+    assert receipt.terminal_classification == "confirmed_complete"
+    assert receipt.connector_family == "ats_native"
+
+
 def test_receipt_for_confirmed_zero_ats() -> None:
     result = _complete_ats_result([])
     receipt = build_coverage_receipt(result)

@@ -42,6 +42,7 @@ COVERAGE_CLASSIFICATIONS = (
 CONNECTOR_FAMILIES = {
     "greenhouse": "ats_native",
     "lever": "ats_native",
+    "ashby": "ats_native",
     "workday": "ats_expansion",
     "personio": "ats_expansion",
     "recruitee": "ats_expansion",
