@@ -1463,6 +1463,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         staged_targets: list[tuple[Any, ...]] = []
         snapshot_ids: list[tuple[str, str, str]] = []
         seen: set[tuple[str, str]] = set()
+        seen_external_ids: set[tuple[str, str]] = set()
         row_number = 0
         cycle_ids: set[str] = set()
         for snapshot in snapshot_rows:
@@ -1528,10 +1529,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                 source_external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
                 external_id = source_external_id or original_url
                 dedupe_key = (target_id, original_url)
-                if dedupe_key in seen:
+                external_dedupe_key = (target_id, external_id)
+                if dedupe_key in seen or external_dedupe_key in seen_external_ids:
                     duplicate_count += 1
                     continue
                 seen.add(dedupe_key)
+                seen_external_ids.add(external_dedupe_key)
                 location_value = job.get("location") or job.get("location_raw") or ""
                 if isinstance(location_value, Mapping):
                     location_value = location_value.get("name") or location_value.get("address") or ""

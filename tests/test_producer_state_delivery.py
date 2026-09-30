@@ -42,6 +42,33 @@ def test_bulk_trace_reports_database_error_without_swallowing_it(capsys):
     assert "private-value" not in output
 
 
+def test_bulk_ingest_deduplicates_external_id_when_source_urls_differ(tmp_path):
+    store = SqliteAcquisitionStore(tmp_path / "duplicate-external-id.sqlite3")
+    target = _target(
+        {"canonical_company_id": "duplicate-company", "canonical_company_name": "Duplicate Company"},
+        SOURCE_EMPLOYER,
+    )
+    store.ensure_targets([target])
+
+    result = store.ingest_snapshots_bulk([{
+        "cycle_id": "duplicate-cycle",
+        "task_id": "duplicate-task",
+        "target_id": target["target_id"],
+        "observed_at": "2026-09-30T01:00:00+00:00",
+        "jobs": [
+            {"job_id": "same-id", "title": "Engineer", "url": "https://company.example/jobs/first"},
+            {"job_id": "same-id", "title": "Engineer", "url": "https://company.example/jobs/second"},
+        ],
+        "complete_snapshot": True,
+        "valid_snapshot": True,
+        "closure_safe": True,
+    }])
+
+    target_result = result["targets"][target["target_id"]]
+    assert target_result["observed"] == 1
+    assert target_result["duplicates"] == 1
+
+
 def test_delivery_transaction_batches_pack_small_companies_and_isolate_large_ones():
     rows = {"small-1": 3, "small-2": 4, "large": 21, "empty": 0, "small-3": 5}
     items = [("employer", company_id) for company_id in rows]
