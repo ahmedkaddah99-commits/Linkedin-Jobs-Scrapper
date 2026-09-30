@@ -2298,6 +2298,11 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .jobs-description p, .jobs-description li { color: #29485a; font-size: 0.78rem; line-height: 1.65; }
 .jobs-description ul { margin: 0.65rem 0 0; padding-left: 1.2rem; }
 .jobs-description li + li { margin-top: 0.35rem; }
+.jobs-description-content { color: #29485a; font-size: 0.78rem; line-height: 1.65; overflow-wrap: anywhere; }
+.jobs-description-content p, .jobs-description-content div, .jobs-description-content blockquote { margin: 0 0 0.8rem; }
+.jobs-description-content h1, .jobs-description-content h2, .jobs-description-content h3, .jobs-description-content h4, .jobs-description-content h5, .jobs-description-content h6 { color: #18314b; font-size: 0.9rem; line-height: 1.4; margin: 1.1rem 0 0.4rem; }
+.jobs-description-content ul, .jobs-description-content ol { margin: 0.4rem 0 0.9rem; padding-left: 1.4rem; }
+.jobs-description-content li { margin-bottom: 0.35rem; }
 .jobs-text-link { align-items: center; background: transparent; border: 0; color: var(--jobs-cyan-dark); cursor: pointer; display: inline-flex; font: inherit; font-size: 0.73rem; font-weight: 750; gap: 0.25rem; padding: 0; text-decoration: none; }
 .jobs-text-link .material-symbols-outlined { font-size: 0.95rem; }
 

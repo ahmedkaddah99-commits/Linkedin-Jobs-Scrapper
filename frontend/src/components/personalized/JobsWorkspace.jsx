@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
 import { markJobsPhase } from "../../lib/api";
@@ -194,13 +194,42 @@ function ImproveResumeReview({ job, result, onClose, onRewrite, busy }) {
   </section></div>;
 }
 
-function DescriptionBlock({ description }) {
+const DESCRIPTION_TAGS = new Set(["p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "b", "em", "i", "u", "blockquote", "pre", "code", "a", "table", "thead", "tbody", "tr", "th", "td"]);
+
+function descriptionNode(node, key) {
+  if (node.nodeType === 3) return node.textContent;
+  if (node.nodeType !== 1) return null;
+  const tag = node.tagName.toLowerCase();
+  if (["script", "style", "iframe", "object", "embed", "form", "input", "button", "svg", "math"].includes(tag)) return null;
+  const children = Array.from(node.childNodes, (child, index) => descriptionNode(child, index));
+  if (!DESCRIPTION_TAGS.has(tag)) return children;
+  const props = { key };
+  if (tag === "a") {
+    try {
+      const url = new URL(node.getAttribute("href") || "");
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        props.href = url.href;
+        props.target = "_blank";
+        props.rel = "noopener noreferrer nofollow";
+      }
+    } catch { /* Leave an invalid link as plain text. */ }
+    if (!props.href) return children;
+  }
+  return createElement(tag, props, ...children);
+}
+
+function DescriptionBlock({ description, html }) {
+  if (html && typeof DOMParser !== "undefined") {
+    const body = new DOMParser().parseFromString(html, "text/html").body;
+    const content = Array.from(body.childNodes, (node, index) => descriptionNode(node, index)).filter(Boolean);
+    if (content.length) return <div className="jobs-description-content">{content}</div>;
+  }
   const paragraphs = String(description || "").split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
   return paragraphs.length ? paragraphs.map((paragraph, index) => <p key={`${paragraph.slice(0, 20)}-${index}`}>{paragraph}</p>) : <p> No verified description is available for this job.</p>;
 }
 
 function JobDescription({ job }) {
-  return <section className="jobs-section jobs-description"><h3>Job description</h3><DescriptionBlock description={job.description} /></section>;
+  return <section className="jobs-section jobs-description"><h3>Job description</h3><DescriptionBlock description={job.originalPosting?.description_text || job.description} html={job.originalPosting?.description_html} /></section>;
 }
 
 function StructuredDescription({ job }) {
@@ -221,7 +250,7 @@ function StructuredDescription({ job }) {
 
 function OriginalPosting({ job }) {
   const original = job.originalPosting || {};
-  return <section className="jobs-section jobs-original-posting"><div className="jobs-section__heading"><div><h3>Original Posting</h3><p className="jobs-original-posting__note">Original job text, preserved for this role.</p></div><span className="jobs-data-badge">Original job text</span></div><DescriptionBlock description={original.description} /></section>;
+  return <section className="jobs-section jobs-original-posting jobs-description"><div className="jobs-section__heading"><div><h3>Original Posting</h3><p className="jobs-original-posting__note">Original job text, preserved for this role.</p></div><span className="jobs-data-badge">Original job text</span></div><DescriptionBlock description={original.description_text || original.description} html={original.description_html} /></section>;
 }
 
 function FullPostingPanel({ job }) {
