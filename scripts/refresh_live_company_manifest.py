@@ -83,14 +83,28 @@ def catalog_row(company: Mapping[str, Any], profile: Mapping[str, Any], primary_
 
 
 def merge_rows(source_rows: list[dict[str, str]], columns: list[str], catalog_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
-    represented = {_text(row.get("canonical_CompanyID")) for row in source_rows if _text(row.get("canonical_CompanyID"))}
+    represented = {
+        _text(row.get("canonical_CompanyID")): row
+        for row in source_rows if _text(row.get("canonical_CompanyID"))
+    }
     added = 0
     for row in catalog_rows:
         company_id = _text(row.get("canonical_CompanyID"))
-        if not company_id or company_id in represented:
+        if not company_id:
+            continue
+        if company_id in represented:
+            source = represented[company_id]
+            website = _text(row.get("website_url"))
+            existing_website = _text(source.get("website_url"))
+            if row.get("website_discovery_status") == "verified" and website and (
+                not existing_website or existing_website.rstrip("/").casefold() == website.rstrip("/").casefold()
+            ):
+                source["website_url"] = website
+                source["website_discovery_status"] = "verified"
+                source["last_enriched_at"] = _text(row.get("last_enriched_at"))
             continue
         source_rows.append({column: _text(row.get(column)) for column in columns})
-        represented.add(company_id)
+        represented[company_id] = source_rows[-1]
         added += 1
     return source_rows, added
 
