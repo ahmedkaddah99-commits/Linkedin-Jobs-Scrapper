@@ -3291,6 +3291,23 @@ def _apply_acquisition_bulk_ingest_staging_migration(connection: DatabaseConnect
     )
 
 
+def _apply_acquisition_bulk_ingest_projection_index_migration(connection: DatabaseConnection) -> None:
+    """Index the bounded staging access path used by canonical projection."""
+
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_acquisition_ingest_staging_projection
+        ON acquisition_ingest_staging(
+            batch_id,
+            resolved_canonical_job_id,
+            projection_action,
+            observed_at DESC,
+            row_number DESC
+        )
+        """
+    )
+
+
 def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
     """Persist source-identity resolution and transactional company merges."""
 
@@ -3664,6 +3681,11 @@ MIGRATIONS = (
         "062_acquisition_bulk_ingest_staging",
         "Create durable bounded staging for set-based producer-state ingestion.",
         _apply_acquisition_bulk_ingest_staging_migration,
+    ),
+    Migration.from_callable(
+        "063_acquisition_bulk_ingest_projection_index",
+        "Index bounded staging lookups used by canonical job projection.",
+        _apply_acquisition_bulk_ingest_projection_index_migration,
     ),
 )
 

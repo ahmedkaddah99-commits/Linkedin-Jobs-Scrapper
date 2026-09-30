@@ -171,7 +171,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         migration_ids = [migration.migration_id for migration in MIGRATIONS]
         self.assertEqual(migration_ids, sorted(migration_ids))
         self.assertEqual(len(migration_ids), len(set(migration_ids)))
-        self.assertEqual(current_migration_head(), "062_acquisition_bulk_ingest_staging")
+        self.assertEqual(current_migration_head(), "063_acquisition_bulk_ingest_projection_index")
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
 
     def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
@@ -514,6 +514,10 @@ class DatabaseMigrationTests(unittest.TestCase):
             applied = connection.execute(
                 "SELECT checksum FROM schema_migrations WHERE migration_id='062_acquisition_bulk_ingest_staging'"
             ).fetchone()
+            projection_index = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name='idx_acquisition_ingest_staging_projection'"
+            ).fetchone()
 
         self.assertEqual(
             tables,
@@ -528,10 +532,12 @@ class DatabaseMigrationTests(unittest.TestCase):
             indexes,
             {
                 "idx_acquisition_ingest_staging_identity",
+                "idx_acquisition_ingest_staging_projection",
                 "idx_acquisition_ingest_staging_target",
             },
         )
         self.assertIsNotNone(applied)
+        self.assertIsNotNone(projection_index)
         self.assertEqual(len(str(applied[0])), 64)
 
 
