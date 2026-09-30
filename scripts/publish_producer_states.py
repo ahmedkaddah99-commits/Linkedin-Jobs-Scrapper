@@ -1052,14 +1052,11 @@ def _delivery_transaction_batches(
 
     batch: list[tuple[str, str]] = []
     batch_rows = 0
+    oversized: list[tuple[str, str]] = []
     for item in items:
         row_count = max(0, source_rows(*item))
         if row_count > max_rows:
-            if batch:
-                yield batch
-                batch = []
-                batch_rows = 0
-            yield [item]
+            oversized.append(item)
             continue
         if batch and (
             len(batch) >= max_companies
@@ -1072,6 +1069,8 @@ def _delivery_transaction_batches(
         batch_rows += row_count
     if batch:
         yield batch
+    for item in oversized:
+        yield [item]
 
 
 def _publisher_transaction_limits() -> tuple[int, int]:
@@ -2008,7 +2007,7 @@ def run_delivery(
                         committed.append((source, deliver_large_company_bulk(
                             source,
                             company_id,
-                            max_rows=transaction_rows,
+                            max_rows=min(20, transaction_rows),
                         )))
                     for source, delivered in committed:
                         record_delivery(source, delivered)

@@ -2488,6 +2488,51 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         def ingest(connection):
             staged = self._stage_producer_ingest_batch(connection, rows, batch_id=stable_batch_id)
+            if (
+                staged["jobs"] > 0
+                and staged["actions"] == {"replay": staged["jobs"]}
+                and all(not bool(row.get("closure_safe")) for row in rows)
+            ):
+                target_results = {
+                    str(row["target_id"]): {
+                        "observed": 0,
+                        "new": 0,
+                        "updated": 0,
+                        "unchanged": int(row["replay_count"] or 0),
+                        "stale_ignored": 0,
+                        "complete_snapshot": bool(row["complete_snapshot"]),
+                        "valid_snapshot": bool(row["valid_snapshot"]),
+                        "closure_safe": bool(row["closure_safe"]),
+                        "closed": 0,
+                        "rejected": int(row["rejected_count"] or 0),
+                        "duplicates": int(row["duplicate_count"] or 0),
+                        "quality_warnings": [],
+                    }
+                    for row in connection.execute(
+                        """
+                        SELECT target.target_id, target.complete_snapshot, target.valid_snapshot,
+                               target.closure_safe, target.rejected_count, target.duplicate_count,
+                               COUNT(staging.row_number) AS replay_count
+                        FROM acquisition_ingest_targets target
+                        LEFT JOIN acquisition_ingest_staging staging
+                          ON staging.batch_id=target.batch_id AND staging.target_id=target.target_id
+                        WHERE target.batch_id=? GROUP BY target.target_id
+                        """,
+                        (stable_batch_id,),
+                    ).fetchall()
+                }
+                connection.execute(
+                    "DELETE FROM acquisition_ingest_batches WHERE batch_id=?",
+                    (stable_batch_id,),
+                )
+                return {
+                    "batch_id": stable_batch_id,
+                    "actions": dict(staged["actions"]),
+                    "targets": target_results,
+                    "committed_at": utc_now_iso(),
+                    "companies": staged["companies"],
+                    "jobs": staged["jobs"],
+                }
             projected = self._project_producer_ingest_batch(connection, batch_id=stable_batch_id)
             return {**projected, "companies": staged["companies"], "jobs": staged["jobs"]}
 

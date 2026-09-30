@@ -40,8 +40,8 @@ def test_delivery_transaction_batches_pack_small_companies_and_isolate_large_one
 
     assert batches == [
         [("employer", "small-1"), ("employer", "small-2")],
-        [("employer", "large")],
         [("employer", "empty"), ("employer", "small-3")],
+        [("employer", "large")],
     ]
 
 
@@ -580,6 +580,37 @@ def test_bulk_retry_appends_observation_without_duplicate_version_for_unchanged_
     assert target_result["unchanged"] == 1
     assert observation_count == 2
     assert version_count == 1
+
+
+def test_bulk_intermediate_same_cycle_replay_skips_projection(tmp_path, monkeypatch):
+    store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
+    target = _target(
+        {"canonical_company_id": "company-replay", "canonical_company_name": "Replay Company"},
+        SOURCE_EMPLOYER,
+    )
+    store.ensure_targets([target])
+    snapshot = {
+        "cycle_id": "replay-cycle",
+        "task_id": "replay-task",
+        "target_id": target["target_id"],
+        "observed_at": "2026-09-30T01:00:00+00:00",
+        "jobs": [{"job_id": "job-1", "title": "Engineer", "url": "https://replay.example/jobs/1"}],
+        "complete_snapshot": False,
+        "valid_snapshot": True,
+        "closure_safe": False,
+    }
+    store.ingest_snapshots_bulk([snapshot])
+
+    def unexpected_projection(*_args, **_kwargs):
+        raise AssertionError("an already committed intermediate chunk must not re-run projection")
+
+    monkeypatch.setattr(store, "_project_producer_ingest_batch", unexpected_projection)
+    replay = store.ingest_snapshots_bulk([snapshot])
+
+    assert replay["actions"] == {"replay": 1}
+    assert replay["targets"][target["target_id"]]["unchanged"] == 1
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM job_source_observations").fetchone()[0] == 1
 
 
 def test_bulk_ingestion_matches_single_company_semantic_projection(tmp_path):
