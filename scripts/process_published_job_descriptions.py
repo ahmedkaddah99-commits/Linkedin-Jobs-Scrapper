@@ -1,0 +1,126 @@
+"""Build shared Runr descriptions for current published posting versions on the VPS."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.application.vps_job_descriptions import (
+    PROMPT_VERSION,
+    RateLimitError,
+    build_runr_descriptions,
+    openrouter_generate,
+)
+from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+
+
+def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int) -> list[dict]:
+    with store._connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT j.canonical_job_id, j.current_version_id, j.title, j.canonical_url,
+                   v.version_number, v.content_hash, v.description,
+                   v.payload_json AS version_payload_json, v.location AS version_location,
+                   v.apply_url
+            FROM acquisition_publication_head h
+            JOIN acquisition_publication_jobs pj ON pj.publication_id = h.publication_id
+            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+            JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN job_description_intelligence d ON d.version_id = v.version_id
+            WHERE h.head_id = 1 AND j.canonical_job_id > ?
+              AND TRIM(COALESCE(v.description, '')) != ''
+              AND (d.version_id IS NULL OR COALESCE(d.content_hash, '') != v.content_hash
+                   OR COALESCE(d.prompt_version, '') != ?)
+            ORDER BY j.canonical_job_id LIMIT ?
+            """,
+            (after_id, PROMPT_VERSION, limit),
+        ).fetchall()
+    return [{key: row[key] for key in row.keys()} for row in rows]
+
+
+def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) -> dict:
+    cursor = ""
+    if cursor_file.exists():
+        try:
+            cursor = str(json.loads(cursor_file.read_text(encoding="utf-8")).get("after_id") or "")
+        except (OSError, ValueError, AttributeError):
+            cursor = ""
+    counts = {"requests": 0, "attempted": 0, "completed": 0, "failed": 0}
+    errors: list[str] = []
+    rate_limited = False
+    while counts["requests"] < limit and not rate_limited:
+        candidates = next_batch(store, cursor, 5)
+        # Keep full postings intact while bounding a multi-job request's size.
+        batch = []
+        source_chars = 0
+        for row in candidates:
+            length = len(str(row.get("description") or ""))
+            if batch and source_chars + length > 20000:
+                break
+            batch.append(row)
+            source_chars += length
+        if not batch:
+            cursor = ""
+            break
+        counts["requests"] += 1
+        try:
+            results = build_runr_descriptions(batch, openrouter_generate)
+        except RateLimitError:
+            rate_limited = True
+            break
+        except Exception as exc:
+            counts["attempted"] += len(batch)
+            counts["failed"] += len(batch)
+            errors.append(type(exc).__name__)
+            break
+        previous_cursor = cursor
+        first_failed_index = None
+        for row, result in zip(batch, results):
+            try:
+                store.save_description_intelligence(**result)
+            except Exception as exc:
+                counts["failed"] += 1
+                errors.append(type(exc).__name__)
+                if first_failed_index is None:
+                    first_failed_index = counts["attempted"]
+            else:
+                counts["completed"] += 1
+            counts["attempted"] += 1
+            if first_failed_index is None:
+                cursor = str(row["canonical_job_id"])
+        if first_failed_index is not None:
+            if not cursor:
+                cursor = previous_cursor
+            break
+    cursor_file.parent.mkdir(parents=True, exist_ok=True)
+    temp = cursor_file.with_suffix(".tmp")
+    temp.write_text(json.dumps({"after_id": cursor}), encoding="utf-8")
+    os.replace(temp, cursor_file)
+    return {**counts, "cursor_present": bool(cursor), "rate_limited": rate_limited, "error_types": sorted(set(errors))}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", default=os.getenv("RUNR_DATA_DIR", "/var/lib/runr/acquisition-data"))
+    parser.add_argument("--limit", type=int, default=45, help="maximum free-tier model requests")
+    parser.add_argument("--cursor-file", default="/srv/runr/state/description-cursor.json")
+    args = parser.parse_args()
+    if args.limit < 1 or args.limit > 1000:
+        parser.error("limit must be between 1 and 1000")
+    if not os.getenv("OPENROUTER_API_KEY"):
+        parser.error("OPENROUTER_API_KEY is required")
+    store = SqlitePersonalizedJobsStore(Path(args.data_dir) / "backend.sqlite3", initialize=False)
+    result = run(store, limit=args.limit, cursor_file=Path(args.cursor_file))
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["failed"] == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

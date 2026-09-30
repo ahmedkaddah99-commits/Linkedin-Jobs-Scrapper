@@ -311,6 +311,33 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
   </div>;
 }
 
+function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
+  const summary = job.runrSummary || {};
+  const sections = [
+    ["Responsibilities", summary.responsibilities],
+    ["Required qualifications", summary.required_qualifications],
+    ["Preferred qualifications", summary.preferred_qualifications],
+    ["Benefits", summary.benefits],
+    ["Application details", summary.application_details],
+  ];
+  return <article className="jobs-reading">
+    <header className="jobs-reading__header"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><div><p>{job.company} · {formatJobDate(job.postedAt)}</p><h1>{job.title}</h1><span>{[job.location, job.workArrangement, job.employmentType].filter((value) => value && value !== "Unknown").join(" · ")}</span></div></header>
+    <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>visibility_off</Icon>Hide</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
+    {job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview ? <>
+      <section className="jobs-reading__section"><h2>Overview</h2><p>{summary.overview}</p></section>
+      {sections.map(([title, items]) => Array.isArray(items) && items.length ? <section className="jobs-reading__section" key={title}><h2>{title}</h2><ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item.text || String(item)}</li>)}</ul></section> : null)}
+      <p className="jobs-reading__note">Runr organized this description from the employer’s posting. View the Original job post tab for the employer’s exact wording.</p>
+    </> : <section className="jobs-reading__section" role="status"><h2>Runr description is being prepared</h2><p>The original employer posting is available in the next tab.</p></section>}
+    <section className="jobs-reading__section"><h2>Company</h2><p>{company?.name || job.company}</p>{company?.profile?.fields?.description?.state === "known" ? <p>{company.profile.fields.description.value}</p> : null}</section>
+    <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
+  </article>;
+}
+
+function OriginalJob({ job }) {
+  const original = job.originalPosting || {};
+  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div><p>{job.company}</p><h1>{original.title || job.title}</h1><span>Original employer posting</span></div></header><DescriptionBlock description={original.description_text || original.description || job.description} html={original.description_html} /></article>;
+}
+
 function DrawerFilterControl({ filter, value, onChange }) {
   const options = filter.options || [];
   if (filter.type === "boolean") return <label className="jobs-drawer-switch"><input checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} type="checkbox" /><span aria-hidden="true" /><em>{value ? "On" : "Off"}</em></label>;
@@ -390,7 +417,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [feed, setFeed] = useState(null);
   const [detailJob, setDetailJob] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(routeJobId);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("runr");
   const [rightPanelTab, setRightPanelTab] = useState("summary");
   const [companyDetail, setCompanyDetail] = useState(null);
   const [companyLoading, setCompanyLoading] = useState(false);
@@ -590,7 +617,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }, [feedError, jobs.length, loading]);
 
   useEffect(() => {
-    if (activeTab !== "company" || !selectedJob?.company_id) return undefined;
+    if (activeTab !== "runr" || !selectedJob?.company_id) return undefined;
     let active = true;
     setCompanyLoading(true);
     setCompanyError("");
@@ -748,7 +775,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   function selectJob(job) {
     setSelectedJobId(job.id);
     setDetailJob(null);
-    setActiveTab("overview");
+    setActiveTab("runr");
     setRightPanelTab("summary");
     if (isMobile) navigate(`/jobs/${encodeURIComponent(job.id)}`);
   }
@@ -766,8 +793,12 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   const detailContent = selectedJob ? <>
-    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "overview" ? "is-active" : ""} onClick={() => setActiveTab("overview")} type="button">Overview</button><button className={activeTab === "company" ? "is-active" : ""} onClick={() => setActiveTab("company")} type="button">Company</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View job</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View job</button>}{selectedJob.applyUrl ? <a className="jobs-primary-button" href={selectedJob.applyUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title="Open employer application"><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No verified Apply URL" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
-    <div className="jobs-detail-scroll">{activeTab === "company" ? companyLoading ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading company details</strong></div> : companyError ? <div className="jobs-empty"><Icon>cloud_off</Icon><strong>{companyError}</strong></div> : <CompanyOverview company={companyDetail} job={selectedJob} onOpenNetwork={openNetwork} /> : <JobOverview job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onOpenNetwork={openNetwork} onPrepare={() => { setPreparing(true); logPersonalizedEvent("application_preparation_opened", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode }); }} onReport={() => setReportOpen(true)} rightPanelTab={rightPanelTab} setRightPanelTab={setRightPanelTab} />}{preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}{improveOpen && selectedJob ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}</div>
+    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "runr" ? "is-active" : ""} onClick={() => setActiveTab("runr")} type="button">Runr description</button><button className={activeTab === "original" ? "is-active" : ""} onClick={() => setActiveTab("original")} type="button">Original job post</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View job</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View job</button>}{selectedJob.applyUrl ? <a className="jobs-primary-button" href={selectedJob.applyUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title="Open employer application"><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No verified Apply URL" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
+    <div className="jobs-detail-scroll">
+      {activeTab === "original" ? <OriginalJob job={selectedJob} /> : <ReadableJob company={companyDetail} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />}
+      {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
+      {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
+    </div>
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
 
   return <div className="jobs-experience">

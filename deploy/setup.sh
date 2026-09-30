@@ -94,6 +94,8 @@ sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.service" /etc/sys
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer" /etc/systemd/system/runr-acquisition-employer.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.service" /etc/systemd/system/runr-acquisition-publisher.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer" /etc/systemd/system/runr-acquisition-publisher.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions.service" /etc/systemd/system/runr-job-descriptions.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions.timer" /etc/systemd/system/runr-job-descriptions.timer
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-linkedin.timer.d/continuous.conf
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-employer.timer.d/continuous.conf
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-publisher.timer.d/continuous.conf

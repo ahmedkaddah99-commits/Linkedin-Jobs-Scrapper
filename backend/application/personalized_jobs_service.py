@@ -910,6 +910,7 @@ class PersonalizedJobsService:
         row: Mapping[str, Any],
         *,
         cache_entries: Iterable[Mapping[str, Any]] | None = None,
+        shared_entries: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         original = build_preserved_original_posting(row)
         key = build_intelligence_cache_key(
@@ -918,6 +919,14 @@ class PersonalizedJobsService:
             evaluator_version=SUMMARY_PROMPT_VERSION,
         )
         cached = self._cache_entry_for_key(key, cache_entries or ()) if cache_entries is not None else (self.store.get_intelligence_cache(key) if self.store is not None else None)
+        # Shared VPS output is keyed to the immutable posting version and is
+        # available to every customer without scheduling per-user work.
+        version_id = _text(row.get("current_version_id"))
+        shared = (shared_entries.get(version_id) if shared_entries is not None else
+                  self.store.get_description_intelligence(version_id)) if self.store is not None else None
+        if (shared is not None and _text(shared.get("content_hash")) == _text(row.get("content_hash"))
+                and _text(shared.get("prompt_version")) == "runr_description_v1"):
+            return _public_clean({**shared, "state": "available", "original_posting": original})
         if cached is not None and _text(cached.get("state")) == "available":
             result = dict(cached.get("payload") or {})
             result["state"] = "available"
@@ -1403,6 +1412,7 @@ class PersonalizedJobsService:
                 },
             }
         cache_entries = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
+        shared_entries = self.store.list_cached_descriptions(_text(row.get("current_version_id")) for row in page)
         match_entries = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
         evaluation_records = self.store.list_evaluations_for_jobs(
             user_id,
@@ -1412,7 +1422,7 @@ class PersonalizedJobsService:
         )
         jobs: list[dict[str, Any]] = []
         for row in page:
-            description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)
+            description_intelligence = self._description_intelligence(row, cache_entries=cache_entries, shared_entries=shared_entries)
             match_intelligence = self._match_intelligence(
                 user_id,
                 row,
@@ -1768,11 +1778,12 @@ class PersonalizedJobsService:
             next_cursor = _cursor_encode({"fingerprint": fingerprint, "sort": _text(last.get("last_verified_at") or last.get("first_seen_at")), "canonical_job_id": _text(last.get("canonical_job_id"))})
         job_ids = [str(row.get("canonical_job_id") or "") for row in page]
         descriptions = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
+        shared_entries = self.store.list_cached_descriptions(_text(row.get("current_version_id")) for row in page)
         matches = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
         preferences = self.get_preferences(user_id)
         jobs = []
         for row in page:
-            description = self._description_intelligence(row, cache_entries=descriptions)
+            description = self._description_intelligence(row, cache_entries=descriptions, shared_entries=shared_entries)
             match = self._match_intelligence(user_id, row, description, preferences, state="available", cache_entries=matches)
             applicant_intelligence = build_applicant_competition(row, include_pro=False)
             jobs.append(_job_projection(row, {"state": "hidden"}, {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match}, description, match, self._company_profile(row), applicant_intelligence, {"state": "pending", "score": None}))

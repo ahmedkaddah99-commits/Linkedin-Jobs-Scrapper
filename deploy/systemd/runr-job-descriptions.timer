@@ -1,0 +1,10 @@
+[Unit]
+Description=Process published Runr job descriptions
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+Persistent=true
+Unit=runr-job-descriptions.service
+
+[Install]
+WantedBy=timers.target
