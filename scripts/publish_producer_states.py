@@ -1088,6 +1088,37 @@ def _publisher_transaction_limits() -> tuple[int, int]:
     return max(1, min(50, companies)), max(1, min(100, rows))
 
 
+def _split_large_bulk_snapshot(
+    snapshot: Mapping[str, object],
+    *,
+    max_rows: int,
+) -> list[dict[str, object]]:
+    """Split a large source snapshot without granting early closure authority."""
+
+    jobs = [dict(job) for job in snapshot.get("jobs") or ()]
+    if not jobs:
+        return [dict(snapshot)]
+    external_ids = [str(value) for value in snapshot.get("snapshot_external_ids") or ()]
+    chunks: list[dict[str, object]] = []
+    for offset in range(0, len(jobs), max(1, max_rows)):
+        chunk_jobs = jobs[offset : offset + max(1, max_rows)]
+        final = offset + len(chunk_jobs) >= len(jobs)
+        chunk_ids = [
+            str(job.get("job_id") or job.get("external_job_id") or job.get("url") or "")
+            for job in chunk_jobs
+        ]
+        chunks.append(
+            {
+                **dict(snapshot),
+                "jobs": chunk_jobs,
+                "complete_snapshot": bool(snapshot.get("complete_snapshot")) if final else False,
+                "closure_safe": bool(snapshot.get("closure_safe")) if final else False,
+                "snapshot_external_ids": external_ids if final else [value for value in chunk_ids if value],
+            }
+        )
+    return chunks
+
+
 def _run_delivery_legacy(
     *,
     manifest_path: Path,
@@ -1788,6 +1819,47 @@ def run_delivery(
         }
         return snapshot, delivered
 
+    def deliver_large_company_bulk(source: str, company_id: str, *, max_rows: int) -> dict[str, object]:
+        """Commit one large company as closure-safe bounded set-based chunks."""
+
+        snapshot, delivered = prepare_bulk_snapshot(source, company_id)
+        totals = {
+            key: 0
+            for key in (
+                "observed", "new", "updated", "unchanged", "stale_ignored",
+                "closed", "rejected", "duplicates", "applicant_snapshots_blocked",
+            )
+        }
+        final_result: dict[str, object] = {}
+        for chunk in _split_large_bulk_snapshot(snapshot, max_rows=max_rows):
+            projected = store.ingest_snapshots_bulk([chunk])
+            final_result = dict(projected["targets"][_text(delivered["target_id"])])
+            for key in totals:
+                totals[key] += int(final_result.get(key) or 0)
+        task_id = _text(snapshot.get("task_id"))
+        store.complete_task(
+            task_id,
+            status="completed" if bool(delivered["closure_safe"]) else "partial",
+            result={
+                **final_result,
+                **totals,
+                "complete_snapshot": True,
+                "valid_snapshot": not bool(delivered["failed"]),
+                "closure_safe": bool(delivered["closure_safe"]),
+                "credible_evidence": bool(delivered["closure_safe"]),
+                "collection_metadata": {
+                    "producer_bridge": True,
+                    "source": source,
+                    "source_marker": _text(source_metrics[source].get("source_marker")),
+                    "unresolved_observations": int(delivered["unresolved_observations"]),
+                    "large_company_bulk_chunks": len(
+                        _split_large_bulk_snapshot(snapshot, max_rows=max_rows)
+                    ),
+                },
+            },
+        )
+        return {**delivered, "result": {**final_result, **totals}}
+
     try:
         delivered_companies = len(resumed_target_ids)
         _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
@@ -1933,7 +2005,11 @@ def run_delivery(
                             committed.append((source, delivered))
                     else:
                         source, company_id = transaction_batch[0]
-                        committed.append((source, deliver_company(source, company_id, store)))
+                        committed.append((source, deliver_large_company_bulk(
+                            source,
+                            company_id,
+                            max_rows=transaction_rows,
+                        )))
                     for source, delivered in committed:
                         record_delivery(source, delivered)
                     _progress("delivery", companies_completed=delivered_companies, targets=len(targets))

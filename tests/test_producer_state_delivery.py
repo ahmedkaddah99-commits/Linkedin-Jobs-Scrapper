@@ -15,6 +15,7 @@ from scripts.publish_producer_states import (
     _delivery_transaction_batches,
     _enrich_source_groups,
     _publisher_transaction_limits,
+    _split_large_bulk_snapshot,
     _verified_company_registry,
     _target,
     run_delivery,
@@ -48,11 +49,34 @@ def test_publisher_transaction_limits_default_to_bounded_set_based_batch(monkeyp
     monkeypatch.delenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", raising=False)
     monkeypatch.delenv("RUNR_PUBLISHER_TRANSACTION_ROWS", raising=False)
     assert _publisher_transaction_limits() == (50, 100)
-
     monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_COMPANIES", "999")
     monkeypatch.setenv("RUNR_PUBLISHER_TRANSACTION_ROWS", "999")
     assert _publisher_transaction_limits() == (50, 100)
 
+
+def test_large_bulk_snapshot_only_authorizes_closure_on_final_chunk():
+    jobs = [
+        {"job_id": f"job-{index}", "title": f"Engineer {index}", "url": f"https://company.example/jobs/{index}"}
+        for index in range(205)
+    ]
+    snapshot = {
+        "cycle_id": "large-cycle",
+        "task_id": "large-task",
+        "target_id": "large-target",
+        "jobs": jobs,
+        "complete_snapshot": True,
+        "valid_snapshot": True,
+        "closure_safe": True,
+        "snapshot_external_ids": [job["job_id"] for job in jobs],
+    }
+
+    chunks = _split_large_bulk_snapshot(snapshot, max_rows=100)
+
+    assert [len(chunk["jobs"]) for chunk in chunks] == [100, 100, 5]
+    assert [chunk["complete_snapshot"] for chunk in chunks] == [False, False, True]
+    assert [chunk["closure_safe"] for chunk in chunks] == [False, False, True]
+    assert chunks[0]["snapshot_external_ids"] == [f"job-{index}" for index in range(100)]
+    assert chunks[-1]["snapshot_external_ids"] == snapshot["snapshot_external_ids"]
 
 def test_bulk_staging_normalizes_and_resolves_duplicate_identity_setwise(tmp_path):
     store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
