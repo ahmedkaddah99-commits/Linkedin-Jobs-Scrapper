@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.bootstrap import create_backend
 from tests.test_phase_c_personalized_jobs import _seed_catalog
@@ -90,6 +92,76 @@ class JobsFeedPerformanceTests(unittest.TestCase):
         store._filter_capabilities_cache.clear()
         recomputed = store.get_published_filter_capabilities()
         self.assertEqual(cached, recomputed)
+
+    def test_default_feed_pages_ids_before_hydrating_expensive_job_details(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        statements: list[str] = []
+        original_connect = store._connect
+
+        @contextmanager
+        def traced_connect():
+            with original_connect() as connection:
+                connection._connection.set_trace_callback(statements.append)
+                yield connection
+
+        with patch.object(store, "_connect", side_effect=traced_connect):
+            result = store.query_published_jobs("user-a", limit=1, filters={"sort": "newest"})
+
+        self.assertEqual(len(result["rows"]), 2)
+        count_sql = next(sql for sql in statements if "SELECT COUNT(*) AS total" in sql)
+        self.assertNotIn("job_applicant_snapshots", count_sql)
+        self.assertNotIn("personalized_job_evaluations", count_sql)
+        self.assertNotIn("job_posting_versions", count_sql)
+        page_sql = next(sql for sql in statements if "feed_page_ids" in sql)
+        self.assertIn("LIMIT 2", page_sql)
+        self.assertNotIn("job_applicant_snapshots", page_sql)
+        hydration_sql = next(sql for sql in statements if "feed_page_hydration" in sql)
+        self.assertIn("j.canonical_job_id IN", hydration_sql)
+        self.assertNotIn("ROW_NUMBER() OVER", hydration_sql)
+
+    def test_filter_capability_scan_does_not_hydrate_job_history(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        statements: list[str] = []
+        original_connect = store._connect
+
+        @contextmanager
+        def traced_connect():
+            with original_connect() as connection:
+                connection._connection.set_trace_callback(statements.append)
+                yield connection
+
+        with patch.object(store, "_connect", side_effect=traced_connect):
+            store.get_published_filter_capabilities()
+
+        capability_sql = next(sql for sql in statements if "filter_capability_probe" in sql)
+        self.assertNotIn("MAX(CASE WHEN", capability_sql)
+        self.assertIn("EXISTS", capability_sql)
+        self.assertNotIn("job_applicant_snapshots", capability_sql)
+        self.assertNotIn("job_source_observations", capability_sql)
+
+    def test_large_catalog_uses_supported_filters_without_scanning_json_payloads(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        store._DYNAMIC_CAPABILITY_SCAN_LIMIT = 1
+        statements: list[str] = []
+        original_connect = store._connect
+
+        @contextmanager
+        def traced_connect():
+            with original_connect() as connection:
+                connection._connection.set_trace_callback(statements.append)
+                yield connection
+
+        with patch.object(store, "_connect", side_effect=traced_connect):
+            capabilities = store.get_published_filter_capabilities()
+
+        self.assertTrue(all(capabilities.values()))
+        self.assertFalse(any("filter_capability_probe" in sql for sql in statements))
 
 
 if __name__ == "__main__":

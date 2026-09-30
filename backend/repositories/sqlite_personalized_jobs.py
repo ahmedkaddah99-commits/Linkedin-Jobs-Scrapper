@@ -82,6 +82,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
     # publication ID is only unique within one database, so sharing this cache
     # across store instances can return another database's capabilities.
     _FILTER_CAPABILITIES_CACHE_LIMIT = 8
+    _DYNAMIC_CAPABILITY_SCAN_LIMIT = 5_000
 
     def __init__(self, db_path: Path, *, initialize: bool = True):
         super().__init__(db_path, initialize=initialize)
@@ -1155,6 +1156,91 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         """
 
     @staticmethod
+    def _feed_candidate_sql() -> str:
+        """Return filter/sort inputs without hydrating expensive job history."""
+
+        return """
+            SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                   j.title, j.location, j.first_seen_at, j.last_verified_at,
+                   j.current_version_id, v.description,
+                   v.location AS version_location,
+                   v.payload_json AS version_payload_json,
+                   p.profile_json AS company_profile_json,
+                   COALESCE(d.state, 'none') AS user_state
+            FROM acquisition_publication_jobs pj
+            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+            JOIN canonical_companies c ON c.company_id = j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+            LEFT JOIN personalized_job_dispositions d
+              ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
+            WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+        """
+
+    @staticmethod
+    def _feed_index_sql() -> str:
+        """Return only fields required by the unfiltered newest feed."""
+
+        return """
+            SELECT j.canonical_job_id, j.first_seen_at, j.last_verified_at,
+                   COALESCE(d.state, 'none') AS user_state
+            FROM acquisition_publication_jobs pj
+            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+            JOIN canonical_companies c ON c.company_id = j.company_id
+            LEFT JOIN personalized_job_dispositions d
+              ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
+            WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+        """
+
+    @staticmethod
+    def _filter_capability_jobs_sql() -> str:
+        return """
+            SELECT c.canonical_name AS company,
+                   j.last_verified_at,
+                   v.payload_json AS version_payload_json,
+                   p.profile_json AS company_profile_json
+            FROM acquisition_publication_jobs pj
+            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+            JOIN canonical_companies c ON c.company_id = j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+            WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+        """
+
+    def _hydrate_feed_page(
+        self,
+        connection,
+        *,
+        publication_id: str,
+        user_id: str,
+        canonical_job_ids: list[str],
+    ) -> list[Any]:
+        if not canonical_job_ids:
+            return []
+        placeholders = ",".join("?" for _ in canonical_job_ids)
+        sql = f"""
+            /* feed_page_hydration */
+            SELECT hydrated.*, COALESCE(d.state, 'none') AS user_state,
+                   COALESCE(d.updated_at, '') AS user_state_updated_at,
+                   (SELECT e.payload_json FROM personalized_job_evaluations e
+                    WHERE e.user_id = ? AND e.canonical_job_id = hydrated.canonical_job_id
+                      AND e.job_version_id = hydrated.current_version_id
+                      AND e.evaluator_version = 'phase_e_v2'
+                    ORDER BY e.updated_at DESC LIMIT 1) AS evaluation_payload,
+                   0.0 AS priority_score, 2147483647 AS competition_score
+            FROM ({self._published_jobs_sql()}
+                  AND j.canonical_job_id IN ({placeholders})) AS hydrated
+            LEFT JOIN personalized_job_dispositions d
+              ON d.canonical_job_id = hydrated.canonical_job_id AND d.user_id = ?
+        """
+        rows = connection.execute(
+            sql,
+            (str(user_id), str(publication_id), *canonical_job_ids, str(user_id)),
+        ).fetchall()
+        order = {job_id: index for index, job_id in enumerate(canonical_job_ids)}
+        return sorted(rows, key=lambda row: order[str(row["canonical_job_id"])])
+
+    @staticmethod
     def _priority_sql() -> str:
         fit = "COALESCE(CAST(json_extract(page.evaluation_payload, '$.match_intelligence.v2.score') AS REAL), CAST(json_extract(page.evaluation_payload, '$.match_intelligence.score') AS REAL), 50.0)"
         observed = "COALESCE(NULLIF(page.applicant_latest_observed_at, ''), NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''))"
@@ -1215,6 +1301,61 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if sort_mode not in {"newest", "priority", "best", "least_competitive"}:
                 sort_mode = "newest"
             sort_expr = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
+            if sort_mode == "newest":
+                has_catalog_filters = any(
+                    key != "sort" and value not in (None, "", [], (), set())
+                    for key, value in dict(filters or {}).items()
+                )
+                candidate_source = (
+                    self._feed_candidate_sql() if has_catalog_filters else self._feed_index_sql()
+                )
+                predicates = [f"({item})" for item in predicates]
+                count_where_sql = " AND ".join(predicates) if predicates else "1=1"
+                count_params = [str(user_id), str(publication["publication_id"]), *filter_params]
+                total = int(
+                    connection.execute(
+                        f"SELECT COUNT(*) AS total FROM ({candidate_source}) AS page WHERE {count_where_sql}",
+                        tuple(count_params),
+                    ).fetchone()["total"]
+                    or 0
+                )
+                if cursor:
+                    predicates.append(
+                        f"({sort_expr} < ? OR ({sort_expr} = ? AND page.canonical_job_id < ?))"
+                    )
+                    cursor_sort = str(cursor.get("sort") or "")
+                    filter_params.extend(
+                        [cursor_sort, cursor_sort, str(cursor.get("canonical_job_id") or "")]
+                    )
+                where_sql = " AND ".join(predicates) if predicates else "1=1"
+                page_ids = connection.execute(
+                    f"""
+                    /* feed_page_ids */
+                    SELECT page.canonical_job_id
+                    FROM ({candidate_source}) AS page
+                    WHERE {where_sql}
+                    ORDER BY {sort_expr} DESC, page.canonical_job_id DESC
+                    LIMIT ?
+                    """,
+                    (
+                        str(user_id),
+                        str(publication["publication_id"]),
+                        *filter_params,
+                        limit + 1,
+                    ),
+                ).fetchall()
+                rows = self._hydrate_feed_page(
+                    connection,
+                    publication_id=str(publication["publication_id"]),
+                    user_id=str(user_id),
+                    canonical_job_ids=[str(row["canonical_job_id"]) for row in page_ids],
+                )
+                return {
+                    "publication": publication_payload,
+                    "rows": [_row_payload(row) for row in rows],
+                    "total": total,
+                    "sort_mode": sort_mode,
+                }
             page_source = f"""
                 SELECT scoped.*,
                        (SELECT e.payload_json FROM personalized_job_evaluations e
@@ -1328,17 +1469,42 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             cached = self._filter_capabilities_cache.get(cache_key)
             if cached is not None:
                 return dict(cached)
+            catalog_size = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM acquisition_publication_jobs pj
+                    JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+                    JOIN canonical_companies c ON c.company_id = j.company_id
+                    WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+                    """,
+                    (publication_id,),
+                ).fetchone()["total"]
+                or 0
+            )
+            if catalog_size > self._DYNAMIC_CAPABILITY_SCAN_LIMIT:
+                capabilities = {key: True for key in capability_exprs}
+                self._cache_filter_capabilities(cache_key, capabilities)
+                return dict(capabilities)
+            capability_source = self._filter_capability_jobs_sql()
             result = connection.execute(
-                "SELECT " + ", ".join(f"MAX(CASE WHEN {expr} THEN 1 ELSE 0 END) AS {key}" for key, expr in capability_exprs.items()) + f" FROM ({self._published_jobs_sql()}) AS catalog",
-                (publication_id,),
+                "/* filter_capability_probe */ SELECT "
+                + ", ".join(
+                    f"EXISTS(SELECT 1 FROM ({capability_source}) AS catalog WHERE {expr} LIMIT 1) AS {key}"
+                    for key, expr in capability_exprs.items()
+                ),
+                tuple(publication_id for _ in capability_exprs),
             ).fetchone()
         capabilities = {key: bool(int(result[key] or 0)) for key in capability_exprs}
+        self._cache_filter_capabilities(cache_key, capabilities)
+        return dict(capabilities)
+
+    def _cache_filter_capabilities(self, cache_key: str, capabilities: Mapping[str, bool]) -> None:
         cache = self._filter_capabilities_cache
         while len(cache) >= self._FILTER_CAPABILITIES_CACHE_LIMIT:
             oldest_key = next(iter(cache))
             cache.pop(oldest_key, None)
-        cache[cache_key] = capabilities
-        return dict(capabilities)
+        cache[cache_key] = dict(capabilities)
 
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -1471,16 +1637,14 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             JOIN canonical_companies c ON c.company_id = j.company_id
             LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
             LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
-            LEFT JOIN (
-                SELECT * FROM (
-                    SELECT s.*, ROW_NUMBER() OVER (
-                        PARTITION BY s.canonical_job_id
-                        ORDER BY s.observed_at DESC, s.snapshot_id DESC
-                    ) AS snapshot_rank
-                    FROM job_applicant_snapshots s
-                ) ranked
-                WHERE ranked.snapshot_rank = 1
-            ) aps ON aps.canonical_job_id = j.canonical_job_id
+            LEFT JOIN job_applicant_snapshots aps
+              ON aps.snapshot_id = (
+                  SELECT latest.snapshot_id
+                  FROM job_applicant_snapshots latest
+                  WHERE latest.canonical_job_id = j.canonical_job_id
+                  ORDER BY latest.observed_at DESC, latest.snapshot_id DESC
+                  LIMIT 1
+              )
             WHERE pj.publication_id = ?
               AND c.entity_kind = 'employer'
         """
