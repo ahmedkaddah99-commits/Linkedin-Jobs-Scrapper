@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from time import monotonic
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -54,6 +56,50 @@ from backend.repositories.sqlite_core import _SqliteStore
 
 class AcquisitionLeaseLostError(RuntimeError):
     """Raised when a worker writes after its cycle/task lease was fenced."""
+
+
+class _BulkTraceConnection:
+    """Emit safe statement timing without logging SQL values or parameters."""
+
+    def __init__(self, connection: Any, batch_id: str):
+        self._connection = connection
+        self._batch_id = batch_id
+        self._index = 0
+
+    def _run(self, operation: str, sql: str, callback):
+        self._index += 1
+        index = self._index
+        statement = " ".join(str(sql).strip().split()[:3]).upper()
+        print(_json({
+            "event": "bulk_statement_start",
+            "batch_id": self._batch_id,
+            "index": index,
+            "operation": operation,
+            "statement": statement,
+        }), flush=True)
+        started = monotonic()
+        result = callback()
+        print(_json({
+            "event": "bulk_statement_complete",
+            "batch_id": self._batch_id,
+            "index": index,
+            "elapsed_seconds": round(monotonic() - started, 3),
+        }), flush=True)
+        return result
+
+    def execute(self, sql: str, parameters=()):
+        return self._run(
+            "execute", sql, lambda: self._connection.execute(sql, parameters)
+        )
+
+    def executemany(self, sql: str, parameter_rows):
+        rows = list(parameter_rows)
+        return self._run(
+            "executemany", sql, lambda: self._connection.executemany(sql, rows)
+        )
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
 
 
 def _json(value: Any) -> str:
@@ -2487,7 +2533,12 @@ class SqliteAcquisitionStore(_SqliteStore):
         stable_batch_id = str(batch_id or f"ingest_batch_{uuid4().hex}")
 
         def ingest(connection):
-            staged = self._stage_producer_ingest_batch(connection, rows, batch_id=stable_batch_id)
+            active_connection = (
+                _BulkTraceConnection(connection, stable_batch_id)
+                if os.getenv("RUNR_PUBLISHER_TRACE_BULK_SQL", "").strip() == "1"
+                else connection
+            )
+            staged = self._stage_producer_ingest_batch(active_connection, rows, batch_id=stable_batch_id)
             if (
                 staged["jobs"] > 0
                 and staged["actions"] == {"replay": staged["jobs"]}
@@ -2508,7 +2559,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         "duplicates": int(row["duplicate_count"] or 0),
                         "quality_warnings": [],
                     }
-                    for row in connection.execute(
+                    for row in active_connection.execute(
                         """
                         SELECT target.target_id, target.complete_snapshot, target.valid_snapshot,
                                target.closure_safe, target.rejected_count, target.duplicate_count,
@@ -2521,7 +2572,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         (stable_batch_id,),
                     ).fetchall()
                 }
-                connection.execute(
+                active_connection.execute(
                     "DELETE FROM acquisition_ingest_batches WHERE batch_id=?",
                     (stable_batch_id,),
                 )
@@ -2533,7 +2584,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "companies": staged["companies"],
                     "jobs": staged["jobs"],
                 }
-            projected = self._project_producer_ingest_batch(connection, batch_id=stable_batch_id)
+            projected = self._project_producer_ingest_batch(active_connection, batch_id=stable_batch_id)
             return {**projected, "companies": staged["companies"], "jobs": staged["jobs"]}
 
         return self._run_transaction(ingest)
