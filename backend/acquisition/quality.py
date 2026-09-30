@@ -49,12 +49,13 @@ LISTING_CLASSIFICATIONS = {URL_CAREERS_INDEX, URL_SEARCH_RESULTS, URL_PORTAL_LIS
 _ATS_SUFFIXES = {
     "greenhouse": ("greenhouse.io", "greenhouse.com"),
     "lever": ("lever.co",),
+    "ashby": ("ashbyhq.com",),
     "workday": ("myworkdayjobs.com", "myworkdaysite.com", "workdayjobs.com"),
     "personio": ("personio.de", "personio.com"),
     "recruitee": ("recruitee.com",),
     "smartrecruiters": ("smartrecruiters.com",),
 }
-_SOURCE_SUFFIXES = ("greenhouse", "lever", "workday", "personio", "recruitee", "smartrecruiters")
+_SOURCE_SUFFIXES = ("greenhouse", "lever", "ashby", "workday", "personio", "recruitee", "smartrecruiters")
 _LISTING_TOKENS = (
     "/career", "/careers", "/jobs", "/job-search", "/search", "/open-positions", "/openings",
     "/karriere", "/stellenangebote", "/stellenanzeigen", "/vacancies", "/positions",

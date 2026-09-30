@@ -68,6 +68,17 @@ class AcquisitionQualityTests(unittest.TestCase):
         self.assertFalse(destination["resolved_url"])
         self.assertEqual(destination["user_facing_url"], "https://boards.greenhouse.io/n26/jobs/123")
 
+    def test_ashby_application_path_is_verified_but_posting_is_not(self):
+        destination = resolve_application_destination({
+            "source_ats": "ashby",
+            "application_url": "https://jobs.ashbyhq.com/acme/role-1/application",
+            "job_detail_url": "https://jobs.ashbyhq.com/acme/role-1",
+        }, self.target)
+        self.assertEqual(destination["status"], "verified")
+        self.assertEqual(destination["classification"], URL_ATS_APPLICATION)
+        self.assertEqual(destination["resolved_url"], "https://jobs.ashbyhq.com/acme/role-1/application")
+        self.assertEqual(classify_job_url("https://jobs.ashbyhq.com/acme/role-1", source_ats="ashby"), URL_ATS_JOB_DETAIL)
+
     def test_html_apply_link_is_recovered_without_promoting_detail_page(self):
         html = """
         <main><h1>Role</h1>
