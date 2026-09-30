@@ -1715,6 +1715,65 @@ def run_delivery(
             "failed": not valid_snapshot,
         }
 
+    def prepare_bulk_snapshot(source: str, company_id: str) -> tuple[dict[str, object], dict[str, object]]:
+        """Adapt one ordinary company without touching the remote catalog."""
+
+        company = companies_by_source[source][company_id]
+        target_id = _text(_target(company, source, policy_version=policy_version)["target_id"])
+        task_id = _text(cycle_task_ids.get(target_id)) or f"producer_task:{target_id}"
+        raw_rows = (linkedin_groups if source == SOURCE_LINKEDIN else employer_groups).get(company_id, [])
+        if source == SOURCE_LINKEDIN:
+            observations = [
+                adapt_linkedin_job(row, cycle_id=cycle_id, scan_id=_text(row.get("company_scan_id")))
+                for row in raw_rows
+            ]
+            status_values = {
+                _text(li_statuses.get(_text(row.get("linkedin_company_id"))))
+                for row in raw_rows
+                if _text(row.get("linkedin_company_id"))
+            }
+            status_values.update(
+                _text(li_statuses.get(source_id))
+                for source_id, canonical_id in linkedin_org_to_canonical.items()
+                if canonical_id == company_id and li_statuses.get(source_id)
+            )
+            closure_safe = bool(next_linkedin_checkpoint.get("bootstrap_complete")) and bool(status_values) and status_values.issubset(COMPLETE_LINKEDIN_SCAN_STATUSES)
+            valid_snapshot = True
+        else:
+            observations = [adapt_employer_job(row, cycle_id=cycle_id) for row in raw_rows]
+            status, classification = employer_statuses.get(company_id, ("", ""))
+            closure_safe = classification == "confirmed_complete"
+            valid_snapshot = status.casefold() not in FAILED_EMPLOYER_STATUSES
+        deliverable = [item for item in observations if item.canonical_company_id not in {"", UNKNOWN, "//"}]
+        observed_at = next(
+            (item.observed_at for item in deliverable if item.observed_at != UNKNOWN),
+            "",
+        )
+        snapshot = {
+            "cycle_id": cycle_id,
+            "task_id": task_id,
+            "target_id": target_id,
+            "source": source,
+            "jobs": [_observation_to_ingest_job(item) for item in deliverable],
+            "complete_snapshot": True,
+            "valid_snapshot": valid_snapshot,
+            "closure_safe": closure_safe,
+            "observed_at": observed_at,
+            "snapshot_external_ids": [
+                item.source_job_id for item in deliverable if item.source_job_id not in {"", UNKNOWN}
+            ],
+            "unresolved_observations": len(observations) - len(deliverable),
+        }
+        delivered = {
+            "source": source,
+            "target_id": target_id,
+            "jobs_delivered": len(deliverable),
+            "unresolved_observations": len(observations) - len(deliverable),
+            "closure_safe": closure_safe,
+            "failed": not valid_snapshot,
+        }
+        return snapshot, delivered
+
     try:
         delivered_companies = len(resumed_target_ids)
         _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
@@ -1856,9 +1915,17 @@ def run_delivery(
                         and source_row_count(*transaction_batch[0]) > transaction_rows
                     )
                     if use_shared_transaction:
-                        with store.transaction_scope():
-                            for source, company_id in transaction_batch:
-                                committed.append((source, deliver_company(source, company_id, store)))
+                        prepared = [
+                            (source, *prepare_bulk_snapshot(source, company_id))
+                            for source, company_id in transaction_batch
+                        ]
+                        bulk_result = store.ingest_snapshots_bulk(
+                            [snapshot for _source, snapshot, _delivered in prepared]
+                        )
+                        for source, _snapshot, delivered in prepared:
+                            target_result = bulk_result["targets"][_text(delivered["target_id"])]
+                            delivered = {**delivered, "result": target_result}
+                            committed.append((source, delivered))
                     else:
                         source, company_id = transaction_batch[0]
                         committed.append((source, deliver_company(source, company_id, store)))

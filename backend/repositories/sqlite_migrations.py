@@ -3198,6 +3198,99 @@ def _apply_acquisition_publisher_checkpoints_migration(connection: DatabaseConne
     )
 
 
+def _apply_acquisition_bulk_ingest_staging_migration(connection: DatabaseConnection) -> None:
+    """Create bounded staging owned by the producer-state bulk ingester.
+
+    Staging rows are deliberately durable rather than TEMP rows: a libSQL
+    transaction may be replayed on a refreshed connection.  The repository
+    deletes a batch in the same transaction that projects it, while the batch
+    header provides an auditable recovery marker if a process dies before the
+    projection transaction starts.
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_ingest_batches (
+            batch_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'staging',
+            company_count INTEGER NOT NULL DEFAULT 0,
+            job_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            committed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS acquisition_ingest_staging (
+            batch_id TEXT NOT NULL,
+            row_number INTEGER NOT NULL,
+            cycle_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            company_id TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            external_job_id TEXT NOT NULL,
+            original_url TEXT NOT NULL,
+            application_url TEXT NOT NULL DEFAULT '',
+            requisition_id TEXT NOT NULL DEFAULT '',
+            identity_key TEXT NOT NULL,
+            identity_signature TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            observation_id TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            location TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL,
+            raw_content_hash TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            raw_payload_json TEXT NOT NULL,
+            quality_warnings_json TEXT NOT NULL DEFAULT '[]',
+            unified_mapping_json TEXT NOT NULL DEFAULT '{}',
+            unified_mapping_hash TEXT NOT NULL DEFAULT '',
+            rule_version TEXT NOT NULL DEFAULT '',
+            grace_attempts INTEGER NOT NULL DEFAULT 3,
+            resolved_canonical_job_id TEXT NOT NULL DEFAULT '',
+            projection_action TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (batch_id, row_number),
+            UNIQUE (batch_id, target_id, external_job_id),
+            FOREIGN KEY (batch_id) REFERENCES acquisition_ingest_batches(batch_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS acquisition_ingest_targets (
+            batch_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            complete_snapshot INTEGER NOT NULL DEFAULT 0,
+            valid_snapshot INTEGER NOT NULL DEFAULT 0,
+            closure_safe INTEGER NOT NULL DEFAULT 0,
+            observed_at TEXT NOT NULL,
+            closed_count INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT '',
+            received_count INTEGER NOT NULL DEFAULT 0,
+            rejected_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            unresolved_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (batch_id, target_id),
+            FOREIGN KEY (batch_id) REFERENCES acquisition_ingest_batches(batch_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS acquisition_ingest_snapshot_ids (
+            batch_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            external_job_id TEXT NOT NULL,
+            PRIMARY KEY (batch_id, target_id, external_job_id),
+            FOREIGN KEY (batch_id) REFERENCES acquisition_ingest_batches(batch_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_acquisition_ingest_staging_identity
+            ON acquisition_ingest_staging(batch_id, identity_key, original_url);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_ingest_staging_target
+            ON acquisition_ingest_staging(batch_id, target_id, external_job_id);
+        """
+    )
+
+
 def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) -> None:
     """Persist source-identity resolution and transactional company merges."""
 
@@ -3566,6 +3659,11 @@ MIGRATIONS = (
         "061_acquisition_publisher_checkpoints",
         "Create the durable producer-state publisher checkpoint table owned by the migration registry.",
         _apply_acquisition_publisher_checkpoints_migration,
+    ),
+    Migration.from_callable(
+        "062_acquisition_bulk_ingest_staging",
+        "Create durable bounded staging for set-based producer-state ingestion.",
+        _apply_acquisition_bulk_ingest_staging_migration,
     ),
 )
 

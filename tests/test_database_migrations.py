@@ -171,7 +171,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         migration_ids = [migration.migration_id for migration in MIGRATIONS]
         self.assertEqual(migration_ids, sorted(migration_ids))
         self.assertEqual(len(migration_ids), len(set(migration_ids)))
-        self.assertEqual(current_migration_head(), "061_acquisition_publisher_checkpoints")
+        self.assertEqual(current_migration_head(), "062_acquisition_bulk_ingest_staging")
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
 
     def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
@@ -491,6 +491,48 @@ class DatabaseMigrationTests(unittest.TestCase):
             ).fetchall()
 
         self.assertEqual(rows, [("linkedin", 42, 1, "cycle-1")])
+
+    def test_bulk_ingest_staging_schema_is_bounded_and_batch_owned(self):
+        db_path = self._db_path("bulk_ingest_staging")
+
+        with self._local_environment():
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'acquisition_ingest_%'"
+                ).fetchall()
+            }
+            indexes = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_acquisition_ingest_%'"
+                ).fetchall()
+            }
+            applied = connection.execute(
+                "SELECT checksum FROM schema_migrations WHERE migration_id='062_acquisition_bulk_ingest_staging'"
+            ).fetchone()
+
+        self.assertEqual(
+            tables,
+            {
+                "acquisition_ingest_batches",
+                "acquisition_ingest_staging",
+                "acquisition_ingest_targets",
+                "acquisition_ingest_snapshot_ids",
+            },
+        )
+        self.assertEqual(
+            indexes,
+            {
+                "idx_acquisition_ingest_staging_identity",
+                "idx_acquisition_ingest_staging_target",
+            },
+        )
+        self.assertIsNotNone(applied)
+        self.assertEqual(len(str(applied[0])), 64)
 
 
 if __name__ == "__main__":

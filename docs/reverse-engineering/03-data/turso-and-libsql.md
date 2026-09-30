@@ -68,6 +68,14 @@ Validation (`backend/config/env_schema.py:375-435`): `DATABASE_BACKEND` ∈ {sql
 Per `render.yaml`, the Render api and worker use the Turso engine. Per the handoff doc (documentary), the VPS publisher writes the **shared** Turso catalog. WS-7 covers topology in [vps-runtime-and-acquisition-timers.md](../02-deployment/vps-runtime-and-acquisition-timers.md); WS-3 covers the producer-local SQLite state DBs in [acquisition-source-state.md](acquisition-source-state.md). Those producer state DBs use plain SQLite files outside git and are not the libSQL path described here.
 
 ### MySQL career discovery (not part of the app DB)
+
+### Producer bulk-ingest staging
+
+Migration `062_acquisition_bulk_ingest_staging` adds durable, bounded staging tables for the producer-state publisher: `acquisition_ingest_batches`, `acquisition_ingest_targets`, `acquisition_ingest_staging`, and `acquisition_ingest_snapshot_ids`. Ordinary companies are normalized in Python, loaded with bounded `executemany` calls, and projected with set-based SQL in one transaction. The batch header and all staging children are deleted by cascade before commit; a failed projection rolls the entire bounded batch back. Durable tables are used instead of connection-local temporary tables because the libSQL transaction wrapper may replay a transaction after reconnecting.
+
+The publisher caps a shared batch at 50 companies and 20 total source rows by default. Companies above the row cap remain isolated and use the existing observation chunks. This changes the remote-call shape from a dependent statement series per job to a constant statement series per bounded batch while retaining canonical identity, append-only observations, version history, lifecycle, task evidence, and completeness projections.
+
+### MySQL career discovery (not part of the app DB)
 `MySqlCareerDiscoveryStore` (`backend/repositories/mysql_career_discovery.py:71-197`) validates the table identifier (L17), lazily imports `pymysql`, creates its table and upserts discovery results. Its only caller is `backend/tools/discover_company_careers.py`. It is not used by bootstrap, Render or migrations.
 
 ## 6. Invariants, failure handling and recovery

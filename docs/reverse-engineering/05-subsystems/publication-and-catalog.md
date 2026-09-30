@@ -71,6 +71,14 @@ Governing docs: `docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md` (contract for th
 
 ## 5. Important call/data flows
 
+### Bounded set-based producer ingestion
+
+Ordinary small-company snapshots no longer execute the legacy dependent query series once per job. `run_delivery` packs at most 50 companies and 20 total source rows by default, normalizes them before remote projection, and calls `SqliteAcquisitionStore.ingest_snapshots_bulk`. Migration `062_acquisition_bulk_ingest_staging` supplies batch-scoped staging tables loaded through bounded `executemany` calls. Set-based projection preserves canonical company and job identity, append-only observations, immutable version history, source-state and closure rules, lifecycle recomputation, normalization provenance, completeness reports, and task evidence in one transaction.
+
+Same-cycle rows are replay no-ops. A newer observation with an existing stable content hash appends observation evidence and refreshes lifecycle timestamps without creating another version. A failed projection rolls back only its bounded batch. Companies above the row cap retain the existing isolated, at-most-20-observation fallback, and empty status-only companies retain the bulk completion path. Publication creation and checkpoint advancement are unchanged: the previous head remains active until `publish_valid_snapshot` commits, and checkpoints advance only afterward.
+
+`scripts/benchmark_producer_bulk_ingest.py` provides a deterministic legacy-versus-bulk benchmark for 1-5-job companies, including throughput, transaction and statement counts, and normalization/read/write/commit timing.
+
 1. **Delivery** (`run_delivery` L844): load manifest → apply optional crosswalk **before** delivery (L871–883, provenance `producer_state_publisher`) → per source, if bootstrap incomplete, read rowid windows of `job_company_observations` (LinkedIn) / `jobs` (employer) plus the latest run's rows (L240–288); after bootstrap, watermark incremental: changed companies from `company_scans.finished_at`/`last_seen_at` (LinkedIn) or `companies/jobs.updated_at` (employer) (L290–341).
 2. **Targets**: each canonical company becomes target `producer_<source>_<company_id>` with `connector=producer_<source>` so the Phase G applicant gate cannot block delivery (L524–558; comment L536–539). Cycle key = SHA-256 of manifest hash + both source markers + checkpoints + source version (L986–998); `claim_due_cycle(force=True)`; `already_running` if leased.
 3. **Closure safety**: LinkedIn company is `closure_safe` iff bootstrap complete AND all latest scan statuses ⊆ {COMPLETE, COMPLETE_ZERO_CONFIRMED, SATURATED_RECOVERED} (L46, L1048); employer iff coverage `outcome == confirmed_complete` (L47, L1053); failed employer statuses make the snapshot invalid (L47, L1054). Non-closure-safe company → task `partial`; any partial → cycle `degraded` + error `partial_source_coverage` (L1115–1121).

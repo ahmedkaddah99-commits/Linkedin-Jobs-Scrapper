@@ -1365,6 +1365,1134 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         return self._run_transaction(decide)
 
+    def _stage_producer_ingest_batch(
+        self,
+        connection,
+        snapshots: Iterable[Mapping[str, Any]],
+        *,
+        batch_id: str,
+    ) -> dict[str, Any]:
+        """Normalize and resolve a bounded producer batch with set-based reads.
+
+        This method intentionally does no final projection yet.  It is the
+        first half of the bulk transaction: one target read, bounded
+        ``executemany`` staging loads, then set-based replay and canonical-job
+        resolution.  The caller must project and delete the batch in the same
+        transaction.
+        """
+
+        snapshot_rows = [dict(item) for item in snapshots]
+        if not snapshot_rows:
+            raise ValueError("A producer ingest batch must contain at least one snapshot.")
+        if len(snapshot_rows) > 50:
+            raise ValueError("A producer ingest batch may contain at most 50 companies.")
+        target_ids = [str(item.get("target_id") or "").strip() for item in snapshot_rows]
+        if any(not value for value in target_ids) or len(target_ids) != len(set(target_ids)):
+            raise ValueError("Producer ingest batch target IDs must be non-empty and unique.")
+        placeholders = ",".join("?" for _ in target_ids)
+        targets = {
+            str(row["target_id"]): _dict_row(row)
+            for row in connection.execute(
+                f"SELECT * FROM acquisition_targets WHERE target_id IN ({placeholders})",
+                tuple(target_ids),
+            ).fetchall()
+        }
+        missing_targets = sorted(set(target_ids) - set(targets))
+        if missing_targets:
+            raise KeyError(f"Acquisition targets not found: {', '.join(missing_targets)}")
+
+        now = utc_now_iso()
+        staged: list[tuple[Any, ...]] = []
+        staged_targets: list[tuple[Any, ...]] = []
+        snapshot_ids: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        row_number = 0
+        cycle_ids: set[str] = set()
+        for snapshot in snapshot_rows:
+            target_id = str(snapshot["target_id"])
+            target = targets[target_id]
+            cycle_id = str(snapshot.get("cycle_id") or "").strip()
+            task_id = str(snapshot.get("task_id") or "").strip()
+            if not cycle_id or not task_id:
+                raise ValueError("Bulk snapshots require cycle_id and task_id.")
+            cycle_ids.add(cycle_id)
+            observed_at = str(snapshot.get("observed_at") or now)
+            config = _decode(target.get("config_json"), {})
+            company_name = (
+                canonical_employer_name({**self._target_payload(dict(target)), "target_id": target_id})
+                or source_employer_name(str(target.get("display_name") or ""))
+                or target_id
+            )
+            company_id = str(config.get("canonical_company_id") or f"canonical_company_{uuid4().hex}")
+            grace_attempts = max(1, int(config.get("absence_grace_attempts") or 3))
+            complete_snapshot = bool(snapshot.get("complete_snapshot"))
+            valid_snapshot = bool(snapshot.get("valid_snapshot"))
+            closure_safe = bool(
+                snapshot.get("closure_safe", complete_snapshot and valid_snapshot)
+            )
+            supplied_snapshot_ids = snapshot.get("snapshot_external_ids")
+            jobs = [dict(job) for job in snapshot.get("jobs") or ()]
+            rejected_count = 0
+            duplicate_count = 0
+            external_values = (
+                supplied_snapshot_ids
+                if supplied_snapshot_ids is not None
+                else (
+                    job.get("job_id") or job.get("external_job_id") or job.get("id") or ""
+                    for job in jobs
+                )
+            )
+            snapshot_ids.extend(
+                (batch_id, target_id, str(value).strip())
+                for value in external_values
+                if str(value).strip()
+            )
+            target_payload = {**self._target_payload(dict(target)), "target_id": target_id}
+            for raw_job in jobs:
+                job = normalize_job_for_ingestion(
+                    raw_job,
+                    {**target_payload, "canonical_company_name": company_name},
+                    observed_at=observed_at,
+                )
+                title = str(job.get("title") or "").strip()
+                original_url = canonicalize_url(
+                    str(
+                        job.get("job_detail_url")
+                        or job.get("url")
+                        or job.get("link")
+                        or job.get("source_url")
+                        or job.get("absolute_url")
+                        or ""
+                    ).strip()
+                )
+                if not title or not original_url:
+                    rejected_count += 1
+                    continue
+                source_external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
+                external_id = source_external_id or original_url
+                dedupe_key = (target_id, original_url)
+                if dedupe_key in seen:
+                    duplicate_count += 1
+                    continue
+                seen.add(dedupe_key)
+                location_value = job.get("location") or job.get("location_raw") or ""
+                if isinstance(location_value, Mapping):
+                    location_value = location_value.get("name") or location_value.get("address") or ""
+                location = str(location_value).strip()
+                application_url = canonicalize_url(str(job.get("application_url") or ""))
+                requisition_id = " ".join(
+                    str(job.get("requisition_id") or job.get("requisitionId") or job.get("reference") or "")
+                    .casefold()
+                    .split()
+                )
+                job["external_id_source"] = "source_field" if source_external_id else "job_url_fallback"
+                payload_hash = self._payload_hash(job)
+                row_number += 1
+                staged.append(
+                    (
+                        batch_id,
+                        row_number,
+                        cycle_id,
+                        task_id,
+                        target_id,
+                        company_id,
+                        company_name,
+                        external_id,
+                        original_url,
+                        application_url,
+                        requisition_id,
+                        self._identity_key(company_name, title, location, original_url),
+                        self._identity_signature(company_name, title, location),
+                        f"canonical_job_{uuid4().hex}",
+                        f"observation_{uuid4().hex}",
+                        f"version_{uuid4().hex}",
+                        title,
+                        location,
+                        str(job.get("description_text") or job.get("description") or job.get("full_description") or ""),
+                        payload_hash,
+                        hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest(),
+                        observed_at,
+                        _json(job),
+                        _json(raw_job),
+                        _json(list(job.get("quality_warnings") or [])),
+                        _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}),
+                        hashlib.sha256(
+                            _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}).encode("utf-8")
+                        ).hexdigest(),
+                        str(job.get("unified_rule_version") or UNIFIED_RULE_VERSION),
+                        grace_attempts,
+                    )
+                )
+            staged_targets.append(
+                (
+                    batch_id,
+                    target_id,
+                    task_id,
+                    int(complete_snapshot),
+                    int(valid_snapshot),
+                    int(closure_safe),
+                    observed_at,
+                    str(snapshot.get("source") or ""),
+                    len(jobs),
+                    rejected_count,
+                    duplicate_count,
+                    max(0, int(snapshot.get("unresolved_observations") or 0)),
+                )
+            )
+        if len(cycle_ids) != 1:
+            raise ValueError("All snapshots in a producer ingest batch must belong to one cycle.")
+        connection.execute(
+            "INSERT INTO acquisition_ingest_batches "
+            "(batch_id, cycle_id, status, company_count, job_count, created_at) "
+            "VALUES (?, ?, 'staging', ?, ?, ?)",
+            (batch_id, next(iter(cycle_ids)), len(snapshot_rows), len(staged), now),
+        )
+        connection.executemany(
+            "INSERT INTO acquisition_ingest_targets "
+            "(batch_id, target_id, task_id, complete_snapshot, valid_snapshot, closure_safe, observed_at, "
+            "source, received_count, rejected_count, duplicate_count, unresolved_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            staged_targets,
+        )
+        if snapshot_ids:
+            connection.executemany(
+                "INSERT OR IGNORE INTO acquisition_ingest_snapshot_ids "
+                "(batch_id, target_id, external_job_id) VALUES (?, ?, ?)",
+                snapshot_ids,
+            )
+        if staged:
+            connection.executemany(
+                """
+                INSERT INTO acquisition_ingest_staging (
+                    batch_id, row_number, cycle_id, task_id, target_id, company_id,
+                    company_name, external_job_id, original_url, application_url,
+                    requisition_id, identity_key, identity_signature, canonical_job_id,
+                    observation_id, version_id, title, location, description, content_hash,
+                    raw_content_hash, observed_at, payload_json, raw_payload_json,
+                    quality_warnings_json, unified_mapping_json, unified_mapping_hash,
+                    rule_version, grace_attempts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                staged,
+            )
+            connection.execute(
+                """
+                UPDATE acquisition_ingest_staging AS s
+                SET projection_action='replay'
+                WHERE s.batch_id=? AND EXISTS (
+                    SELECT 1 FROM job_source_observations o
+                    WHERE o.target_id=s.target_id AND o.cycle_id=s.cycle_id
+                      AND (o.external_job_id=s.external_job_id OR o.original_url=s.original_url)
+                )
+                """,
+                (batch_id,),
+            )
+            connection.execute(
+                """
+                UPDATE acquisition_ingest_staging AS s
+                SET resolved_canonical_job_id=COALESCE(
+                    (SELECT j.canonical_job_id FROM canonical_jobs j WHERE j.identity_key=s.identity_key LIMIT 1),
+                    (SELECT j.canonical_job_id FROM canonical_jobs j
+                     WHERE j.identity_signature=s.identity_signature
+                       AND j.lifecycle_state IN ('active','stale','reposted')
+                       AND (EXISTS (SELECT 1 FROM job_source_observations o
+                                    WHERE o.canonical_job_id=j.canonical_job_id
+                                      AND s.application_url!=''
+                                      AND COALESCE(NULLIF(o.application_url,''),NULLIF(o.apply_url,''))=s.application_url)
+                            OR EXISTS (SELECT 1 FROM job_source_observations o
+                                       WHERE o.canonical_job_id=j.canonical_job_id
+                                         AND s.requisition_id!=''
+                                         AND lower(COALESCE(json_extract(o.payload_json,'$.requisition_id'),
+                                             json_extract(o.payload_json,'$.requisitionId'),
+                                             json_extract(o.payload_json,'$.reference'),''))=s.requisition_id))
+                     ORDER BY CASE j.lifecycle_state WHEN 'active' THEN 0 WHEN 'stale' THEN 1 ELSE 2 END,
+                              j.first_seen_at, j.canonical_job_id LIMIT 1),
+                    (SELECT j.canonical_job_id FROM canonical_jobs j WHERE j.canonical_url=s.original_url
+                     ORDER BY j.first_seen_at, j.canonical_job_id LIMIT 1),
+                    (SELECT a.canonical_job_id FROM canonical_job_url_aliases a WHERE a.url=s.original_url
+                     ORDER BY a.created_at DESC LIMIT 1),
+                    ''
+                )
+                WHERE s.batch_id=? AND s.projection_action!='replay'
+                """,
+                (batch_id,),
+            )
+            connection.execute(
+                """
+                UPDATE acquisition_ingest_staging AS s
+                SET resolved_canonical_job_id=COALESCE(NULLIF(s.resolved_canonical_job_id,''),
+                    (SELECT first.canonical_job_id FROM acquisition_ingest_staging first
+                     WHERE first.batch_id=s.batch_id AND first.identity_key=s.identity_key
+                     ORDER BY first.row_number LIMIT 1)),
+                    projection_action=CASE
+                        WHEN s.projection_action='replay' THEN 'replay'
+                        WHEN s.resolved_canonical_job_id='' THEN 'new'
+                        WHEN EXISTS (
+                            SELECT 1 FROM job_posting_versions v
+                            LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
+                            WHERE v.canonical_job_id=s.resolved_canonical_job_id
+                              AND COALESCE(NULLIF(q.stable_content_hash,''),v.content_hash)=s.content_hash
+                        ) AND s.observed_at > COALESCE((SELECT j.last_verified_at FROM canonical_jobs j
+                             WHERE j.canonical_job_id=s.resolved_canonical_job_id),'') THEN 'unchanged'
+                        WHEN s.observed_at > COALESCE((SELECT j.last_verified_at FROM canonical_jobs j
+                             WHERE j.canonical_job_id=s.resolved_canonical_job_id),'') THEN 'update'
+                        ELSE 'stale'
+                    END
+                WHERE s.batch_id=?
+                """,
+                (batch_id,),
+            )
+        summary = connection.execute(
+            "SELECT projection_action, COUNT(*) AS count FROM acquisition_ingest_staging "
+            "WHERE batch_id=? GROUP BY projection_action",
+            (batch_id,),
+        ).fetchall()
+        return {
+            "batch_id": batch_id,
+            "companies": len(snapshot_rows),
+            "jobs": len(staged),
+            "actions": {str(row["projection_action"]): int(row["count"]) for row in summary},
+        }
+
+    def _project_producer_ingest_batch(self, connection, *, batch_id: str) -> dict[str, Any]:
+        """Project one prepared batch with a bounded number of SQL statements."""
+
+        now = utc_now_iso()
+        # Reuse an already-linked target identity or exact canonical company
+        # before creating anything.  This is the set-based equivalent of
+        # _ensure_company and prevents aliases from producing duplicates.
+        connection.execute(
+            """
+            UPDATE acquisition_ingest_staging AS s
+            SET company_id=COALESCE(
+                (SELECT k.company_id FROM company_identity_keys k
+                 WHERE k.identity_key='target:' || s.target_id LIMIT 1),
+                (SELECT c.company_id FROM canonical_companies c
+                 WHERE c.company_id=s.company_id LIMIT 1),
+                (SELECT c.company_id FROM canonical_companies c
+                 WHERE c.canonical_name=s.company_name AND c.entity_kind='employer' LIMIT 1),
+                s.company_id
+            )
+            WHERE s.batch_id=?
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO canonical_companies (
+                company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at
+            )
+            SELECT company_id, company_name, 'employer', '', MIN(observed_at), MAX(observed_at)
+            FROM acquisition_ingest_staging
+            WHERE batch_id=? GROUP BY company_id, company_name
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO company_identity_keys (
+                identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at
+            )
+            SELECT DISTINCT 'target:' || target_id, company_id, 'acquisition_target',
+                   'acquisition', json_object('target_id', target_id), observed_at, observed_at
+            FROM acquisition_ingest_staging WHERE batch_id=?
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO company_identity_evidence (
+                evidence_id, company_id, observed_name, normalized_name, identity_key,
+                target_id, source_observation_id, evidence_type, evidence_url,
+                evidence_json, confidence, link_state, review_required, created_at
+            )
+            SELECT 'company_identity_evidence_' || lower(hex(randomblob(16))),
+                   s.company_id, s.company_name, lower(trim(s.company_name)),
+                   'target:' || s.target_id, s.target_id, '', 'acquisition_target',
+                   target.provenance_url, json_object('target_id',s.target_id),
+                   1.0, 'linked', 0, MIN(s.observed_at)
+            FROM acquisition_ingest_staging s
+            JOIN acquisition_targets target ON target.target_id=s.target_id
+            WHERE s.batch_id=?
+            GROUP BY s.company_id, s.company_name, s.target_id, target.provenance_url
+            """,
+            (batch_id,),
+        )
+        profile_inputs = connection.execute(
+            """
+            SELECT s.company_id, s.target_id, s.payload_json, target.config_json,
+                   target.provenance_url, target.display_name, target.source_token,
+                   profile.profile_json AS existing_profile_json,
+                   profile.created_at AS profile_created_at
+            FROM acquisition_ingest_staging s
+            JOIN acquisition_targets target ON target.target_id=s.target_id
+            LEFT JOIN canonical_company_profiles profile ON profile.company_id=s.company_id
+            WHERE s.batch_id=? ORDER BY s.row_number
+            """,
+            (batch_id,),
+        ).fetchall()
+        profiles_by_company: dict[str, tuple[Any, ...]] = {}
+        company_alias_rows: dict[str, tuple[Any, ...]] = {}
+        company_url_rows: dict[tuple[str, str, str], tuple[Any, ...]] = {}
+        company_url_occurrence_rows: list[tuple[Any, ...]] = []
+        for row in profile_inputs:
+            company_id = str(row["company_id"])
+            for alias in (str(row["display_name"] or ""), str(row["source_token"] or "")):
+                alias_key = company_name_key(alias)
+                if alias_key:
+                    company_alias_rows.setdefault(
+                        alias_key,
+                        (f"company_alias_{uuid4().hex}", company_id, alias_key, alias, "target", now, now),
+                    )
+            if company_id in profiles_by_company:
+                continue
+            config = _decode(row["config_json"], {})
+            configured = config.get("company_profile") or config.get("company")
+            payload = _decode(row["payload_json"], {})
+            nested = payload.get("company") if isinstance(payload, Mapping) else None
+            company_source = dict(configured) if isinstance(configured, Mapping) else (
+                dict(nested) if isinstance(nested, Mapping) else {}
+            )
+            incoming = _company_profile_payload(
+                company_source,
+                provenance_url=str(row["provenance_url"] or ""),
+                verified_at=now,
+            )
+            existing = _decode(row["existing_profile_json"], {})
+            existing_fields = existing.get("fields") if isinstance(existing, Mapping) else {}
+            if not isinstance(existing_fields, Mapping):
+                existing_fields = {}
+            merged_fields: dict[str, Any] = {}
+            for field_name in _COMPANY_PROFILE_FIELDS:
+                old = existing_fields.get(field_name)
+                new = incoming.get("fields", {}).get(field_name)
+                old_known = isinstance(old, Mapping) and str(old.get("state") or "") == "known" and old.get("value") not in (None, "", [])
+                new_known = isinstance(new, Mapping) and str(new.get("state") or "") == "known" and new.get("value") not in (None, "", [])
+                merged_fields[field_name] = dict(new if new_known or not old_known else old)
+            profile = {"schema_version": "phase_f_v1", "fields": merged_fields}
+            logo = merged_fields.get("logo") if isinstance(merged_fields.get("logo"), Mapping) else {}
+            logo_url = str(logo.get("value") or "") if str(logo.get("state") or "") == "known" else ""
+            logo_verified_at = str(logo.get("verified_at") or "") if logo_url else ""
+            profiles_by_company[company_id] = (
+                company_id,
+                _json(profile),
+                _profile_status_from_payload(profile),
+                logo_url,
+                logo_verified_at,
+                str(row["profile_created_at"] or now),
+                now,
+            )
+            for field_name, url_type in (("website", "homepage"), ("careers_page", "careers")):
+                value = company_source.get(field_name)
+                original_url, canonical_url, validation_reason = structural_url(value)
+                if not canonical_url:
+                    continue
+                company_url_id = f"company_url_{uuid4().hex}"
+                company_url_rows[(company_id, url_type, canonical_url)] = (
+                    company_url_id, company_id, url_type, original_url, canonical_url,
+                    "official_employer_source", "", now, now, "not_validated", "", 0,
+                    "company_identity_v1", now, now, "configured_official",
+                    str(validation_reason or ""), "", 1, str(row["target_id"] or ""),
+                )
+                company_url_occurrence_rows.append((
+                    f"company_url_occurrence_{uuid4().hex}", company_id, url_type,
+                    original_url, canonical_url, "configured_official",
+                    "official_employer_source", "", str(row["target_id"] or ""), "", "",
+                    company_url_id,
+                    _json({"field": field_name, "provenance_url": str(row["provenance_url"] or "")}),
+                    str(validation_reason or ""), "", now,
+                ))
+        if profiles_by_company:
+            connection.executemany(
+                """
+                INSERT INTO canonical_company_profiles (
+                    company_id, profile_json, profile_status, logo_source_url,
+                    logo_verified_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id) DO UPDATE SET
+                    profile_json=excluded.profile_json,
+                    profile_status=excluded.profile_status,
+                    logo_source_url=CASE WHEN excluded.logo_source_url!=''
+                                         THEN excluded.logo_source_url ELSE canonical_company_profiles.logo_source_url END,
+                    logo_verified_at=CASE WHEN excluded.logo_verified_at!=''
+                                          THEN excluded.logo_verified_at ELSE canonical_company_profiles.logo_verified_at END,
+                    updated_at=excluded.updated_at
+                """,
+                list(profiles_by_company.values()),
+            )
+        if company_alias_rows:
+            connection.executemany(
+                """
+                INSERT INTO canonical_company_aliases (
+                    alias_id, company_id, alias_key, alias_display, source,
+                    confidence, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'verified', ?, ?)
+                ON CONFLICT(alias_key) DO UPDATE SET
+                    alias_display=excluded.alias_display, source=excluded.source,
+                    updated_at=excluded.updated_at
+                WHERE canonical_company_aliases.company_id=excluded.company_id
+                """,
+                list(company_alias_rows.values()),
+            )
+        if company_url_rows:
+            connection.executemany(
+                """
+                INSERT INTO canonical_company_urls (
+                    company_url_id, company_id, url_type, url, canonical_url, source,
+                    source_observation_id, first_seen_at, last_seen_at, validation_status,
+                    redirect_target, selected_primary, rule_version, created_at, updated_at,
+                    url_lifecycle, validation_reason, ignored_reason, occurrence_count, source_target_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id, url_type, canonical_url) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at,
+                    source=excluded.source,
+                    url_lifecycle=CASE
+                        WHEN canonical_company_urls.url_lifecycle='validated' THEN 'validated'
+                        ELSE 'configured_official'
+                    END,
+                    validation_reason=CASE WHEN excluded.validation_reason!=''
+                                           THEN excluded.validation_reason ELSE canonical_company_urls.validation_reason END,
+                    occurrence_count=canonical_company_urls.occurrence_count+1,
+                    source_target_id=excluded.source_target_id,
+                    updated_at=excluded.updated_at
+                """,
+                list(company_url_rows.values()),
+            )
+            persisted_ids = {
+                (str(row["company_id"]), str(row["url_type"]), str(row["canonical_url"])): str(row["company_url_id"])
+                for row in connection.execute(
+                    "SELECT company_url_id, company_id, url_type, canonical_url FROM canonical_company_urls "
+                    "WHERE company_id IN (SELECT company_id FROM acquisition_ingest_staging WHERE batch_id=?)",
+                    (batch_id,),
+                ).fetchall()
+            }
+            company_url_occurrence_rows = [
+                (*values[:11], persisted_ids[(str(values[1]), str(values[2]), str(values[4]))], *values[12:])
+                for values in company_url_occurrence_rows
+            ]
+            connection.executemany(
+                """
+                INSERT INTO canonical_company_url_occurrences (
+                    occurrence_id, company_id, url_type, url, canonical_url, url_lifecycle,
+                    source, source_observation_id, target_id, import_id, checked_in_path,
+                    persisted_company_url_id, evidence_json, validation_reason, ignored_reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                company_url_occurrence_rows,
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO canonical_jobs (
+                canonical_job_id, company_id, identity_key, title, location,
+                canonical_url, identity_signature, lifecycle_state, first_seen_at,
+                last_seen_at, last_verified_at, absence_count, created_at, updated_at,
+                posting_anchor_at, posting_anchor_source, posting_anchor_precision
+            )
+            SELECT s.resolved_canonical_job_id, s.company_id, s.identity_key, s.title,
+                   s.location, s.original_url, s.identity_signature, 'active',
+                   s.observed_at, s.observed_at, s.observed_at, 0, s.observed_at,
+                   s.observed_at, s.observed_at, 'first_seen_at', 'capture_timestamp'
+            FROM acquisition_ingest_staging s
+            WHERE s.batch_id=? AND s.projection_action='new'
+              AND s.row_number=(SELECT MIN(first.row_number)
+                                FROM acquisition_ingest_staging first
+                                WHERE first.batch_id=s.batch_id
+                                  AND first.resolved_canonical_job_id=s.resolved_canonical_job_id)
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE canonical_jobs AS j
+            SET title=(SELECT s.title FROM acquisition_ingest_staging s
+                       WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                         AND s.projection_action IN ('update','unchanged')
+                       ORDER BY s.observed_at DESC, s.row_number DESC LIMIT 1),
+                location=(SELECT s.location FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                            AND s.projection_action IN ('update','unchanged')
+                          ORDER BY s.observed_at DESC, s.row_number DESC LIMIT 1),
+                canonical_url=(SELECT s.original_url FROM acquisition_ingest_staging s
+                               WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                                 AND s.projection_action IN ('update','unchanged')
+                               ORDER BY s.observed_at DESC, s.row_number DESC LIMIT 1),
+                identity_signature=(SELECT s.identity_signature FROM acquisition_ingest_staging s
+                                    WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                                      AND s.projection_action IN ('update','unchanged')
+                                    ORDER BY s.observed_at DESC, s.row_number DESC LIMIT 1),
+                lifecycle_state='active', absence_count=0,
+                last_seen_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                              WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                                AND s.projection_action IN ('update','unchanged')),
+                last_verified_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                                  WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                                    AND s.projection_action IN ('update','unchanged')),
+                updated_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                            WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                              AND s.projection_action IN ('update','unchanged'))
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                            AND s.projection_action IN ('update','unchanged'))
+            """,
+            (batch_id,) * 8,
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO canonical_job_url_aliases (
+                alias_id, canonical_job_id, url, source, created_at
+            )
+            SELECT 'job_alias_' || lower(hex(randomblob(16))), resolved_canonical_job_id,
+                   original_url, target_id, observed_at
+            FROM acquisition_ingest_staging
+            WHERE batch_id=? AND projection_action!='replay'
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE acquisition_ingest_targets AS target
+            SET closed_count=(
+                SELECT COUNT(*) FROM job_source_states state
+                WHERE state.target_id=target.target_id
+                  AND state.lifecycle_state IN ('active','stale','unknown')
+                  AND state.last_checked_at<target.observed_at
+                  AND state.absence_count+1>=state.grace_attempts
+                  AND NOT EXISTS (
+                      SELECT 1 FROM acquisition_ingest_snapshot_ids present
+                      WHERE present.batch_id=target.batch_id
+                        AND present.target_id=target.target_id
+                        AND present.external_job_id=state.external_job_id
+                  )
+            )
+            WHERE target.batch_id=? AND target.complete_snapshot=1
+              AND target.valid_snapshot=1 AND target.closure_safe=1
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE job_source_states AS state
+            SET absence_count=absence_count+1,
+                lifecycle_state=CASE WHEN absence_count+1>=grace_attempts THEN 'closed' ELSE 'stale' END,
+                last_checked_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
+                                 WHERE target.batch_id=? AND target.target_id=state.target_id),
+                last_cycle_id=(SELECT b.cycle_id FROM acquisition_ingest_batches b WHERE b.batch_id=?),
+                updated_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
+                            WHERE target.batch_id=? AND target.target_id=state.target_id)
+            WHERE EXISTS (
+                SELECT 1 FROM acquisition_ingest_targets target
+                WHERE target.batch_id=? AND target.target_id=state.target_id
+                  AND target.complete_snapshot=1 AND target.valid_snapshot=1
+                  AND target.closure_safe=1 AND state.last_checked_at<target.observed_at
+                  AND state.lifecycle_state IN ('active','stale','unknown')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM acquisition_ingest_snapshot_ids present
+                      WHERE present.batch_id=target.batch_id
+                        AND present.target_id=target.target_id
+                        AND present.external_job_id=state.external_job_id
+                  )
+            )
+            """,
+            (batch_id,) * 4,
+        )
+        connection.execute(
+            """
+            UPDATE job_source_states AS state
+            SET lifecycle_state='unknown',
+                last_checked_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
+                                 WHERE target.batch_id=? AND target.target_id=state.target_id),
+                last_cycle_id=(SELECT b.cycle_id FROM acquisition_ingest_batches b WHERE b.batch_id=?),
+                updated_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
+                            WHERE target.batch_id=? AND target.target_id=state.target_id)
+            WHERE state.lifecycle_state IN ('active','stale') AND EXISTS (
+                SELECT 1 FROM acquisition_ingest_targets target
+                WHERE target.batch_id=? AND target.target_id=state.target_id
+                  AND target.valid_snapshot=0 AND state.last_checked_at<target.observed_at
+            )
+            """,
+            (batch_id,) * 4,
+        )
+        connection.execute(
+            """
+            UPDATE canonical_jobs AS job
+            SET lifecycle_state=CASE
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id
+                                   AND s.lifecycle_state='active') THEN 'active'
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id
+                                   AND s.lifecycle_state='stale') THEN 'stale'
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id)
+                     AND NOT EXISTS (SELECT 1 FROM job_source_states s
+                                     WHERE s.canonical_job_id=job.canonical_job_id
+                                       AND s.lifecycle_state!='closed') THEN 'closed'
+                    ELSE 'unknown'
+                END,
+                updated_at=CASE
+                    WHEN updated_at>(SELECT MAX(target.observed_at)
+                                     FROM acquisition_ingest_targets target
+                                     JOIN job_source_states s ON s.target_id=target.target_id
+                                     WHERE target.batch_id=?
+                                       AND s.canonical_job_id=job.canonical_job_id)
+                    THEN updated_at
+                    ELSE COALESCE((SELECT MAX(target.observed_at)
+                                   FROM acquisition_ingest_targets target
+                                   JOIN job_source_states s ON s.target_id=target.target_id
+                                   WHERE target.batch_id=?
+                                     AND s.canonical_job_id=job.canonical_job_id), updated_at)
+                END
+            WHERE EXISTS (
+                SELECT 1 FROM job_source_states state
+                JOIN acquisition_ingest_targets target ON target.target_id=state.target_id
+                WHERE target.batch_id=? AND state.canonical_job_id=job.canonical_job_id
+            )
+            """,
+            (batch_id,) * 3,
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO canonical_job_external_ids (
+                external_id_id, canonical_job_id, source_id, external_job_id,
+                first_seen_at, last_seen_at
+            )
+            SELECT 'external_id_' || lower(hex(randomblob(16))), resolved_canonical_job_id,
+                   target_id, external_job_id, observed_at, observed_at
+            FROM acquisition_ingest_staging
+            WHERE batch_id=? AND projection_action!='replay'
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE canonical_job_external_ids AS e
+            SET last_seen_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                              WHERE s.batch_id=? AND s.target_id=e.source_id
+                                AND s.external_job_id=e.external_job_id)
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.target_id=e.source_id
+                            AND s.external_job_id=e.external_job_id
+                            AND s.observed_at>e.last_seen_at)
+            """,
+            (batch_id, batch_id),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO job_source_observations (
+                observation_id, canonical_job_id, target_id, cycle_id, task_id,
+                external_job_id, original_url, apply_url, source_ats, content_hash,
+                payload_json, observed_at, active, source_display_name, source_token,
+                source_connector, application_url, application_classification,
+                quality_warnings_json, raw_payload_json, raw_content_hash, rule_version
+            )
+            SELECT observation_id, resolved_canonical_job_id, target_id, cycle_id, task_id,
+                   external_job_id, original_url, original_url,
+                   COALESCE(json_extract(payload_json,'$.source_ats'),''), content_hash,
+                   payload_json, observed_at, 1,
+                   COALESCE(json_extract(payload_json,'$.source_display_name'),''),
+                   COALESCE(json_extract(payload_json,'$.source_token'),''),
+                   COALESCE(json_extract(payload_json,'$.source_ats'),''), application_url,
+                   COALESCE(json_extract(payload_json,'$.application_destination.classification'),'unknown'),
+                   quality_warnings_json, raw_payload_json, raw_content_hash, rule_version
+            FROM acquisition_ingest_staging
+            WHERE batch_id=? AND projection_action!='replay'
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO job_source_states (
+                source_state_id, target_id, canonical_job_id, external_job_id,
+                lifecycle_state, absence_count, grace_attempts, last_seen_at,
+                last_checked_at, last_cycle_id, updated_at
+            )
+            SELECT 'source_state_' || lower(hex(randomblob(16))), target_id,
+                   resolved_canonical_job_id, external_job_id, 'active', 0,
+                   grace_attempts, observed_at, observed_at, cycle_id, observed_at
+            FROM acquisition_ingest_staging
+            WHERE batch_id=? AND projection_action!='replay'
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE job_source_states AS state
+            SET canonical_job_id=(SELECT s.resolved_canonical_job_id FROM acquisition_ingest_staging s
+                                  WHERE s.batch_id=? AND s.target_id=state.target_id
+                                    AND s.external_job_id=state.external_job_id
+                                  ORDER BY s.observed_at DESC LIMIT 1),
+                lifecycle_state='active', absence_count=0,
+                grace_attempts=(SELECT s.grace_attempts FROM acquisition_ingest_staging s
+                                WHERE s.batch_id=? AND s.target_id=state.target_id
+                                  AND s.external_job_id=state.external_job_id
+                                ORDER BY s.observed_at DESC LIMIT 1),
+                last_seen_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                              WHERE s.batch_id=? AND s.target_id=state.target_id
+                                AND s.external_job_id=state.external_job_id),
+                last_checked_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                                 WHERE s.batch_id=? AND s.target_id=state.target_id
+                                   AND s.external_job_id=state.external_job_id),
+                last_cycle_id=(SELECT s.cycle_id FROM acquisition_ingest_staging s
+                               WHERE s.batch_id=? AND s.target_id=state.target_id
+                                 AND s.external_job_id=state.external_job_id LIMIT 1),
+                updated_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                            WHERE s.batch_id=? AND s.target_id=state.target_id
+                              AND s.external_job_id=state.external_job_id)
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.target_id=state.target_id
+                            AND s.external_job_id=state.external_job_id
+                            AND s.projection_action!='replay'
+                            AND s.observed_at>state.last_checked_at)
+            """,
+            (batch_id,) * 7,
+        )
+        # Source-state upserts above may reactivate a canonical job. Recompute
+        # after both absence processing and present-row projection so a late
+        # source cannot leave the canonical lifecycle stale.
+        connection.execute(
+            """
+            UPDATE canonical_jobs AS job
+            SET lifecycle_state=CASE
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id
+                                   AND s.lifecycle_state='active') THEN 'active'
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id
+                                   AND s.lifecycle_state='stale') THEN 'stale'
+                    WHEN EXISTS (SELECT 1 FROM job_source_states s
+                                 WHERE s.canonical_job_id=job.canonical_job_id)
+                     AND NOT EXISTS (SELECT 1 FROM job_source_states s
+                                     WHERE s.canonical_job_id=job.canonical_job_id
+                                       AND s.lifecycle_state!='closed') THEN 'closed'
+                    ELSE 'unknown'
+                END,
+                updated_at=CASE
+                    WHEN updated_at>(SELECT MAX(target.observed_at)
+                                     FROM acquisition_ingest_targets target
+                                     JOIN job_source_states s ON s.target_id=target.target_id
+                                     WHERE target.batch_id=?
+                                       AND s.canonical_job_id=job.canonical_job_id)
+                    THEN updated_at
+                    ELSE COALESCE((SELECT MAX(target.observed_at)
+                                   FROM acquisition_ingest_targets target
+                                   JOIN job_source_states s ON s.target_id=target.target_id
+                                   WHERE target.batch_id=?
+                                     AND s.canonical_job_id=job.canonical_job_id), updated_at)
+                END
+            WHERE EXISTS (
+                SELECT 1 FROM job_source_states state
+                JOIN acquisition_ingest_targets target ON target.target_id=state.target_id
+                WHERE target.batch_id=? AND state.canonical_job_id=job.canonical_job_id
+            )
+            """,
+            (batch_id,) * 3,
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO job_posting_versions (
+                version_id, canonical_job_id, version_number, content_hash, title,
+                description, location, apply_url, source_observation_id, payload_json, created_at
+            )
+            SELECT s.version_id, s.resolved_canonical_job_id,
+                   COALESCE((SELECT MAX(v.version_number) FROM job_posting_versions v
+                             WHERE v.canonical_job_id=s.resolved_canonical_job_id),0)+1,
+                   s.content_hash, s.title, s.description, s.location, s.application_url,
+                   s.observation_id, s.payload_json, s.observed_at
+            FROM acquisition_ingest_staging s
+            WHERE s.batch_id=? AND s.projection_action IN ('new','update')
+              AND s.row_number=(SELECT MAX(latest.row_number)
+                                FROM acquisition_ingest_staging latest
+                                WHERE latest.batch_id=s.batch_id
+                                  AND latest.resolved_canonical_job_id=s.resolved_canonical_job_id
+                                  AND latest.projection_action IN ('new','update'))
+              AND NOT EXISTS (
+                  SELECT 1 FROM job_posting_versions v
+                  LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
+                  WHERE v.canonical_job_id=s.resolved_canonical_job_id
+                    AND COALESCE(NULLIF(q.stable_content_hash,''),v.content_hash)=s.content_hash
+              )
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_version_quality (
+                version_id, canonical_job_id, stable_content_hash, redundant, report_json, calculated_at
+            )
+            SELECT v.version_id, v.canonical_job_id, v.content_hash, 0, '{}', v.created_at
+            FROM job_posting_versions v
+            JOIN acquisition_ingest_staging s ON s.version_id=v.version_id
+            WHERE s.batch_id=?
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE canonical_jobs AS j
+            SET current_version_id=(SELECT v.version_id FROM job_posting_versions v
+                                    WHERE v.canonical_job_id=j.canonical_job_id
+                                    ORDER BY v.version_number DESC LIMIT 1)
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
+                            AND s.projection_action IN ('new','update'))
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_rule_outputs (
+                output_id, execution_id, entity_kind, entity_id, source_observation_id,
+                stage_name, rule_version, semantic_hash, output_json, created_at
+            )
+            SELECT 'rule_output_' || lower(hex(randomblob(16))), s.cycle_id, 'job',
+                   s.resolved_canonical_job_id, s.observation_id, 'normalization',
+                   COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
+                   s.unified_mapping_hash, s.unified_mapping_json, s.observed_at
+            FROM acquisition_ingest_staging s
+            WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_field_provenance (
+                provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                raw_value_json, normalized_value_json, state, source, source_field,
+                extraction_method, evidence_json, confidence, observed_at, rule_version,
+                selected, selection_reason, created_at
+            )
+            SELECT 'field_provenance_' || lower(hex(randomblob(16))), 'job',
+                   s.resolved_canonical_job_id, field.key, s.observation_id,
+                   json_quote(json_extract(field.value,'$.raw_value')),
+                   json_quote(json_extract(field.value,'$.normalized_value')),
+                   COALESCE(json_extract(field.value,'$.state'),'unknown'),
+                   COALESCE(json_extract(field.value,'$.source'),''),
+                   COALESCE(json_extract(field.value,'$.source_field'),''),
+                   COALESCE(json_extract(field.value,'$.extraction_method'),''),
+                   json_quote(json_extract(field.value,'$.evidence')),
+                   COALESCE(json_extract(field.value,'$.confidence'),0),
+                   COALESCE(NULLIF(json_extract(field.value,'$.observed_at'),''),s.observed_at),
+                   COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
+                   CASE WHEN json_extract(field.value,'$.state') IN ('present','inferred') THEN 1 ELSE 0 END,
+                   CASE WHEN json_extract(field.value,'$.state') IN ('present','inferred')
+                        THEN 'latest evidence-backed candidate' ELSE 'no evidence-backed value' END,
+                   s.observed_at
+            FROM acquisition_ingest_staging s,
+                 json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')) AS field
+            WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_field_provenance (
+                provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                raw_value_json, normalized_value_json, state, source, source_field,
+                extraction_method, evidence_json, confidence, observed_at, rule_version,
+                selected, selection_reason, created_at
+            )
+            SELECT 'field_provenance_' || lower(hex(randomblob(16))), 'company',
+                   s.company_id, field.key, s.observation_id,
+                   json_quote(json_extract(field.value,'$.raw_value')),
+                   json_quote(json_extract(field.value,'$.normalized_value')),
+                   COALESCE(json_extract(field.value,'$.state'),'unknown'),
+                   COALESCE(json_extract(field.value,'$.source'),''),
+                   COALESCE(json_extract(field.value,'$.source_field'),''),
+                   COALESCE(json_extract(field.value,'$.extraction_method'),''),
+                   json_quote(json_extract(field.value,'$.evidence')),
+                   COALESCE(json_extract(field.value,'$.confidence'),0),
+                   COALESCE(NULLIF(json_extract(field.value,'$.observed_at'),''),s.observed_at),
+                   COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
+                   CASE WHEN json_extract(field.value,'$.state') IN ('present','inferred') THEN 1 ELSE 0 END,
+                   CASE WHEN json_extract(field.value,'$.state') IN ('present','inferred')
+                        THEN 'latest evidence-backed candidate' ELSE 'no evidence-backed value' END,
+                   s.observed_at
+            FROM acquisition_ingest_staging s,
+                 json_each(COALESCE(json_extract(s.unified_mapping_json,'$.company_fields'),'{}')) AS field
+            WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO acquisition_completeness_reports (
+                report_id, entity_kind, entity_id, rule_version, state, report_json, calculated_at
+            )
+            SELECT 'completeness_' || lower(hex(randomblob(16))), 'job',
+                   s.resolved_canonical_job_id,
+                   COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
+                   CASE WHEN EXISTS (
+                       SELECT 1
+                       FROM json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')) field
+                       WHERE COALESCE(json_extract(field.value,'$.state'),'unknown')!='present'
+                   ) THEN 'warning' ELSE 'complete' END,
+                   json_object(
+                       'schema_version','field_matrix_v1',
+                       'rule_version',COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
+                       'report_only',json('true'),
+                       'fields',json(COALESCE((
+                           SELECT json_group_object(field.key, json_object(
+                               'state',COALESCE(json_extract(field.value,'$.state'),'unknown'),
+                               'confidence',COALESCE(json_extract(field.value,'$.confidence'),0),
+                               'source',json_extract(field.value,'$.source')
+                           ))
+                           FROM json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')) field
+                       ),'{}')),
+                       'rollup',json_object(
+                           'present',(SELECT COUNT(*) FROM json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')) field
+                                      WHERE json_extract(field.value,'$.state')='present'),
+                           'total',(SELECT COUNT(*) FROM json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')))
+                       )
+                   ),
+                   s.observed_at
+            FROM acquisition_ingest_staging s
+            WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+              AND s.row_number=(SELECT MAX(latest.row_number)
+                                FROM acquisition_ingest_staging latest
+                                WHERE latest.batch_id=s.batch_id
+                                  AND latest.resolved_canonical_job_id=s.resolved_canonical_job_id
+                                  AND latest.projection_action IN ('new','update','unchanged'))
+            ON CONFLICT(entity_kind, entity_id, rule_version) DO UPDATE SET
+                state=excluded.state,
+                report_json=excluded.report_json,
+                calculated_at=excluded.calculated_at
+            """,
+            (batch_id,),
+        )
+        connection.execute(
+            """
+            UPDATE canonical_jobs AS job
+            SET published_at=COALESCE(NULLIF((SELECT json_extract(s.unified_mapping_json,'$.timestamps.published_at.normalized_value')
+                                              FROM acquisition_ingest_staging s
+                                              WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id
+                                              ORDER BY s.observed_at DESC LIMIT 1),''),published_at),
+                source_updated_at=COALESCE(NULLIF((SELECT json_extract(s.unified_mapping_json,'$.timestamps.updated_at.normalized_value')
+                                                   FROM acquisition_ingest_staging s
+                                                   WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id
+                                                   ORDER BY s.observed_at DESC LIMIT 1),''),source_updated_at),
+                closed_at=COALESCE(NULLIF((SELECT json_extract(s.unified_mapping_json,'$.timestamps.closed_at.normalized_value')
+                                           FROM acquisition_ingest_staging s
+                                           WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id
+                                           ORDER BY s.observed_at DESC LIMIT 1),''),closed_at),
+                last_reprocessed_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
+                                     WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id)
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id
+                            AND s.projection_action IN ('new','update','unchanged'))
+            """,
+            (batch_id,) * 5,
+        )
+        counts = {
+            str(row["projection_action"]): int(row["count"])
+            for row in connection.execute(
+                "SELECT projection_action, COUNT(*) AS count FROM acquisition_ingest_staging "
+                "WHERE batch_id=? GROUP BY projection_action",
+                (batch_id,),
+            ).fetchall()
+        }
+        connection.execute(
+            """
+            UPDATE acquisition_tasks AS task
+            SET status=CASE WHEN (SELECT t.closure_safe FROM acquisition_ingest_targets t
+                                  WHERE t.batch_id=? AND t.task_id=task.task_id)=1
+                            THEN 'completed' ELSE 'partial' END,
+                completed_at=(SELECT t.observed_at FROM acquisition_ingest_targets t
+                              WHERE t.batch_id=? AND t.task_id=task.task_id),
+                complete_snapshot=(SELECT t.complete_snapshot FROM acquisition_ingest_targets t
+                                   WHERE t.batch_id=? AND t.task_id=task.task_id),
+                valid_snapshot=(SELECT t.valid_snapshot FROM acquisition_ingest_targets t
+                                WHERE t.batch_id=? AND t.task_id=task.task_id),
+                credible_evidence=(SELECT t.closure_safe FROM acquisition_ingest_targets t
+                                   WHERE t.batch_id=? AND t.task_id=task.task_id),
+                requests_avoided=0, credits_avoided=0,
+                jobs_observed=(SELECT COUNT(*) FROM acquisition_ingest_staging s
+                               WHERE s.batch_id=? AND s.task_id=task.task_id
+                                 AND s.projection_action!='replay'),
+                jobs_new=(SELECT COUNT(*) FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.task_id=task.task_id
+                            AND s.projection_action='new'),
+                jobs_updated=(SELECT COUNT(*) FROM acquisition_ingest_staging s
+                              WHERE s.batch_id=? AND s.task_id=task.task_id
+                                AND s.projection_action='update'),
+                jobs_unchanged=(SELECT COUNT(*) FROM acquisition_ingest_staging s
+                                WHERE s.batch_id=? AND s.task_id=task.task_id
+                                  AND s.projection_action IN ('unchanged','replay')),
+                jobs_closed=(SELECT t.closed_count FROM acquisition_ingest_targets t
+                             WHERE t.batch_id=? AND t.task_id=task.task_id),
+                jobs_rejected=(SELECT t.rejected_count FROM acquisition_ingest_targets t
+                               WHERE t.batch_id=? AND t.task_id=task.task_id),
+                jobs_duplicates=(SELECT t.duplicate_count FROM acquisition_ingest_targets t
+                                 WHERE t.batch_id=? AND t.task_id=task.task_id),
+                reconciliation_json='{}', quality_warnings_json='[]',
+                collection_metadata_json=(SELECT json_object(
+                    'producer_bridge', json('true'), 'source', t.source,
+                    'unresolved_observations', t.unresolved_count,
+                    'complete_snapshot', json(CASE WHEN t.complete_snapshot=1 THEN 'true' ELSE 'false' END),
+                    'closure_safe', json(CASE WHEN t.closure_safe=1 THEN 'true' ELSE 'false' END)
+                ) FROM acquisition_ingest_targets t
+                  WHERE t.batch_id=? AND t.task_id=task.task_id),
+                error_code='', error_message='', last_error_code='', last_error_message='',
+                lease_owner='', lease_token='', lease_expires_at='',
+                updated_at=(SELECT t.observed_at FROM acquisition_ingest_targets t
+                            WHERE t.batch_id=? AND t.task_id=task.task_id)
+            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_targets t
+                          WHERE t.batch_id=? AND t.task_id=task.task_id)
+            """,
+            (batch_id,) * 15,
+        )
+        target_results = {
+            str(row["target_id"]): {
+                "observed": int(row["observed"] or 0),
+                "new": int(row["new_count"] or 0),
+                "updated": int(row["updated_count"] or 0),
+                "unchanged": int(row["unchanged_count"] or 0),
+                "stale_ignored": int(row["stale_count"] or 0),
+                "complete_snapshot": bool(row["complete_snapshot"]),
+                "valid_snapshot": bool(row["valid_snapshot"]),
+                "closure_safe": bool(row["closure_safe"]),
+                "closed": int(row["closed_count"] or 0),
+                "rejected": int(row["rejected_count"] or 0),
+                "duplicates": int(row["duplicate_count"] or 0),
+                "quality_warnings": [],
+            }
+            for row in connection.execute(
+                """
+                SELECT t.target_id, t.complete_snapshot, t.valid_snapshot, t.closure_safe,
+                       t.closed_count, t.rejected_count, t.duplicate_count,
+                       SUM(CASE WHEN s.projection_action!='replay' THEN 1 ELSE 0 END) AS observed,
+                       SUM(CASE WHEN s.projection_action='new' THEN 1 ELSE 0 END) AS new_count,
+                       SUM(CASE WHEN s.projection_action='update' THEN 1 ELSE 0 END) AS updated_count,
+                       SUM(CASE WHEN s.projection_action='stale' THEN 1 ELSE 0 END) AS stale_count,
+                       SUM(CASE WHEN s.projection_action IN ('unchanged','replay') THEN 1 ELSE 0 END) AS unchanged_count
+                FROM acquisition_ingest_targets t
+                LEFT JOIN acquisition_ingest_staging s
+                  ON s.batch_id=t.batch_id AND s.target_id=t.target_id
+                WHERE t.batch_id=? GROUP BY t.target_id
+                """,
+                (batch_id,),
+            ).fetchall()
+        }
+        connection.execute("DELETE FROM acquisition_ingest_batches WHERE batch_id=?", (batch_id,))
+        return {"batch_id": batch_id, "actions": counts, "targets": target_results, "committed_at": now}
+
+    def ingest_snapshots_bulk(
+        self,
+        snapshots: Iterable[Mapping[str, Any]],
+        *,
+        batch_id: str = "",
+    ) -> dict[str, Any]:
+        """Atomically stage and project a bounded producer snapshot group."""
+
+        rows = [dict(item) for item in snapshots]
+        stable_batch_id = str(batch_id or f"ingest_batch_{uuid4().hex}")
+
+        def ingest(connection):
+            staged = self._stage_producer_ingest_batch(connection, rows, batch_id=stable_batch_id)
+            projected = self._project_producer_ingest_batch(connection, batch_id=stable_batch_id)
+            return {**projected, "companies": staged["companies"], "jobs": staged["jobs"]}
+
+        return self._run_transaction(ingest)
+
     def ingest_snapshot(
         self,
         *,
