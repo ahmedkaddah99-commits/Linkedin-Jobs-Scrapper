@@ -1845,7 +1845,31 @@ def publish_catalog_generation(
         finally:
             if temporary_name and os.path.exists(temporary_name):
                 os.unlink(temporary_name)
+    prune_catalog_generations(root, current_generation_id=str(generation_id))
     return {**manifest, "manifest_sha256": manifest_hash, "manifest_path": pointer["manifest_path"]}
+
+
+def prune_catalog_generations(output_dir: str | Path, *, current_generation_id: str, retain: int = 2) -> int:
+    """Keep the current and most recent prior run generations after publication."""
+
+    root = (Path(output_dir) / GENERATION_DIRECTORY_NAME).resolve()
+    if not root.is_dir():
+        return 0
+    candidates = [
+        path for path in root.iterdir()
+        if path.name.startswith("generation_run_") and path.is_dir() and not path.is_symlink()
+        and path.resolve().is_relative_to(root)
+    ]
+    ordered = sorted(candidates, key=lambda path: path.name, reverse=True)
+    keep = {path.name for path in ordered[:max(1, retain)]}
+    keep.add(current_generation_id)
+    removed = 0
+    for path in ordered:
+        if path.name in keep:
+            continue
+        shutil.rmtree(path)
+        removed += 1
+    return removed
 
 
 def read_current_catalog_generation(output_dir: str | Path) -> dict[str, object] | None:
