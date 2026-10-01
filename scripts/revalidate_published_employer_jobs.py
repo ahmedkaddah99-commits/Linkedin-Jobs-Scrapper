@@ -35,7 +35,7 @@ def job_identity(url: object, title: object) -> tuple[str, str, str]:
 
 
 def load_producer_evidence(state_db: Path) -> dict[tuple[str, str, str], bool]:
-    """A key is rejected only if every matching producer row fails the gate."""
+    """A failed source observation keeps a disputed job out of the public head."""
     evidence: dict[tuple[str, str, str], bool] = {}
     with sqlite3.connect(f"file:{state_db.as_posix()}?mode=ro", uri=True) as connection:
         for (raw,) in connection.execute("SELECT payload_json FROM jobs"):
@@ -46,7 +46,7 @@ def load_producer_evidence(state_db: Path) -> dict[tuple[str, str, str], bool]:
             rejected = bool(generic_employer_non_job_reason(record)) if (
                 str(record.get("source_provider") or "").casefold() == "generic_employer_site"
             ) else False
-            evidence[key] = evidence.get(key, True) and rejected
+            evidence[key] = evidence.get(key, False) or rejected
     return evidence
 
 
