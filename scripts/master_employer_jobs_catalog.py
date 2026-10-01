@@ -268,11 +268,11 @@ def select_automatic_employer_work(
         else:
             direct.append(company)
     if direct and browser and state.get_cursor() % 2:
-        return browser[:1], "browser"
+        return (browser if limit <= 0 else browser[:limit]), "browser"
     if direct:
         return (direct if limit <= 0 else direct[:limit]), "easy"
     if browser:
-        return browser[:1], "browser"
+        return (browser if limit <= 0 else browser[:limit]), "browser"
     return [], "easy"
 
 

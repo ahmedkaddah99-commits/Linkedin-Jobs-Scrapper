@@ -16,7 +16,8 @@ stronger evidence appears. Direct-check results are retained in producer state.
 
 The employer wrapper uses an automatic queue. It first attempts direct/ATS/
 structured collection for companies without a prior result. Later rounds use
-the durable method audit to run browser-dependent companies one at a time.
+the durable method audit to run browser-dependent companies serially, processing
+multiple companies within a run when its request and time limits allow.
 Productive sources are due in 24 hours; browser attempts with no jobs wait 72
 hours. Easy and browser work alternate when both are due. Bounded page and
 request limits can still yield partial results rather than complete coverage.

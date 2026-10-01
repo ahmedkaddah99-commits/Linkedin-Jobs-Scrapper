@@ -79,6 +79,27 @@ def test_automatic_employer_queue_finishes_easy_pass_before_serial_browser_work(
         state.close()
 
 
+def test_automatic_employer_queue_batches_browser_cases_for_serial_processing(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    companies = [_company_with_id(key, key) for key in ("a", "b", "c")]
+    try:
+        for key in ("a", "b", "c"):
+            state.connection.execute(
+                "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+                (key, json.dumps({"coverage": {"method_attempts": [
+                    {"method": "browser_rendered_collection", "status": "deferred"}
+                ]}}), "partial", "", "2026-01-01T00:00:00Z"),
+            )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, companies, limit=2, now="2026-01-01T00:01:00Z")
+        assert phase == "browser"
+        assert [item.canonical_company_id for item in work] == ["a", "b"]
+    finally:
+        state.close()
+
+
 def test_browser_failure_waits_three_days_with_durable_schedule(tmp_path: Path) -> None:
     state = EmployerState(tmp_path / "state.db")
     try:
