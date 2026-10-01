@@ -821,7 +821,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   return <div className="jobs-experience">
     <section className="jobs-search-bar" aria-label="Job search filters">
-      <label className="jobs-search-input"><Icon>search</Icon><input aria-label="Search jobs" onChange={(event) => updateFilter("query", event.target.value)} placeholder="Search title, company, or skill" type="search" value={filters.query} /></label>
+      <label className="jobs-search-input"><Icon>search</Icon><input aria-label="Search job title or company" onChange={(event) => updateFilter("query", event.target.value)} placeholder="Search job title or company" type="search" value={filters.query} /></label>
       <FilterPill icon="location_on" label="Location" onChange={(value) => updateFilter("location", value === "all" ? "" : value)} options={[{ label: "All locations", value: "all" }, { label: "Berlin", value: "Berlin" }, { label: "Germany", value: "Germany" }, { label: "Remote in Germany", value: "Remote in Germany" }]} value={filters.location || "all"} />
       <FilterPill icon="work_outline" label="Job type" onChange={(value) => updateFilter("workArrangement", value)} options={[{ label: "Any workplace", value: "all" }, { label: "Remote", value: "remote" }, { label: "Hybrid", value: "hybrid" }, { label: "On-site", value: "onsite" }]} value={filters.workArrangement} />
       <FilterPill icon="stairs" label="Experience level" onChange={(value) => updateFilter("experienceLevel", value)} options={[{ label: "Any experience", value: "all" }, { label: "Entry", value: "entry" }, { label: "Mid-level", value: "mid" }, { label: "Senior", value: "senior" }, { label: "Lead", value: "lead" }]} value={filters.experienceLevel} />

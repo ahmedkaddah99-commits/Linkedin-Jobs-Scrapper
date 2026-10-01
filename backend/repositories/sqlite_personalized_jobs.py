@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1084,28 +1083,14 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         return _row_payload(row) if row is not None else None
 
     @staticmethod
-    def _feed_filter_sql(filters: Mapping[str, Any] | None, *, search_index_ready: bool = True) -> tuple[list[str], list[Any]]:
+    def _feed_filter_sql(filters: Mapping[str, Any] | None) -> tuple[list[str], list[Any]]:
         filters = dict(filters or {})
         predicates: list[str] = []
         params: list[Any] = []
         search_terms = filters.get("search_text") or []
         for term in (search_terms if isinstance(search_terms, (list, tuple, set)) else [search_terms]):
-            if not search_index_ready:
-                text_expr = "LOWER(COALESCE(catalog.title, '') || ' ' || COALESCE(catalog.company, '') || ' ' || COALESCE(catalog.location, '') || ' ' || COALESCE(catalog.version_location, '') || ' ' || COALESCE(catalog.description, '') || ' ' || COALESCE(catalog.version_payload_json, ''))"
-                predicates.append(f"{text_expr} LIKE ?")
-                params.append(f"%{str(term).casefold()}%")
-                continue
-            tokens = re.findall(r"[^\W_]+", str(term).casefold(), flags=re.UNICODE)[:12]
-            if not tokens:
-                predicates.append("0 = 1")
-                continue
-            predicates.append(
-                "catalog.canonical_job_id IN ("
-                "SELECT j.canonical_job_id FROM published_job_search "
-                "JOIN canonical_jobs j ON j.rowid = published_job_search.rowid "
-                "WHERE published_job_search MATCH ?)"
-            )
-            params.append(" AND ".join(f'"{token}"*' for token in tokens))
+            predicates.append("(LOWER(catalog.title) LIKE ? OR LOWER(catalog.company) LIKE ?)")
+            params.extend((f"%{str(term).casefold()}%",) * 2)
 
         field_exprs = {
             "role": ["catalog.title", "json_extract(catalog.version_payload_json, '$.role')", "json_extract(catalog.version_payload_json, '$.roles')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.function')"],
@@ -1325,23 +1310,11 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     matches.update(str(row["canonical_job_id"]) for row in connection.execute(
                         "SELECT canonical_job_id FROM canonical_jobs WHERE lower(title) LIKE ?", (pattern,)
                     ).fetchall())
-                    if not matches:
-                        versions = connection.execute(
-                            "SELECT version_id FROM job_posting_versions WHERE lower(description) LIKE ? LIMIT 2000",
-                            (pattern,),
-                        ).fetchall()
-                        version_ids = [str(row["version_id"]) for row in versions]
-                        if version_ids:
-                            matches.update(str(row["canonical_job_id"]) for row in connection.execute(
-                                "SELECT canonical_job_id FROM canonical_jobs WHERE current_version_id IN ("
-                                + ",".join("?" for _ in version_ids) + ")",
-                                tuple(version_ids),
-                            ).fetchall())
                     search_candidates = matches if search_candidates is None else search_candidates & matches
                 if not search_candidates:
                     return {"publication": publication_payload, "rows": [], "total": 0, "sort_mode": "newest"}
                 filters = {key: value for key, value in (filters or {}).items() if key != "search_text"}
-            predicates, filter_params = self._feed_filter_sql(filters, search_index_ready=False)
+            predicates, filter_params = self._feed_filter_sql(filters)
             # Filters are applied to the outer ``page`` alias.  Keep the
             # catalog-qualified expressions for the scoped subquery builder,
             # then bind them to the visible query alias here.
@@ -1367,8 +1340,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 predicates = [f"({item})" for item in predicates]
                 count_where_sql = " AND ".join(predicates) if predicates else "1=1"
                 # Materialize only the matching IDs and sort keys once. Text
-                # search otherwise repeats the large description/JSON scan for
-                # the count and the requested page.
+                # Keep the count and requested page on the same matched IDs.
                 candidate_params = [str(user_id), str(publication["publication_id"]), *sorted(search_candidates or ()), *filter_params]
                 cursor_params: list[Any] = []
                 if cursor:

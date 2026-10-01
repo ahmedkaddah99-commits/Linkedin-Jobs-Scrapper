@@ -146,17 +146,20 @@ class JobsFeedPerformanceTests(unittest.TestCase):
         self.assertEqual(sum("feed_page_ids" in sql for sql in statements), 1 + bool(first["rows"]))
         self.assertFalse(any("SELECT COUNT(*) AS total FROM (" in sql for sql in statements))
 
-    def test_search_finds_company_title_and_posting_skill_from_scalar_query(self):
+    def test_search_finds_company_and_title_but_not_description_only_text(self):
         app = self._backend()
         _seed_catalog(app)
         for query, expected_id in (
             ("Acme", "job-a"),
             ("Finance", "job-b"),
-            ("operations", "job-a"),
         ):
             page = app.get_personalized_jobs("user-a", filters={"q": query}, card_view=True)
             self.assertEqual(page["total"], 1, query)
             self.assertEqual(page["jobs"][0]["posting_id"], expected_id)
+
+        description_only = app.get_personalized_jobs("user-a", filters={"q": "role"}, card_view=True)
+        self.assertEqual(description_only["total"], 0)
+        self.assertEqual(description_only["jobs"], [])
 
         # The index follows edits to the current version and company name.
         store = app.repositories.acquisition_store
