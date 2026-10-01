@@ -104,7 +104,7 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
     rate_limited = False
     excluded_ids: set[str] = set()
     batch_size = 5
-    recent_requests = min(10, max(0, limit - 1))
+    recent_requests = min(2, max(0, limit - 1))
     while counts["requests"] < limit and not rate_limited:
         newest = counts["requests"] < recent_requests
         candidates = next_batch(store, cursor, batch_size, newest=newest, excluded_ids=frozenset(excluded_ids))
@@ -165,6 +165,7 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
             errors.append(type(exc).__name__)
             break
         counts["completed"] += len(batch)
+        print(json.dumps({"requests": counts["requests"], "completed": counts["completed"], "failed": counts["failed"]}), flush=True)
         batch_size = 5
         if not newest:
             cursor = str(batch[-1]["canonical_job_id"])
