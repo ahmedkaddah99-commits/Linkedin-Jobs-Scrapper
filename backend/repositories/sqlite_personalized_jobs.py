@@ -1303,12 +1303,45 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if publication is None:
                 return {"publication": None, "rows": [], "total": 0}
             publication_payload = _row_payload(publication)
-            search_index_ready = True
-            if (filters or {}).get("search_text"):
-                search_index_ready = bool(connection.execute(
-                    "SELECT ready FROM published_job_search_backfill WHERE id = 1"
-                ).fetchone()["ready"])
-            predicates, filter_params = self._feed_filter_sql(filters, search_index_ready=search_index_ready)
+            search_terms = (filters or {}).get("search_text") or []
+            if isinstance(search_terms, str):
+                search_terms = [search_terms]
+            search_candidates: set[str] | None = None
+            if search_terms:
+                for raw_term in search_terms:
+                    term = str(raw_term).strip().casefold()
+                    if not term:
+                        continue
+                    pattern = f"%{term}%"
+                    matches: set[str] = set()
+                    companies = connection.execute(
+                        "SELECT company_id FROM canonical_companies WHERE entity_kind='employer' AND lower(canonical_name) LIKE ?",
+                        (pattern,),
+                    ).fetchall()
+                    for company in companies:
+                        matches.update(str(row["canonical_job_id"]) for row in connection.execute(
+                            "SELECT canonical_job_id FROM canonical_jobs WHERE company_id=?", (company["company_id"],)
+                        ).fetchall())
+                    matches.update(str(row["canonical_job_id"]) for row in connection.execute(
+                        "SELECT canonical_job_id FROM canonical_jobs WHERE lower(title) LIKE ?", (pattern,)
+                    ).fetchall())
+                    if not matches:
+                        versions = connection.execute(
+                            "SELECT version_id FROM job_posting_versions WHERE lower(description) LIKE ? LIMIT 2000",
+                            (pattern,),
+                        ).fetchall()
+                        version_ids = [str(row["version_id"]) for row in versions]
+                        if version_ids:
+                            matches.update(str(row["canonical_job_id"]) for row in connection.execute(
+                                "SELECT canonical_job_id FROM canonical_jobs WHERE current_version_id IN ("
+                                + ",".join("?" for _ in version_ids) + ")",
+                                tuple(version_ids),
+                            ).fetchall())
+                    search_candidates = matches if search_candidates is None else search_candidates & matches
+                if not search_candidates:
+                    return {"publication": publication_payload, "rows": [], "total": 0, "sort_mode": "newest"}
+                filters = {key: value for key, value in (filters or {}).items() if key != "search_text"}
+            predicates, filter_params = self._feed_filter_sql(filters, search_index_ready=False)
             # Filters are applied to the outer ``page`` alias.  Keep the
             # catalog-qualified expressions for the scoped subquery builder,
             # then bind them to the visible query alias here.
@@ -1329,12 +1362,14 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 candidate_source = (
                     self._feed_candidate_sql() if has_catalog_filters else self._feed_index_sql()
                 )
+                if search_candidates is not None:
+                    candidate_source = candidate_source + " AND j.canonical_job_id IN (" + ",".join("?" for _ in search_candidates) + ")"
                 predicates = [f"({item})" for item in predicates]
                 count_where_sql = " AND ".join(predicates) if predicates else "1=1"
                 # Materialize only the matching IDs and sort keys once. Text
                 # search otherwise repeats the large description/JSON scan for
                 # the count and the requested page.
-                candidate_params = [str(user_id), str(publication["publication_id"]), *filter_params]
+                candidate_params = [str(user_id), str(publication["publication_id"]), *sorted(search_candidates or ()), *filter_params]
                 cursor_params: list[Any] = []
                 if cursor:
                     cursor_sort = str(cursor.get("sort") or "")
