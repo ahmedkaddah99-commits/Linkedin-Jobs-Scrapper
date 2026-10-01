@@ -144,3 +144,14 @@ def test_static_job_with_posting_specific_application_is_accepted() -> None:
         "extraction_method": "static_html", "source_provider": "generic_employer_site",
     }
     assert not generic_employer_non_job_reason(job)
+
+
+def test_static_application_link_to_parent_career_page_is_rejected() -> None:
+    page = {
+        "job_title": "Bewerbungstipps",
+        "source_job_url": "https://example.com/jobs/de/bewerben/bewerbungstipps",
+        "description_text": "Advice about writing an application and preparing for an interview. " * 3,
+        "apply_url_canonical": "https://example.com/jobs/de/bewerben",
+        "extraction_method": "static_html", "source_provider": "generic_employer_site",
+    }
+    assert generic_employer_non_job_reason(page) == "unlinked_application"

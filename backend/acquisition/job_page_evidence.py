@@ -82,12 +82,13 @@ def _application_targets_detail(detail_url: object, apply_url: object, title: st
     if final_segment and final_segment not in {"jobs", "careers", "career", "stellenangebote", "karriere"}:
         if f"/{final_segment}/" in f"{apply_path}/" or final_segment in unquote(apply.query).casefold():
             return True
-    detail_tokens = [token for token in re.findall(r"[a-z0-9]{4,}", detail_path)
-                     if token not in {"jobs", "careers", "career", "stellenangebote", "karriere", "detail", "position"}]
+    detail_tokens = [token for token in re.findall(r"[a-z0-9]{6,}", final_segment)
+                     if token not in {"jobs", "careers", "career", "stellenangebote", "karriere", "detail", "position",
+                                          "bewerben", "bewerbung", "application", "apply"}]
     apply_text = unquote(apply_path + "?" + apply.query).casefold()
     # A shared posting ID or distinctive role slug links the application to
     # this posting. Generic /apply and /jobs endpoints fail this test.
-    return any(token in apply_text for token in detail_tokens[-3:])
+    return any(token in apply_text for token in detail_tokens)
 
 
 def _career_slug_matches_title(url: object, title: str) -> bool:
