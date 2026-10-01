@@ -199,3 +199,56 @@ def test_transient_model_failure_retries_without_advancing_cursor(tmp_path: Path
     assert result["requests"] == 2
     assert result["completed"] == 2
     assert result["failed"] == 0
+
+
+def test_persistent_batch_failure_is_split_into_individual_jobs(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app)
+    calls = 0
+
+    def generate(prompt):
+        nonlocal calls
+        calls += 1
+        postings = json.loads(prompt.split("Postings:\n", 1)[1])
+        if len(postings) > 1:
+            raise ValueError("batch response was incomplete")
+        return {"jobs": [{
+            "id": postings[0]["id"], "source_language": "en", "overview": "Prepared job",
+            "responsibilities": [], "required_qualifications": [],
+            "preferred_qualifications": [], "benefits": [], "application_details": [],
+        }]}
+
+    monkeypatch.setattr("scripts.process_published_job_descriptions.openrouter_generate", generate)
+    monkeypatch.setattr("scripts.process_published_job_descriptions.sleep", lambda _: None)
+    result = run(app.repositories.personalized_jobs_store, limit=5, cursor_file=tmp_path / "cursor.json")
+    assert calls == 5
+    assert result["completed"] == 2
+    assert result["failed"] == 0
+
+
+def test_unprocessable_single_posting_does_not_block_other_jobs(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app)
+
+    def generate(prompt):
+        postings = json.loads(prompt.split("Postings:\n", 1)[1])
+        if len(postings) > 1 or postings[0]["id"] == "version-job-a":
+            raise ValueError("unprocessable posting")
+        return {"jobs": [{
+            "id": postings[0]["id"], "source_language": "en", "overview": "Prepared job",
+            "responsibilities": [], "required_qualifications": [],
+            "preferred_qualifications": [], "benefits": [], "application_details": [],
+        }]}
+
+    monkeypatch.setattr("scripts.process_published_job_descriptions.openrouter_generate", generate)
+    monkeypatch.setattr("scripts.process_published_job_descriptions.sleep", lambda _: None)
+    result = run(app.repositories.personalized_jobs_store, limit=7, cursor_file=tmp_path / "cursor.json")
+    assert result["completed"] == 1
+    assert result["failed"] == 1
+    assert app.get_personalized_job_detail("user-a", "job-b")["runr_summary"]["overview"] == "Prepared job"

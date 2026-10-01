@@ -23,10 +23,14 @@ from backend.application.vps_job_descriptions import (
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 
 
-def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int, *, newest: bool = False) -> list[dict]:
+def next_batch(
+    store: SqlitePersonalizedJobsStore, after_id: str, limit: int, *,
+    newest: bool = False, excluded_ids: frozenset[str] = frozenset(),
+) -> list[dict]:
     cursor_clause = "" if newest else "AND j.canonical_job_id > ?"
+    excluded_clause = f"AND j.canonical_job_id NOT IN ({','.join('?' for _ in excluded_ids)})" if excluded_ids else ""
     order_clause = "v.created_at DESC, j.canonical_job_id" if newest else "j.canonical_job_id"
-    parameters = (PROMPT_VERSION, limit) if newest else (after_id, PROMPT_VERSION, limit)
+    parameters = (() if newest else (after_id,)) + tuple(sorted(excluded_ids)) + (PROMPT_VERSION, limit)
     with store._connect() as connection:
         rows = connection.execute(
             f"""
@@ -39,7 +43,7 @@ def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int, *,
             JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN job_posting_versions v ON v.version_id = j.current_version_id
             LEFT JOIN job_description_intelligence d ON d.version_id = v.version_id
-            WHERE h.head_id = 1 {cursor_clause}
+            WHERE h.head_id = 1 {cursor_clause} {excluded_clause}
               AND TRIM(COALESCE(v.description, '')) != ''
               AND (d.version_id IS NULL OR COALESCE(d.content_hash, '') != v.content_hash
                    OR COALESCE(d.prompt_version, '') != ?)
@@ -94,10 +98,12 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
     counts = {"requests": 0, "attempted": 0, "completed": 0, "failed": 0}
     errors: list[str] = []
     rate_limited = False
+    excluded_ids: set[str] = set()
+    batch_size = 5
     recent_requests = min(10, max(0, limit - 1))
     while counts["requests"] < limit and not rate_limited:
         newest = counts["requests"] < recent_requests
-        candidates = next_batch(store, cursor, 5, newest=newest)
+        candidates = next_batch(store, cursor, batch_size, newest=newest, excluded_ids=frozenset(excluded_ids))
         if not candidates and newest:
             recent_requests = counts["requests"]
             continue
@@ -132,10 +138,21 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
         if rate_limited:
             break
         if results is None:
-            counts["attempted"] += len(batch)
-            counts["failed"] += len(batch)
             errors.append(type(model_error).__name__ if model_error is not None else "request_limit")
-            break
+            if len(batch) > 1:
+                if counts["requests"] >= limit:
+                    counts["attempted"] += len(batch)
+                    counts["failed"] += len(batch)
+                    break
+                batch_size = max(1, len(batch) // 2)
+                continue
+            counts["attempted"] += 1
+            counts["failed"] += 1
+            excluded_ids.update(str(row["canonical_job_id"]) for row in batch)
+            if not newest:
+                cursor = str(batch[-1]["canonical_job_id"])
+            batch_size = 5
+            continue
         counts["attempted"] += len(batch)
         try:
             save_batch(store, results)
@@ -144,6 +161,7 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
             errors.append(type(exc).__name__)
             break
         counts["completed"] += len(batch)
+        batch_size = 5
         if not newest:
             cursor = str(batch[-1]["canonical_job_id"])
     cursor_file.parent.mkdir(parents=True, exist_ok=True)
