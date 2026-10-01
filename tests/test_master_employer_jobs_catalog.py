@@ -239,6 +239,29 @@ def test_previously_productive_browser_site_stays_due_after_empty_scan(tmp_path:
         state.close()
 
 
+def test_automatic_browser_queue_rotates_past_timed_out_first_slice(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    companies = [_company_with_id(str(index), f"Company {index}") for index in range(5)]
+    try:
+        for company in companies:
+            state.connection.execute(
+                "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+                (company.canonical_company_id, json.dumps({"coverage": {"method_attempts": [
+                    {"method": "browser_rendered_collection", "status": "deferred"}
+                ]}}), "partial", "", "2026-01-01T00:00:00Z"),
+            )
+        state.connection.commit()
+        first, phase = select_automatic_employer_work(state, companies, limit=2, now="2026-01-02T00:00:00Z")
+        assert (phase, [item.canonical_company_id for item in first]) == ("browser", ["0", "1"])
+        state.set_cursor(1)
+        second, phase = select_automatic_employer_work(state, companies, limit=2, now="2026-01-02T00:00:00Z")
+        assert (phase, [item.canonical_company_id for item in second]) == ("browser", ["2", "3"])
+    finally:
+        state.close()
+
+
 def test_automatic_queue_rotates_daily_direct_and_browser_work(tmp_path: Path) -> None:
     from scripts.master_employer_jobs_catalog import select_automatic_employer_work
 

@@ -234,9 +234,17 @@ def select_automatic_employer_work(
 ) -> tuple[list["EmployerCompany"], str]:
     """Finish initial direct scans before spending browser capacity."""
 
+    def window(candidates: list[EmployerCompany]) -> list[EmployerCompany]:
+        if limit <= 0 or len(candidates) <= limit:
+            return candidates
+        # A timed-out company may not leave a checkpoint. Advance to another
+        # slice on the next run so it cannot strand the remaining queue.
+        start = (state.get_cursor() * limit) % len(candidates)
+        return [candidates[(start + offset) % len(candidates)] for offset in range(limit)]
+
     unseen = [company for company in companies if not state.company_status(company)]
     if unseen:
-        return (unseen if limit <= 0 else unseen[:limit]), "easy"
+        return window(unseen), "easy"
     due = state.due_company_keys(
         [company.canonical_company_id or company.website_url for company in companies], now
     )
@@ -275,11 +283,11 @@ def select_automatic_employer_work(
         else:
             direct.append(company)
     if direct and browser and state.get_cursor() % 2:
-        return (browser if limit <= 0 else browser[:limit]), "browser"
+        return window(browser), "browser"
     if direct:
-        return (direct if limit <= 0 else direct[:limit]), "easy"
+        return window(direct), "easy"
     if browser:
-        return (browser if limit <= 0 else browser[:limit]), "browser"
+        return window(browser), "browser"
     return [], "easy"
 
 
