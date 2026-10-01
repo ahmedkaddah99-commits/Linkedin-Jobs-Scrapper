@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from html import unescape
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from collections.abc import Callable, Mapping
@@ -23,6 +25,97 @@ SECTIONS = (
     "responsibilities", "required_qualifications", "preferred_qualifications",
     "benefits", "application_details",
 )
+
+_RULE_HEADINGS = {
+    "responsibilities": {
+        "responsibilities", "your responsibilities", "what you will do", "your tasks", "duties",
+        "aufgaben", "deine aufgaben", "ihre aufgaben", "tätigkeiten", "verantwortlichkeiten",
+        "responsabilités", "missions", "responsabilidades", "funciones", "responsabilità", "mansioni",
+    },
+    "required_qualifications": {
+        "requirements", "required qualifications", "must have", "what you need",
+        "anforderungen", "voraussetzungen", "das bringst du mit", "das bringen sie mit",
+        "exigences", "prérequis", "requisitos", "requisitos obligatorios", "requisiti", "requisiti richiesti",
+    },
+    "preferred_qualifications": {
+        "preferred qualifications", "nice to have", "preferred", "bonus points",
+        "wünschenswert", "von vorteil", "idealerweise", "nice-to-have",
+        "souhaité", "souhaitable", "deseable", "valorables", "preferibile", "titoli preferenziali",
+    },
+    "benefits": {
+        "benefits", "what we offer", "perks", "our offer",
+        "benefits und vorteile", "wir bieten", "was wir bieten", "unsere benefits",
+        "avantages", "ce que nous offrons", "beneficios", "ofrecemos", "benefit", "cosa offriamo",
+    },
+    "application_details": {
+        "how to apply", "application process", "application details",
+        "bewerbung", "bewerbungsprozess", "so bewirbst du dich",
+        "candidature", "comment postuler", "cómo postular", "proceso de selección", "come candidarsi",
+    },
+}
+_BULLET = re.compile(r"^(?:[-*•▪◦]|\d+[.)])\s+")
+_TAG = re.compile(r"<[^>]+>")
+
+
+def build_runr_description_rules(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Prepare a source-faithful reading view without a provider request.
+
+    The rule pass preserves the source language. The free model can later
+    replace this posting-version row with an English rewrite.
+    """
+    original = build_preserved_original_posting(row)
+    source = str(original.get("description_text") or original.get("description") or "").strip()
+    if not source:
+        raise ValueError("posting description is empty")
+    source = unescape(_TAG.sub(" ", source)) if "<" in source else unescape(source)
+    grouped: dict[str, list[dict[str, str]]] = {section: [] for section in SECTIONS}
+    intro: list[str] = []
+    current: str | None = None
+    language = "und"
+    for raw in source.splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            continue
+        heading, separator, remainder = line.partition(":")
+        candidate = (heading if separator else line).strip().casefold().rstrip(" -–")
+        section = next((name for name, aliases in _RULE_HEADINGS.items() if candidate in aliases), None)
+        if section:
+            current = section
+            if candidate in {"aufgaben", "deine aufgaben", "ihre aufgaben", "tätigkeiten", "verantwortlichkeiten", "anforderungen", "voraussetzungen", "bewerbung", "wir bieten", "was wir bieten"}:
+                language = "de"
+            elif candidate in {"responsabilités", "missions", "exigences", "prérequis", "avantages", "candidature"}:
+                language = "fr"
+            elif candidate in {"responsabilidades", "funciones", "requisitos", "beneficios", "ofrecemos"}:
+                language = "es"
+            elif candidate in {"responsabilità", "mansioni", "requisiti", "benefit", "come candidarsi"}:
+                language = "it"
+            line = remainder.strip() if separator else ""
+            if not line:
+                continue
+        item = _BULLET.sub("", line).strip()
+        if not item:
+            continue
+        if current:
+            if item not in {entry["text"] for entry in grouped[current]}:
+                grouped[current].append({"text": item, "source_excerpt": item})
+        else:
+            intro.append(item)
+    overview_source = " ".join(intro) or next(
+        (items[0]["text"] for items in grouped.values() if items), source
+    )
+    overview = overview_source[:400].rsplit(" ", 1)[0] if len(overview_source) > 400 else overview_source
+    summary = {"source_language": language, "output_language": language, "overview": overview, **grouped}
+    return {
+        "version_id": str(row.get("current_version_id") or ""),
+        "canonical_job_id": str(row.get("canonical_job_id") or ""),
+        "content_hash": str(row.get("content_hash") or ""),
+        "summary": summary,
+        "structured_description": {},
+        "original_posting": original,
+        "provider": "runr_rules",
+        "model": "",
+        "prompt_version": PROMPT_VERSION,
+    }
 
 
 def build_runr_description(

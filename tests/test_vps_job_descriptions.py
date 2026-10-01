@@ -3,10 +3,11 @@ import pytest
 import sqlite3
 from pathlib import Path
 
-from backend.application.vps_job_descriptions import build_runr_description, build_runr_descriptions, openrouter_generate
+from backend.application.vps_job_descriptions import build_runr_description, build_runr_description_rules, build_runr_descriptions, openrouter_generate
 from backend.bootstrap import create_backend
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 from scripts.process_published_job_descriptions import next_batch, run, save_batch
+from scripts.backfill_published_job_descriptions_rules import run_rules_backfill
 from tests.test_phase_c_personalized_jobs import _seed_catalog
 
 
@@ -38,6 +39,23 @@ def test_builds_shared_english_description_from_german_posting():
     assert result["summary"]["required_qualifications"][0]["source_excerpt"] == "Deutsch C1"
     assert result["original_posting"]["description_text"] == row["description"]
     assert result["version_id"] == "version-1"
+
+
+def test_rule_pass_organizes_german_posting_without_rewriting_its_conditions():
+    row = {
+        "current_version_id": "version-de", "canonical_job_id": "job-de", "content_hash": "hash-de",
+        "description": "Unterstützung im Betrieb.\nAufgaben:\n- Produktionssysteme überwachen\nAnforderungen:\n- Deutsch C1\nVon Vorteil:\n- Grafana\nWas wir bieten:\n- Homeoffice",
+    }
+    result = build_runr_description_rules(row)
+    summary = result["summary"]
+    assert result["provider"] == "runr_rules"
+    assert summary["output_language"] == "de"
+    assert summary["overview"] == "Unterstützung im Betrieb."
+    assert summary["responsibilities"] == [{"text": "Produktionssysteme überwachen", "source_excerpt": "Produktionssysteme überwachen"}]
+    assert summary["required_qualifications"][0]["text"] == "Deutsch C1"
+    assert summary["preferred_qualifications"][0]["text"] == "Grafana"
+    assert summary["benefits"][0]["text"] == "Homeoffice"
+    assert result["original_posting"]["description_text"] == row["description"]
 
 
 def test_rejects_incomplete_model_response_without_writing_fallback():
@@ -78,14 +96,14 @@ def test_backfill_selects_only_current_unprocessed_published_versions(tmp_path: 
             CREATE TABLE canonical_jobs (canonical_job_id TEXT, current_version_id TEXT, title TEXT, canonical_url TEXT);
             CREATE TABLE job_posting_versions (version_id TEXT, version_number INTEGER, content_hash TEXT,
                 description TEXT, payload_json TEXT, location TEXT, apply_url TEXT, created_at TEXT);
-            CREATE TABLE job_description_intelligence (version_id TEXT, content_hash TEXT, prompt_version TEXT);
+            CREATE TABLE job_description_intelligence (version_id TEXT, content_hash TEXT, prompt_version TEXT, provider TEXT);
             INSERT INTO acquisition_publication_head VALUES (1, 'publication');
             INSERT INTO acquisition_publication_jobs VALUES ('publication', 'job-a'), ('publication', 'job-b'), ('publication', 'job-c');
             INSERT INTO canonical_jobs VALUES ('job-a', 'v-a', 'A', ''), ('job-b', 'v-b', 'B', ''), ('job-c', 'v-c', 'C', '');
             INSERT INTO job_posting_versions VALUES ('v-a', 1, 'hash-a', 'Description A', '{}', '', '', '2026-09-30');
             INSERT INTO job_posting_versions VALUES ('v-b', 1, 'hash-b', 'Description B', '{}', '', '', '2026-10-01');
             INSERT INTO job_posting_versions VALUES ('v-c', 1, 'hash-c', '', '{}', '', '', '2026-10-02');
-            INSERT INTO job_description_intelligence VALUES ('v-a', 'hash-a', 'runr_description_v1');
+            INSERT INTO job_description_intelligence VALUES ('v-a', 'hash-a', 'runr_description_v1', 'openrouter');
         """)
     store = SqlitePersonalizedJobsStore(db, initialize=False)
     assert [row["canonical_job_id"] for row in next_batch(store, "", 10)] == ["job-b"]
@@ -114,6 +132,34 @@ def test_shared_description_is_returned_to_multiple_users(tmp_path: Path, monkey
         assert detail["runr_summary"]["overview"] == "Readable overview"
         assert detail["original_posting"]["description_text"]
         assert detail["description_intelligence"]["prompt_version"] == "runr_description_v1"
+
+
+def test_rule_backfill_prepares_all_jobs_and_model_can_upgrade_them(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app)
+    store = app.repositories.personalized_jobs_store
+    cursor_file = tmp_path / "rules-cursor.json"
+    result = run_rules_backfill(store, limit=2, cursor_file=cursor_file, page_size=1)
+    assert result == {"pages": 2, "written": 2, "failed": 0}
+    detail = app.get_personalized_job_detail("user-a", "job-a")
+    assert detail["description_intelligence"]["provider"] == "runr_rules"
+    assert detail["runr_summary"]["overview"]
+    assert [row["canonical_job_id"] for row in next_batch(store, "", 5)] == ["job-a", "job-b"]
+    assert next_batch(store, "", 5, upgrade_rules=False) == []
+
+    model_result = build_runr_description(store.get_published_job_row("job-a"), lambda _: {
+        "source_language": "en", "overview": "Model improved description",
+        "responsibilities": [], "required_qualifications": [],
+        "preferred_qualifications": [], "benefits": [], "application_details": [],
+    })
+    save_batch(store, [model_result])
+    save_batch(store, [build_runr_description_rules(store.get_published_job_row("job-a"))], preserve_model=True)
+    second = run_rules_backfill(store, limit=2, cursor_file=cursor_file, page_size=1)
+    assert second["written"] == 0
+    assert app.get_personalized_job_detail("user-b", "job-a")["runr_summary"]["overview"] == "Model improved description"
 
 
 def test_backfill_writes_shared_description_and_resumes(tmp_path: Path, monkeypatch):

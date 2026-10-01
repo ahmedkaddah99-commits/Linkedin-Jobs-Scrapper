@@ -26,10 +26,12 @@ from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobs
 def next_batch(
     store: SqlitePersonalizedJobsStore, after_id: str, limit: int, *,
     newest: bool = False, excluded_ids: frozenset[str] = frozenset(),
+    upgrade_rules: bool = True,
 ) -> list[dict]:
     cursor_clause = "" if newest else "AND j.canonical_job_id > ?"
     excluded_clause = f"AND j.canonical_job_id NOT IN ({','.join('?' for _ in excluded_ids)})" if excluded_ids else ""
     order_clause = "v.created_at DESC, j.canonical_job_id" if newest else "j.canonical_job_id"
+    rule_clause = "OR d.provider = 'runr_rules'" if upgrade_rules else ""
     parameters = (() if newest else (after_id,)) + tuple(sorted(excluded_ids)) + (PROMPT_VERSION, limit)
     with store._connect() as connection:
         rows = connection.execute(
@@ -46,7 +48,7 @@ def next_batch(
             WHERE h.head_id = 1 {cursor_clause} {excluded_clause}
               AND TRIM(COALESCE(v.description, '')) != ''
               AND (d.version_id IS NULL OR COALESCE(d.content_hash, '') != v.content_hash
-                   OR COALESCE(d.prompt_version, '') != ?)
+                   OR COALESCE(d.prompt_version, '') != ? {rule_clause})
             ORDER BY {order_clause} LIMIT ?
             """,
             parameters,
@@ -54,7 +56,7 @@ def next_batch(
     return [{key: row[key] for key in row.keys()} for row in rows]
 
 
-def save_batch(store: SqlitePersonalizedJobsStore, results: list[dict]) -> None:
+def save_batch(store: SqlitePersonalizedJobsStore, results: list[dict], *, preserve_model: bool = False) -> None:
     """Commit a model response in one remote transaction instead of one per job."""
     now = datetime.now(timezone.utc).isoformat()
     parameters = [(
@@ -64,9 +66,10 @@ def save_batch(store: SqlitePersonalizedJobsStore, results: list[dict]) -> None:
         json.dumps(result["original_posting"], ensure_ascii=False),
         result["provider"], result["model"], result["prompt_version"], now, now, now,
     ) for result in results]
+    conflict_guard = "WHERE job_description_intelligence.provider != 'openrouter'" if preserve_model else ""
     with store.transaction_scope() as connection:
         connection.executemany(
-            """
+            f"""
             INSERT INTO job_description_intelligence (
                 version_id, canonical_job_id, content_hash, summary_json,
                 structured_json, original_json, provider, model,
@@ -83,6 +86,7 @@ def save_batch(store: SqlitePersonalizedJobsStore, results: list[dict]) -> None:
                 prompt_version=excluded.prompt_version,
                 generated_at=excluded.generated_at,
                 updated_at=excluded.updated_at
+                {conflict_guard}
             """,
             parameters,
         )
