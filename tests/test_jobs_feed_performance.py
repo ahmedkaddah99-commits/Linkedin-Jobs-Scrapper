@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.bootstrap import create_backend
-from scripts.backfill_published_job_search import backfill
 from tests.test_phase_c_personalized_jobs import _seed_catalog
 
 
@@ -150,9 +149,6 @@ class JobsFeedPerformanceTests(unittest.TestCase):
     def test_search_finds_company_title_and_posting_skill_from_scalar_query(self):
         app = self._backend()
         _seed_catalog(app)
-        def mark_ready(connection):
-            connection.execute("UPDATE published_job_search_backfill SET ready=1 WHERE id=1")
-        app.repositories.acquisition_store._run_transaction(mark_ready)
         for query, expected_id in (
             ("Acme", "job-a"),
             ("Finance", "job-b"),
@@ -170,17 +166,6 @@ class JobsFeedPerformanceTests(unittest.TestCase):
         renamed = app.get_personalized_jobs("user-a", filters={"q": "Renamed"}, card_view=True)
         self.assertEqual(renamed["total"], 1)
 
-    def test_bounded_backfill_marks_existing_catalog_ready(self):
-        app = self._backend()
-        _seed_catalog(app)
-        db_path = app.repositories.personalized_jobs_store.db_path
-        self.assertEqual(backfill(db_path, batch_size=1)[0], 2)
-        self.assertEqual(backfill(db_path, batch_size=1), (2, 2))
-        with app.repositories.personalized_jobs_store._connect() as connection:
-            state = connection.execute("SELECT ready FROM published_job_search_backfill WHERE id=1").fetchone()
-            self.assertEqual(state["ready"], 1)
-        page = app.get_personalized_jobs("user-a", filters={"q": "operations"}, card_view=True)
-        self.assertEqual(page["total"], 1)
 
     def test_filter_capability_scan_does_not_hydrate_job_history(self):
         app = self._backend()

@@ -3425,6 +3425,19 @@ def _apply_published_job_search_index_migration(connection: DatabaseConnection) 
     )
 
 
+def _remove_unusable_published_job_fts_migration(connection: DatabaseConnection) -> None:
+    """Remove FTS writes that stall on remote Turso; catalog reads use IDs."""
+    connection.executescript(
+        """
+        DROP TRIGGER IF EXISTS published_job_search_insert;
+        DROP TRIGGER IF EXISTS published_job_search_update;
+        DROP TRIGGER IF EXISTS published_job_search_delete;
+        DROP TRIGGER IF EXISTS published_job_search_version_insert;
+        DROP TRIGGER IF EXISTS published_job_search_company_name;
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3779,6 +3792,11 @@ MIGRATIONS = (
         "065_published_job_search_index",
         "Index current job title, company and posting text for fast catalog search.",
         _apply_published_job_search_index_migration,
+    ),
+    Migration.from_callable(
+        "066_remove_unusable_published_job_fts",
+        "Remove FTS writes that stall on Turso after switching catalog search to bounded candidate IDs.",
+        _remove_unusable_published_job_fts_migration,
     ),
 )
 
