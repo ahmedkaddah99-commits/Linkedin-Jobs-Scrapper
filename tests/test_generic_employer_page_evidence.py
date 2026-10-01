@@ -56,3 +56,15 @@ def test_publication_excludes_old_generic_navigation_rows_even_with_advisory_com
     assert [item["canonical_job_id"] for item in snapshot] == ["job-real"]
     assert [item["canonical_job_id"] for item in rejected] == ["job-navigation", "job-real"]
     assert rejected[0]["reasons"][0]["code"] == "generic_navigation_title"
+
+
+def test_publication_excludes_obvious_navigation_title_without_employer_provenance() -> None:
+    rows = [{
+        "canonical_job_id": "old-page", "company_id": "company-1", "title": "About Us",
+        "canonical_url": "https://example.com/about", "source_ats": "unknown",
+        "version_payload_json": "{}",
+    }]
+    policy = SimpleNamespace(missing_apply_is_blocker=False, completeness_mode="advisory")
+    snapshot, rejected = SqliteAcquisitionStore._publication_rows_with_completeness(rows, policy=policy)
+    assert snapshot == []
+    assert rejected[0]["reasons"][0]["code"] == "generic_navigation_title"
