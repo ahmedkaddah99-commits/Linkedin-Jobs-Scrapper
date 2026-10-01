@@ -444,6 +444,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const skipNextFeedRef = useRef(false);
   const usefulRenderMarkedRef = useRef(false);
   const feedRequestMsRef = useRef(null);
+  const loadMoreAbortRef = useRef(null);
   const fetchedDetailIdRef = useRef("");
   const interactiveMarkedRef = useRef(false);
 
@@ -631,12 +632,16 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }, [activeTab, request, selectedJob?.company_id]);
 
   function updateFilter(name, value) {
+    loadMoreAbortRef.current?.abort();
+    setFeed((current) => current ? { ...current, next_cursor: null } : current);
     setFilters((current) => ({ ...current, [name]: value }));
     setFeedback("");
     logPersonalizedEvent("jobs_filter_changed", { route: "/jobs", filterName: name, dataMode: personalizedDataMode });
   }
 
   function clearFilters() {
+    loadMoreAbortRef.current?.abort();
+    setFeed((current) => current ? { ...current, next_cursor: null } : current);
     setFilters(INITIAL_PERSONALIZED_JOB_FILTERS);
     setFeedback("Filters cleared.");
   }
@@ -746,18 +751,21 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   async function loadMore() {
-    if (!feed?.next_cursor || loadingMoreRef.current) return;
+    if (!feed?.next_cursor || loading || loadingMoreRef.current) return;
     loadingMoreRef.current = true;
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
     setLoadingMore(true);
     try {
       const cursor = feed.next_cursor;
       const query = buildPersonalizedJobsQuery(filters, { cursor, limit: 25, view: "cards" });
-      const payload = await request(`/personalized-jobs?${query}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS });
+      const payload = await request(`/personalized-jobs?${query}`, { signal: controller.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS });
       setFeed((current) => current?.next_cursor === cursor
         ? { ...payload, jobs: [...(current.jobs || []), ...(payload?.jobs || [])] } : current);
     } catch (error) {
-      setFeedback(error?.message || "Unable to load more jobs.");
+      if (!controller.signal.aborted) setFeedback(error?.message || "Unable to load more jobs.");
     } finally {
+      if (loadMoreAbortRef.current === controller) loadMoreAbortRef.current = null;
       loadingMoreRef.current = false;
       setLoadingMore(false);
     }
