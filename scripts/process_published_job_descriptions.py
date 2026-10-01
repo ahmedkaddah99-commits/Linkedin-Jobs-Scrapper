@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,40 @@ def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int) ->
     return [{key: row[key] for key in row.keys()} for row in rows]
 
 
+def save_batch(store: SqlitePersonalizedJobsStore, results: list[dict]) -> None:
+    """Commit a model response in one remote transaction instead of one per job."""
+    now = datetime.now(timezone.utc).isoformat()
+    parameters = [(
+        result["version_id"], result["canonical_job_id"], result["content_hash"],
+        json.dumps(result["summary"], ensure_ascii=False),
+        json.dumps(result["structured_description"], ensure_ascii=False),
+        json.dumps(result["original_posting"], ensure_ascii=False),
+        result["provider"], result["model"], result["prompt_version"], now, now, now,
+    ) for result in results]
+    with store.transaction_scope() as connection:
+        connection.executemany(
+            """
+            INSERT INTO job_description_intelligence (
+                version_id, canonical_job_id, content_hash, summary_json,
+                structured_json, original_json, provider, model,
+                prompt_version, generated_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(version_id) DO UPDATE SET
+                canonical_job_id=excluded.canonical_job_id,
+                content_hash=excluded.content_hash,
+                summary_json=excluded.summary_json,
+                structured_json=excluded.structured_json,
+                original_json=excluded.original_json,
+                provider=excluded.provider,
+                model=excluded.model,
+                prompt_version=excluded.prompt_version,
+                generated_at=excluded.generated_at,
+                updated_at=excluded.updated_at
+            """,
+            parameters,
+        )
+
+
 def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) -> dict:
     cursor = ""
     if cursor_file.exists():
@@ -80,25 +115,15 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
             counts["failed"] += len(batch)
             errors.append(type(exc).__name__)
             break
-        previous_cursor = cursor
-        first_failed_index = None
-        for row, result in zip(batch, results):
-            try:
-                store.save_description_intelligence(**result)
-            except Exception as exc:
-                counts["failed"] += 1
-                errors.append(type(exc).__name__)
-                if first_failed_index is None:
-                    first_failed_index = counts["attempted"]
-            else:
-                counts["completed"] += 1
-            counts["attempted"] += 1
-            if first_failed_index is None:
-                cursor = str(row["canonical_job_id"])
-        if first_failed_index is not None:
-            if not cursor:
-                cursor = previous_cursor
+        counts["attempted"] += len(batch)
+        try:
+            save_batch(store, results)
+        except Exception as exc:
+            counts["failed"] += len(batch)
+            errors.append(type(exc).__name__)
             break
+        counts["completed"] += len(batch)
+        cursor = str(batch[-1]["canonical_job_id"])
     cursor_file.parent.mkdir(parents=True, exist_ok=True)
     temp = cursor_file.with_suffix(".tmp")
     temp.write_text(json.dumps({"after_id": cursor}), encoding="utf-8")

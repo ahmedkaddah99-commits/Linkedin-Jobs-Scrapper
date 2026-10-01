@@ -6,7 +6,7 @@ from pathlib import Path
 from backend.application.vps_job_descriptions import build_runr_description, build_runr_descriptions, openrouter_generate
 from backend.bootstrap import create_backend
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
-from scripts.process_published_job_descriptions import next_batch, run
+from scripts.process_published_job_descriptions import next_batch, run, save_batch
 from tests.test_phase_c_personalized_jobs import _seed_catalog
 
 
@@ -151,20 +151,20 @@ def test_failed_write_is_retried_before_cursor_advances(tmp_path: Path, monkeypa
         } for posting in postings]}
 
     monkeypatch.setattr("scripts.process_published_job_descriptions.openrouter_generate", generate)
-    original_save = store.save_description_intelligence
+    original_save = save_batch
     failed_once = False
 
-    def fail_first(**kwargs):
+    def fail_first(store, results):
         nonlocal failed_once
         if not failed_once:
             failed_once = True
             raise ValueError("temporary write failure")
-        return original_save(**kwargs)
+        return original_save(store, results)
 
-    monkeypatch.setattr(store, "save_description_intelligence", fail_first)
+    monkeypatch.setattr("scripts.process_published_job_descriptions.save_batch", fail_first)
     cursor_file = tmp_path / "cursor.json"
     first = run(store, limit=1, cursor_file=cursor_file)
-    assert first["completed"] == 1 and first["failed"] == 1
+    assert first["completed"] == 0 and first["failed"] == 2
     assert json.loads(cursor_file.read_text())["after_id"] == ""
     second = run(store, limit=1, cursor_file=cursor_file)
-    assert second["completed"] == 1 and second["failed"] == 0
+    assert second["completed"] == 2 and second["failed"] == 0
