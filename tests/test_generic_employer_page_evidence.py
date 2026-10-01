@@ -105,3 +105,17 @@ def test_publication_rejects_bonava_navigation_with_normalized_url() -> None:
     snapshot, rejected = SqliteAcquisitionStore._publication_rows_with_completeness(rows, policy=policy)
     assert snapshot == []
     assert rejected[0]["reasons"][0]["code"] == "unverified_generic_page"
+
+
+def test_ats_named_employer_with_embedded_marketing_page_is_rejected() -> None:
+    page = {"title": "A modern ATS that helps you manage your unique requirements at scale",
+            "job_detail_url": "https://ashbyhq.com/enterprise",
+            "source_raw_payload": {"format": "embedded-json"}}
+    assert not _is_accepted_job_page(page, "ashby")
+    rows = [{"canonical_job_id": "ashby-marketing", "company_id": "ashby", "title": page["title"],
+             "canonical_url": page["job_detail_url"], "source_ats": "ashby",
+             "version_payload_json": json.dumps({"source_provider": "ashby", "extraction_method": "embedded_json"})}]
+    policy = SimpleNamespace(missing_apply_is_blocker=False, completeness_mode="advisory")
+    snapshot, rejected = SqliteAcquisitionStore._publication_rows_with_completeness(rows, policy=policy)
+    assert snapshot == []
+    assert rejected[0]["reasons"][0]["code"] == "unverified_generic_page"

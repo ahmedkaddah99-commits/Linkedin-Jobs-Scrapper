@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.acquisition.job_page_evidence import generic_employer_non_job_reason, is_navigation_title
+from backend.acquisition.job_page_evidence import employer_page_needs_verification, generic_employer_non_job_reason, is_navigation_title
 from backend.database.connection import connect_database
 from backend.repositories.sqlite_acquisition import (
     SqliteAcquisitionStore, _assert_publication_size_is_safe,
@@ -43,9 +43,7 @@ def load_producer_evidence(state_db: Path) -> dict[tuple[str, str, str], bool]:
             key = job_identity(record.get("source_job_url"), record.get("job_title"))
             if not key[0] or not key[2]:
                 continue
-            rejected = bool(generic_employer_non_job_reason(record)) if (
-                str(record.get("source_provider") or "").casefold() == "generic_employer_site"
-            ) else False
+            rejected = bool(generic_employer_non_job_reason(record)) if employer_page_needs_verification(record) else False
             evidence[key] = evidence.get(key, False) or rejected
     return evidence
 
@@ -70,7 +68,7 @@ def classify_head(
             row = unmatched_rows.get(str(job.get("canonical_job_id") or ""))
             if row:
                 record = {**row, "title": job.get("title"), "canonical_url": job.get("canonical_url")}
-                if str(record.get("source_provider") or "").casefold() == "generic_employer_site":
+                if employer_page_needs_verification(record):
                     if generic_employer_non_job_reason(record):
                         reason = "catalog_rejected"
         if reason:

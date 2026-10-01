@@ -868,7 +868,7 @@ def test_unsupported_ats_falls_through_to_generic_extraction(monkeypatch: pytest
                     "job_id": "ashby-1",
                     "title": "Product Engineer",
                     "job_detail_url": "https://jobs.ashbyhq.com/acme/ashby-1",
-                    "description": "Build products.",
+                    "description": "Build reliable products and maintain engineering systems for customers and teams across the business. " * 2,
                     "location": "Berlin, Germany",
                     "source_raw_payload": {"format": "json-ld"},
                 }

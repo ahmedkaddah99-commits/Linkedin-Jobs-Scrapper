@@ -36,6 +36,16 @@ def is_navigation_title(record: Mapping[str, object]) -> bool:
     )
 
 
+def employer_page_needs_verification(record: Mapping[str, object]) -> bool:
+    method = _text(record.get("extraction_method") or record.get("format")).casefold().replace("-", "_")
+    raw_payload = record.get("source_raw_payload")
+    if not method and isinstance(raw_payload, Mapping):
+        method = _text(raw_payload.get("format")).casefold().replace("-", "_")
+    return method in {"embedded_json", "browser_rendered", "static_html", "html", "xhr", "json_ld"} or (
+        _text(record.get("source_provider") or record.get("source_ats")).casefold() == "generic_employer_site"
+    )
+
+
 def job_detail_url_has_evidence(value: object) -> bool:
     """Require a job-specific URL, not a generic career landing page."""
 
@@ -91,4 +101,4 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     return ""
 
 
-__all__ = ["generic_employer_non_job_reason", "is_navigation_title", "job_detail_url_has_evidence"]
+__all__ = ["employer_page_needs_verification", "generic_employer_non_job_reason", "is_navigation_title", "job_detail_url_has_evidence"]
