@@ -200,6 +200,45 @@ def test_browser_no_jobs_cooldown_survives_negative_evidence_override(tmp_path: 
         state.close()
 
 
+def test_confirmed_empty_browser_site_is_not_scheduled_again(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    company = _company_with_id("browser", "Browser")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("browser", json.dumps({"coverage": {"outcome": "confirmed_zero", "method_attempts": [
+                {"method": "browser_rendered_collection", "status": "attempted"}
+            ]}}), "no_jobs", "", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.commit()
+        work, _phase = select_automatic_employer_work(state, [company], limit=10, now="2026-01-10T00:00:00Z")
+        assert work == []
+    finally:
+        state.close()
+
+
+def test_previously_productive_browser_site_stays_due_after_empty_scan(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    company = _company_with_id("browser", "Browser")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("browser", json.dumps({"browser_ever_productive": True, "coverage": {
+                "outcome": "confirmed_zero", "method_attempts": [
+                    {"method": "browser_rendered_collection", "status": "attempted"}
+                ]}}), "no_jobs", "", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, [company], limit=10, now="2026-01-10T00:00:00Z")
+        assert (phase, work) == ("browser", [company])
+    finally:
+        state.close()
+
+
 def test_automatic_queue_rotates_daily_direct_and_browser_work(tmp_path: Path) -> None:
     from scripts.master_employer_jobs_catalog import select_automatic_employer_work
 

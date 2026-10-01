@@ -246,6 +246,8 @@ def select_automatic_employer_work(
     for company in companies:
         key = company.canonical_company_id or company.website_url
         attempts = audit.get(key, {}).get("method_attempts", [])
+        outcome = audit.get(key, {}).get("outcome", "")
+        browser_ever_productive = bool(audit.get(key, {}).get("browser_ever_productive"))
         browser_deferred = any(
             attempt.get("method", "").startswith("browser_rendered")
             and attempt.get("status") == "deferred"
@@ -256,6 +258,11 @@ def select_automatic_employer_work(
             and attempt.get("status") == "attempted"
             for attempt in attempts
         )
+        # A confirmed empty browser scan is evidence that this source did not
+        # produce jobs. Keep uncertain failures retryable, and keep sites that
+        # have produced jobs in the daily queue even after a quiet scan.
+        if browser_attempted and outcome == "confirmed_zero" and not browser_ever_productive:
+            continue
         if key not in due and not (browser_deferred and not browser_attempted):
             continue
         if browser_deferred or browser_attempted:
@@ -1963,12 +1970,36 @@ class EmployerState:
         company_key = result.company.canonical_company_id or result.company.website_url
         result.outcome = result.resolved_outcome()
         with self.connection:
+            previous_row = self.connection.execute(
+                "SELECT payload_json FROM companies WHERE company_key=?", (company_key,)
+            ).fetchone()
+            try:
+                previous = json.loads(previous_row[0]) if previous_row else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                previous = {}
+            previous_coverage = previous.get("coverage") if isinstance(previous, dict) else {}
+            previous_browser_attempted = any(
+                attempt.get("method", "").startswith("browser_rendered")
+                and attempt.get("status") == "attempted"
+                for attempt in (previous_coverage.get("method_attempts") or [])
+            ) if isinstance(previous_coverage, dict) else False
+            browser_attempted = any(
+                attempt.get("method", "").startswith("browser_rendered")
+                and attempt.get("status") == "attempted"
+                for attempt in result.coverage.get("method_attempts", [])
+            )
+            browser_ever_productive = bool(
+                previous.get("browser_ever_productive")
+                or (previous_browser_attempted and previous.get("jobs"))
+                or (browser_attempted and result.jobs)
+            ) if isinstance(previous, dict) else bool(browser_attempted and result.jobs)
             self.connection.execute(
                 "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(company_key) DO UPDATE SET payload_json=excluded.payload_json,status=excluded.status,error=excluded.error,updated_at=excluded.updated_at",
                 (
                     company_key,
-                    json.dumps({**asdict(result), "generation_id": generation_id}, ensure_ascii=False),
+                    json.dumps({**asdict(result), "generation_id": generation_id,
+                                "browser_ever_productive": browser_ever_productive}, ensure_ascii=False),
                     result.status,
                     json.dumps(result.failures, ensure_ascii=False),
                     utc_now(),
@@ -2030,6 +2061,13 @@ class EmployerState:
                 "website_url": _text((payload.get("company") or {}).get("website_url")) if isinstance(payload, Mapping) else "",
                 "status": str(row["status"] or ""),
                 "outcome": _text(coverage.get("outcome")) if isinstance(coverage, Mapping) else "",
+                "browser_ever_productive": bool(payload.get("browser_ever_productive") or (
+                    payload.get("jobs") and any(
+                        attempt.get("method", "").startswith("browser_rendered")
+                        and attempt.get("status") == "attempted"
+                        for attempt in (coverage.get("method_attempts") or [])
+                    )
+                )) if isinstance(payload, Mapping) and isinstance(coverage, Mapping) else False,
                 "method_attempts": list(coverage.get("method_attempts") or []) if isinstance(coverage, Mapping) else [],
                 "source_inventory": list(coverage.get("source_inventory") or []) if isinstance(coverage, Mapping) else [],
                 "updated_at": str(row["updated_at"] or ""),
