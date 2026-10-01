@@ -21,6 +21,7 @@ from backend.application.vps_job_descriptions import (
     openrouter_generate,
 )
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+from backend.repositories.sqlite_migrations import current_migration_head
 
 
 def next_batch(
@@ -186,6 +187,7 @@ def main() -> int:
         parser.error("limit must be between 1 and 1000")
     if not os.getenv("OPENROUTER_API_KEY"):
         parser.error("OPENROUTER_API_KEY is required")
+    os.environ["RUNR_MIGRATION_HEAD"] = current_migration_head()
     store = SqlitePersonalizedJobsStore(Path(args.data_dir) / "backend.sqlite3", initialize=False)
     result = run(store, limit=args.limit, cursor_file=Path(args.cursor_file))
     print(json.dumps(result, sort_keys=True))

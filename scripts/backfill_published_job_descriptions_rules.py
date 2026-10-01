@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.application.vps_job_descriptions import build_runr_description_rules
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+from backend.repositories.sqlite_migrations import current_migration_head
 from scripts.process_published_job_descriptions import next_batch, save_batch
 
 
@@ -79,6 +80,7 @@ def main() -> int:
         parser.error("limit must be between 1 and 100000")
     if not 1 <= args.page_size <= 500:
         parser.error("page-size must be between 1 and 500")
+    os.environ["RUNR_MIGRATION_HEAD"] = current_migration_head()
     store = SqlitePersonalizedJobsStore(Path(args.data_dir) / "backend.sqlite3", initialize=False)
     result = run_rules_backfill(store, limit=args.limit, cursor_file=Path(args.cursor_file), page_size=args.page_size)
     print(json.dumps(result, sort_keys=True), flush=True)
