@@ -313,6 +313,7 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
 
 function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const summary = job.runrSummary || {};
+  const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
   const sections = [
     ["Responsibilities", summary.responsibilities],
     ["Required qualifications", summary.required_qualifications],
@@ -327,7 +328,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
       <section className="jobs-reading__section"><h2>Overview</h2><p>{summary.overview}</p></section>
       {sections.map(([title, items]) => Array.isArray(items) && items.length ? <section className="jobs-reading__section" key={title}><h2>{title}</h2><ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item.text || String(item)}</li>)}</ul></section> : null)}
       <p className="jobs-reading__note">Runr organized this description from the employer’s posting. View the Original job post tab for the employer’s exact wording.</p>
-    </> : <section className="jobs-reading__section" role="status"><h2>Runr description is being prepared</h2><p>The original employer posting is available in the next tab.</p></section>}
+    </> : <section className="jobs-reading__section" role="status"><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></section>}
     <section className="jobs-reading__section"><h2>Company</h2><p>{company?.name || job.company}</p>{company?.profile?.fields?.description?.state === "known" ? <p>{company.profile.fields.description.value}</p> : null}</section>
     <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
   </article>;
@@ -335,7 +336,8 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
 
 function OriginalJob({ job }) {
   const original = job.originalPosting || {};
-  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div><p>{job.company}</p><h1>{original.title || job.title}</h1><span>Original employer posting</span></div></header><DescriptionBlock description={original.description_text || original.description || job.description} html={original.description_html} /></article>;
+  const description = original.description_text || original.description || job.description;
+  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div><p>{job.company}</p><h1>{original.title || job.title}</h1><span>Original employer posting</span></div></header>{description || original.description_html ? <DescriptionBlock description={description} html={original.description_html} /> : <p>This employer posting has no description text available.</p>}</article>;
 }
 
 function DrawerFilterControl({ filter, value, onChange }) {
