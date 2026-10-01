@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1087,10 +1088,19 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         filters = dict(filters or {})
         predicates: list[str] = []
         params: list[Any] = []
-        text_expr = "LOWER(COALESCE(catalog.title, '') || ' ' || COALESCE(catalog.company, '') || ' ' || COALESCE(catalog.location, '') || ' ' || COALESCE(catalog.version_location, '') || ' ' || COALESCE(catalog.description, '') || ' ' || COALESCE(catalog.version_payload_json, ''))"
-        for term in filters.get("search_text") or []:
-            predicates.append(f"{text_expr} LIKE ?")
-            params.append(f"%{str(term).casefold()}%")
+        search_terms = filters.get("search_text") or []
+        for term in (search_terms if isinstance(search_terms, (list, tuple, set)) else [search_terms]):
+            tokens = re.findall(r"[^\W_]+", str(term).casefold(), flags=re.UNICODE)[:12]
+            if not tokens:
+                predicates.append("0 = 1")
+                continue
+            predicates.append(
+                "catalog.canonical_job_id IN ("
+                "SELECT j.canonical_job_id FROM published_job_search "
+                "JOIN canonical_jobs j ON j.rowid = published_job_search.rowid "
+                "WHERE published_job_search MATCH ?)"
+            )
+            params.append(" AND ".join(f'"{token}"*' for token in tokens))
 
         field_exprs = {
             "role": ["catalog.title", "json_extract(catalog.version_payload_json, '$.role')", "json_extract(catalog.version_payload_json, '$.roles')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.function')"],
@@ -1311,44 +1321,42 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 )
                 predicates = [f"({item})" for item in predicates]
                 count_where_sql = " AND ".join(predicates) if predicates else "1=1"
-                count_params = [str(user_id), str(publication["publication_id"]), *filter_params]
-                total = int(
-                    connection.execute(
-                        f"SELECT COUNT(*) AS total FROM ({candidate_source}) AS page WHERE {count_where_sql}",
-                        tuple(count_params),
-                    ).fetchone()["total"]
-                    or 0
-                )
+                # Materialize only the matching IDs and sort keys once. Text
+                # search otherwise repeats the large description/JSON scan for
+                # the count and the requested page.
+                candidate_params = [str(user_id), str(publication["publication_id"]), *filter_params]
+                cursor_params: list[Any] = []
                 if cursor:
-                    predicates.append(
-                        f"({sort_expr} < ? OR ({sort_expr} = ? AND page.canonical_job_id < ?))"
-                    )
                     cursor_sort = str(cursor.get("sort") or "")
-                    filter_params.extend(
-                        [cursor_sort, cursor_sort, str(cursor.get("canonical_job_id") or "")]
-                    )
-                where_sql = " AND ".join(predicates) if predicates else "1=1"
-                page_ids = connection.execute(
+                    cursor_params = [cursor_sort, cursor_sort, str(cursor.get("canonical_job_id") or "")]
+                cursor_where = (
+                    "WHERE (page.sort_at < ? OR (page.sort_at = ? AND page.canonical_job_id < ?))"
+                    if cursor else ""
+                )
+                match_sort = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
+                page_result = connection.execute(
                     f"""
                     /* feed_page_ids */
-                    SELECT page.canonical_job_id
-                    FROM ({candidate_source}) AS page
-                    WHERE {where_sql}
-                    ORDER BY {sort_expr} DESC, page.canonical_job_id DESC
-                    LIMIT ?
+                    WITH matches AS MATERIALIZED (
+                        SELECT page.canonical_job_id, {match_sort} AS sort_at
+                        FROM ({candidate_source}) AS page WHERE {count_where_sql}
+                    ), totals AS (SELECT COUNT(*) AS total FROM matches),
+                    page_ids AS (
+                        SELECT page.canonical_job_id, page.sort_at FROM matches AS page
+                        {cursor_where}
+                        ORDER BY page.sort_at DESC, page.canonical_job_id DESC LIMIT ?
+                    )
+                    SELECT page_ids.canonical_job_id, totals.total
+                    FROM totals LEFT JOIN page_ids ON 1=1
                     """,
-                    (
-                        str(user_id),
-                        str(publication["publication_id"]),
-                        *filter_params,
-                        limit + 1,
-                    ),
+                    (*candidate_params, *cursor_params, limit + 1),
                 ).fetchall()
+                total = int(page_result[0]["total"] or 0)
                 rows = self._hydrate_feed_page(
                     connection,
                     publication_id=str(publication["publication_id"]),
                     user_id=str(user_id),
-                    canonical_job_ids=[str(row["canonical_job_id"]) for row in page_ids],
+                    canonical_job_ids=[str(row["canonical_job_id"]) for row in page_result if row["canonical_job_id"] is not None],
                 )
                 return {
                     "publication": publication_payload,

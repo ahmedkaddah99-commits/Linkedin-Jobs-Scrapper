@@ -3358,6 +3358,72 @@ def _apply_company_identity_crosswalk_migration(connection: DatabaseConnection) 
     )
 
 
+def _apply_published_job_search_index_migration(connection: DatabaseConnection) -> None:
+    """Index the current posting text once, including existing catalog jobs."""
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_jobs'"
+    ).fetchone() is None:
+        return  # Legacy databases without the acquisition catalog.
+    connection.executescript(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS published_job_search USING fts5(
+            title, company, description, payload_json
+        );
+        DELETE FROM published_job_search;
+        INSERT INTO published_job_search(rowid, title, company, description, payload_json)
+        SELECT j.rowid, j.title, c.canonical_name,
+               COALESCE(v.description, ''), COALESCE(v.payload_json, '')
+        FROM canonical_jobs j
+        JOIN canonical_companies c ON c.company_id = j.company_id
+        LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id;
+
+        CREATE TRIGGER IF NOT EXISTS published_job_search_insert
+        AFTER INSERT ON canonical_jobs BEGIN
+            INSERT INTO published_job_search(rowid, title, company, description, payload_json)
+            SELECT NEW.rowid, NEW.title, c.canonical_name,
+                   COALESCE(v.description, ''), COALESCE(v.payload_json, '')
+            FROM canonical_companies c
+            LEFT JOIN job_posting_versions v ON v.version_id = NEW.current_version_id
+            WHERE c.company_id = NEW.company_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS published_job_search_update
+        AFTER UPDATE OF title, company_id, current_version_id ON canonical_jobs BEGIN
+            DELETE FROM published_job_search WHERE rowid = OLD.rowid;
+            INSERT INTO published_job_search(rowid, title, company, description, payload_json)
+            SELECT NEW.rowid, NEW.title, c.canonical_name,
+                   COALESCE(v.description, ''), COALESCE(v.payload_json, '')
+            FROM canonical_companies c
+            LEFT JOIN job_posting_versions v ON v.version_id = NEW.current_version_id
+            WHERE c.company_id = NEW.company_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS published_job_search_delete
+        AFTER DELETE ON canonical_jobs BEGIN
+            DELETE FROM published_job_search WHERE rowid = OLD.rowid;
+        END;
+        CREATE TRIGGER IF NOT EXISTS published_job_search_version_insert
+        AFTER INSERT ON job_posting_versions BEGIN
+            DELETE FROM published_job_search
+            WHERE rowid IN (SELECT rowid FROM canonical_jobs WHERE current_version_id = NEW.version_id);
+            INSERT INTO published_job_search(rowid, title, company, description, payload_json)
+            SELECT j.rowid, j.title, c.canonical_name, NEW.description, NEW.payload_json
+            FROM canonical_jobs j JOIN canonical_companies c ON c.company_id = j.company_id
+            WHERE j.current_version_id = NEW.version_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS published_job_search_company_name
+        AFTER UPDATE OF canonical_name ON canonical_companies BEGIN
+            DELETE FROM published_job_search
+            WHERE rowid IN (SELECT rowid FROM canonical_jobs WHERE company_id = NEW.company_id);
+            INSERT INTO published_job_search(rowid, title, company, description, payload_json)
+            SELECT j.rowid, j.title, NEW.canonical_name,
+                   COALESCE(v.description, ''), COALESCE(v.payload_json, '')
+            FROM canonical_jobs j
+            LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            WHERE j.company_id = NEW.company_id;
+        END;
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3707,6 +3773,11 @@ MIGRATIONS = (
         "064_acquisition_publication_target_scope",
         "Create durable transaction-owned target scopes for read-efficient publication.",
         _apply_acquisition_publication_target_scope_migration,
+    ),
+    Migration.from_callable(
+        "065_published_job_search_index",
+        "Index current job title, company and posting text for fast catalog search.",
+        _apply_published_job_search_index_migration,
     ),
 )
 

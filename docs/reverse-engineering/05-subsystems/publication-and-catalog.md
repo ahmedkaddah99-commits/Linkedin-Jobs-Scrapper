@@ -164,6 +164,10 @@ Never run the publisher against a real data dir outside an authorized host (it w
 - Untracked `docs/reports/RUNR_PRODUCTION_COMPLETION_REPORT_2026-09-12.md` (feature checkout, not in git; T06): VPS release `4a1b1df5`; publisher timer described as enabled (host state UNKNOWN).
 - `docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md` (WS-7 owns): Render-side catalog state as of `5dfdd106`, documentary only.
 
+### Customer catalog search (2026-10-01)
+
+Migration `065_published_job_search_index` backfills an FTS5 index for current job title, company, description, and posting payload. Triggers maintain it when canonical jobs, current posting versions, or company names change. `SqlitePersonalizedJobsStore.query_published_jobs` uses the index for text search and materializes matching IDs once for both the total and the page. The search API normalizes a scalar `q` into one search term; previously the repository iterated its characters and ran a separate full-text predicate per character. Search still restricts results to the current publication and applies user visibility and other filters before returning jobs. Verify with `tests/test_jobs_feed_performance.py` and `tests/test_database_migrations.py`.
+
 ## 10. Confirmed gaps and unresolved questions
 
 | ID | Gap |

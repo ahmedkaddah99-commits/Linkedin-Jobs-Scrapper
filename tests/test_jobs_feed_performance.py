@@ -110,16 +110,61 @@ class JobsFeedPerformanceTests(unittest.TestCase):
             result = store.query_published_jobs("user-a", limit=1, filters={"sort": "newest"})
 
         self.assertEqual(len(result["rows"]), 2)
-        count_sql = next(sql for sql in statements if "SELECT COUNT(*) AS total" in sql)
-        self.assertNotIn("job_applicant_snapshots", count_sql)
-        self.assertNotIn("personalized_job_evaluations", count_sql)
-        self.assertNotIn("job_posting_versions", count_sql)
         page_sql = next(sql for sql in statements if "feed_page_ids" in sql)
+        self.assertIn("SELECT COUNT(*) AS total FROM matches", page_sql)
+        self.assertIn("WITH matches AS MATERIALIZED", page_sql)
         self.assertIn("LIMIT 2", page_sql)
         self.assertNotIn("job_applicant_snapshots", page_sql)
+        self.assertNotIn("personalized_job_evaluations", page_sql)
+        self.assertNotIn("job_posting_versions", page_sql)
         hydration_sql = next(sql for sql in statements if "feed_page_hydration" in sql)
         self.assertIn("j.canonical_job_id IN", hydration_sql)
         self.assertNotIn("ROW_NUMBER() OVER", hydration_sql)
+
+    def test_search_counts_and_pages_from_one_filtered_catalog_scan(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        statements: list[str] = []
+        original_connect = store._connect
+
+        @contextmanager
+        def traced_connect():
+            with original_connect() as connection:
+                connection._connection.set_trace_callback(statements.append)
+                yield connection
+
+        with patch.object(store, "_connect", side_effect=traced_connect):
+            first = store.query_published_jobs("user-a", filters={"search_text": ["analyst"], "sort": "newest"}, limit=1)
+            if first["rows"]:
+                row = first["rows"][0]
+                second = store.query_published_jobs("user-a", filters={"search_text": ["analyst"], "sort": "newest"}, limit=1, cursor={"sort": row["last_verified_at"], "canonical_job_id": row["canonical_job_id"]})
+                self.assertEqual(second["total"], first["total"])
+                self.assertEqual(len(second["rows"]), 1)
+
+        self.assertEqual(first["total"], 2)
+        self.assertEqual(sum("feed_page_ids" in sql for sql in statements), 1 + bool(first["rows"]))
+        self.assertFalse(any("SELECT COUNT(*) AS total FROM (" in sql for sql in statements))
+
+    def test_search_finds_company_title_and_posting_skill_from_scalar_query(self):
+        app = self._backend()
+        _seed_catalog(app)
+        for query, expected_id in (
+            ("Acme", "job-a"),
+            ("Finance", "job-b"),
+            ("operations", "job-a"),
+        ):
+            page = app.get_personalized_jobs("user-a", filters={"q": query}, card_view=True)
+            self.assertEqual(page["total"], 1, query)
+            self.assertEqual(page["jobs"][0]["posting_id"], expected_id)
+
+        # The index follows edits to the current version and company name.
+        store = app.repositories.acquisition_store
+        def rename(connection):
+            connection.execute("UPDATE canonical_companies SET canonical_name='Renamed Labs' WHERE company_id='company-a'")
+        store._run_transaction(rename)
+        renamed = app.get_personalized_jobs("user-a", filters={"q": "Renamed"}, card_view=True)
+        self.assertEqual(renamed["total"], 1)
 
     def test_filter_capability_scan_does_not_hydrate_job_history(self):
         app = self._backend()

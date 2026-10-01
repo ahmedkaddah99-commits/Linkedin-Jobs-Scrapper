@@ -250,7 +250,7 @@ def normalize_filters(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         key = _canonical_filter_key(str(raw_key))
         if raw_value in (None, "", [], {}):
             continue
-        if key in {"role", "category", "location", "work_arrangement", "employment_type", "experience_level", "language", "work_authorization", "sponsorship", "company", "industry", "company_size", "company_stage", "funding_stage", "hidden_companies", "education", "preferred_major", "security_clearance", "lifting_requirement"}:
+        if key in {"search_text", "role", "category", "location", "work_arrangement", "employment_type", "experience_level", "language", "work_authorization", "sponsorship", "company", "industry", "company_size", "company_stage", "funding_stage", "hidden_companies", "education", "preferred_major", "security_clearance", "lifting_requirement"}:
             normalized[key] = _unique_strings(raw_value)
         elif key in {"salary_min", "salary_max", "funding_min", "funding_max", "founded_year_min", "founded_year_max", "funding_year_min", "funding_year_max", "posted_within_days"}:
             try:
