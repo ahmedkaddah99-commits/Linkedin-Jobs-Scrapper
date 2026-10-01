@@ -29,6 +29,13 @@ def _text(value: object) -> str:
     return " ".join(str(value or "").split())
 
 
+def is_navigation_title(record: Mapping[str, object]) -> bool:
+    title = _text(record.get("job_title") or record.get("title")).casefold()
+    return title in _NAVIGATION_TITLES or title.startswith(
+        ("about us ", "contact us ", "privacy policy ")
+    )
+
+
 def job_detail_url_has_evidence(value: object) -> bool:
     """Require a job-specific URL, not a generic career landing page."""
 
@@ -62,7 +69,7 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     """Return a hard rejection reason for unverified generic site content."""
 
     title = _text(record.get("job_title") or record.get("title")).casefold()
-    if title in _NAVIGATION_TITLES or title.startswith(("about us ", "contact us ", "privacy policy ")):
+    if is_navigation_title(record):
         return "generic_navigation_title"
     description = _text(record.get("description_text") or record.get("description"))
     location = _text(record.get("location_raw") or record.get("location"))
@@ -74,4 +81,4 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     return ""
 
 
-__all__ = ["generic_employer_non_job_reason", "job_detail_url_has_evidence"]
+__all__ = ["generic_employer_non_job_reason", "is_navigation_title", "job_detail_url_has_evidence"]
