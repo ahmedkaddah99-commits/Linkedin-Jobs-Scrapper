@@ -500,7 +500,7 @@ def test_collect_company_records_json_ld_method(monkeypatch: pytest.MonkeyPatch)
                     "job_id": "json-7",
                     "title": "Data Engineer",
                     "job_detail_url": "https://acme.example/careers/data-engineer",
-                    "description": "Build data products.",
+                    "description": "Build data products for our engineering team and maintain reliable data pipelines across the business. " * 2,
                     "location": "München, Deutschland",
                     "source_raw_payload": {"format": "json-ld"},
                 }
@@ -536,7 +536,8 @@ def test_collect_company_records_static_html_method(monkeypatch: pytest.MonkeyPa
                     "job_id": "html-9",
                     "title": "Office Manager",
                     "job_detail_url": "https://acme.example/jobs/office-manager",
-                    "description": "Join our team.",
+                    "description": "Manage our office operations and support colleagues across the business every working day. " * 2,
+                    "application_url": "https://acme.example/jobs/office-manager/apply",
                     "location": "Hamburg, Germany",
                     "source_raw_payload": {"format": "html"},
                 }
@@ -867,7 +868,7 @@ def test_unsupported_ats_falls_through_to_generic_extraction(monkeypatch: pytest
                     "job_id": "ashby-1",
                     "title": "Product Engineer",
                     "job_detail_url": "https://jobs.ashbyhq.com/acme/ashby-1",
-                    "description": "Build products.",
+                    "description": "Build reliable products and maintain engineering systems for customers and teams across the business. " * 2,
                     "location": "Berlin, Germany",
                     "source_raw_payload": {"format": "json-ld"},
                 }
@@ -895,7 +896,7 @@ def test_collect_company_uses_embedded_json_before_generic_html(monkeypatch: pyt
     )
     html = """
     <script type="application/json" id="__INITIAL_STATE__">
-      {"jobs":[{"id":"embedded-1","title":"Security Engineer","url":"/jobs/embedded-1","location":"Berlin, Germany"}]}
+      {"jobs":[{"id":"embedded-1","title":"Security Engineer","url":"/jobs/embedded-1","location":"Berlin, Germany","description":"Protect our systems and investigate security incidents across the engineering organization every day.","applyUrl":"/jobs/embedded-1/apply"}]}
     </script>
     """
     fetch_result = SimpleNamespace(
@@ -921,12 +922,14 @@ def test_collect_company_uses_embedded_json_before_generic_html(monkeypatch: pyt
             "resolved_url": "https://acme.example/careers",
         },
     )
+    monkeypatch.setattr(catalog, "fetch_browser_snapshot", lambda *_args, **_kwargs: {"jobs": [], "status": "partial"})
 
     result = collect_company(_company(), lambda _: fetch_result, CollectorLimits(max_targets=1))
 
     assert len(result.jobs) == 1
     assert result.jobs[0]["extraction_method"] == "embedded_json"
     assert result.jobs[0]["source_job_id"] == "embedded-1"
+    assert result.coverage["outcome"] != "confirmed_complete"
 
 
 def test_collect_company_uses_browser_xhr_after_direct_methods_miss(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -961,6 +964,8 @@ def test_collect_company_uses_browser_xhr_after_direct_methods_miss(monkeypatch:
                     "job_id": "xhr-1",
                     "title": "Frontend Engineer",
                     "job_detail_url": "https://acme.example/jobs/xhr-1",
+                    "description": "Build user interfaces and support our frontend systems across product teams every day. " * 2,
+                    "application_url": "https://acme.example/jobs/xhr-1/apply",
                     "location": "Hamburg, Germany",
                     "source_endpoint": "https://acme.example/api/jobs",
                     "source_raw_payload": {"format": "xhr"},
@@ -1048,6 +1053,7 @@ def test_collect_company_merges_browser_jobs_with_direct_jobs(monkeypatch: pytes
                     "job_id": "direct-1",
                     "title": "Direct Engineer",
                     "job_detail_url": "https://acme.example/jobs/direct-1",
+                    "description": "Build reliable engineering systems and support our product teams across the company. " * 2,
                     "location": "Berlin, Germany",
                     "source_raw_payload": {"format": "json-ld"},
                 }
@@ -1067,6 +1073,8 @@ def test_collect_company_merges_browser_jobs_with_direct_jobs(monkeypatch: pytes
                     "job_id": "browser-1",
                     "title": "Browser Engineer",
                     "job_detail_url": "https://acme.example/jobs/browser-1",
+                    "description": "Build browser experiences for customers and maintain product quality across the company. " * 2,
+                    "application_url": "https://acme.example/jobs/browser-1/apply",
                     "location": "Hamburg, Germany",
                     "source_raw_payload": {"format": "browser-rendered"},
                 }
@@ -1111,6 +1119,8 @@ def test_collect_company_recovers_career_target_from_rendered_homepage(monkeypat
                 "job_id": "rendered-1",
                 "title": "Operations Analyst",
                 "job_detail_url": "https://acme.example/jobs/rendered-1",
+                "description": "Analyze operations data and improve our processes across departments and regions. " * 2,
+                "application_url": "https://acme.example/jobs/rendered-1/apply",
                 "location": "Berlin, Germany",
                 "source_raw_payload": {"format": "browser-rendered"},
             }
@@ -1696,7 +1706,8 @@ def _generic_job_snapshot(url: str, job_id: str) -> dict[str, Any]:
                 "job_id": job_id,
                 "title": "Engineer",
                 "job_detail_url": f"{url.rstrip('/')}/jobs/{job_id}",
-                "description": "Build things in Berlin, Germany.",
+                "description": "Build and maintain engineering systems for customers and teams across Berlin, Germany. " * 2,
+                "application_url": f"{url.rstrip('/')}/jobs/{job_id}/apply",
                 "location": "Berlin, Germany",
                 "source_raw_payload": {"format": "html"},
             }
@@ -1829,7 +1840,8 @@ def test_collect_company_deduplicates_jobs_across_sources(
         "job_id": "shared-1",
         "title": "Engineer",
         "job_detail_url": "https://acme.example/jobs/engineer",
-        "description": "Build things in Berlin, Germany.",
+        "description": "Build and maintain engineering systems for customers and teams across Berlin, Germany. " * 2,
+        "application_url": "https://acme.example/jobs/engineer/apply",
         "location": "Berlin, Germany",
         "source_raw_payload": {"format": "html"},
     }

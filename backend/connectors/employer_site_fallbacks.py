@@ -135,6 +135,11 @@ def _job_from_mapping(
     format_name: str,
     source_endpoint: str,
 ) -> dict[str, Any] | None:
+    if format_name == "json-ld":
+        declared = mapping.get("@type")
+        types = declared if isinstance(declared, list) else [declared]
+        if not any(str(value or "").casefold() == "jobposting" for value in types):
+            return None
     title = _value_text(_lookup(mapping, ("title", "jobTitle", "job_title", "positionTitle", "position_title", "text")))
     detail_value = _lookup(
         mapping,

@@ -59,7 +59,7 @@ from backend.acquisition.employer_coverage import (
     build_coverage_receipt,
     merge_receipts,
 )
-from backend.acquisition.job_page_evidence import generic_employer_non_job_reason
+from backend.acquisition.job_page_evidence import employer_page_needs_verification, generic_employer_non_job_reason
 
 
 DEFAULT_INPUT_CSV = (
@@ -682,7 +682,7 @@ def _is_accepted_job_page(job: Mapping[str, Any], provider: str) -> bool:
     title = _first_value(job, ("title", "job_title", "text"))
     if not title:
         return False
-    if provider not in NATIVE_ATS_CONNECTORS and generic_employer_non_job_reason(job):
+    if (provider not in NATIVE_ATS_CONNECTORS or employer_page_needs_verification(job)) and generic_employer_non_job_reason(job):
         return False
     raw_payload = job.get("source_raw_payload")
     format_name = str(raw_payload.get("format") or "").casefold() if isinstance(raw_payload, Mapping) else ""
@@ -1369,11 +1369,11 @@ def collect_company(
                         snapshots.append(
                             {
                                 "jobs": embedded_jobs,
-                                "status": "completed",
-                                "complete_snapshot": True,
-                                "pagination_complete": True,
+                                "status": "incomplete",
+                                "complete_snapshot": False,
+                                "pagination_complete": False,
                                 "credible_evidence": True,
-                                "stop_reason": "embedded_payload_complete",
+                                "stop_reason": "embedded_payload_coverage_unverified",
                                 "request_url": _text(getattr(direct_page, "requested_url", "")) or target_url,
                                 "resolved_url": _text(getattr(direct_page, "final_url", "")) or target_url,
                                 "transport": _text(getattr(direct_page, "transport", "direct")) or "direct",
