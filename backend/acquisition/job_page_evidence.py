@@ -43,6 +43,21 @@ def job_detail_url_has_evidence(value: object) -> bool:
     return any(key.casefold() in _JOB_QUERY_KEYS for key in parse_qs(parts.query))
 
 
+def _career_slug_matches_title(url: object, title: str) -> bool:
+    """Keep role detail pages with a descriptive career slug."""
+
+    try:
+        path = urlsplit(_text(url)).path.casefold().strip("/")
+    except ValueError:
+        return False
+    parts = path.split("/")
+    if len(parts) < 2 or parts[-2] not in {"career", "careers", "karriere", "karrieren"}:
+        return False
+    title_words = {word for word in re.findall(r"[a-z0-9]{4,}", title.casefold())}
+    slug_words = {word for word in re.findall(r"[a-z0-9]{4,}", parts[-1])}
+    return len(title_words & slug_words) >= 2
+
+
 def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     """Return a hard rejection reason for unverified generic site content."""
 
@@ -53,7 +68,8 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     location = _text(record.get("location_raw") or record.get("location"))
     apply_url = _text(record.get("apply_url_canonical") or record.get("application_url") or record.get("apply_url"))
     detail_url = record.get("source_job_url") or record.get("job_detail_url") or record.get("canonical_url")
-    if not (description or location or apply_url or job_detail_url_has_evidence(detail_url)):
+    if not (description or location or apply_url or job_detail_url_has_evidence(detail_url)
+            or _career_slug_matches_title(detail_url, title)):
         return "no_job_specific_evidence"
     return ""
 

@@ -27,6 +27,8 @@ def test_generic_collector_rejects_navigation_but_retains_job_detail() -> None:
     assert _is_accepted_job_page({"title": "Data Engineer", "job_detail_url": "https://example.com/jobs/42"}, "generic_employer_site")
     assert not generic_employer_non_job_reason({"title": "Data Engineer", "job_detail_url": "https://example.com/jobs/42"})
     assert not generic_employer_non_job_reason({"title": "Mechanic", "job_detail_url": "https://example.com/careers/2448/offer/mechanic"})
+    assert not generic_employer_non_job_reason({"title": "Junior Electric Propulsion Engineer", "job_detail_url": "https://example.com/careers/junior-electric-propulsion-engineer"})
+    assert generic_employer_non_job_reason({"title": "Students", "job_detail_url": "https://example.com/careers/students"})
 
 
 def test_publication_excludes_old_generic_navigation_rows_even_with_advisory_completeness() -> None:
