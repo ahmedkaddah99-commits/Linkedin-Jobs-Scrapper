@@ -24,6 +24,18 @@ def test_embedded_navigation_objects_are_not_jobs() -> None:
     assert [job["title"] for job in jobs] == ["Data Engineer"]
 
 
+def test_json_ld_only_accepts_jobposting_type() -> None:
+    html = '<script type="application/ld+json">' + json.dumps([
+        {"@type": "WebPage", "title": "Company Service", "url": "https://example.com/jobs/service",
+         "description": "Learn about all of the services we provide to our customers across the country. " * 2,
+         "applicationUrl": "https://example.com/jobs/service/apply"},
+        {"@type": "JobPosting", "title": "Data Engineer", "url": "https://example.com/jobs/42",
+         "description": "Build and maintain our data systems for the engineering organization. " * 2,
+         "applicationUrl": "https://example.com/jobs/42/apply"},
+    ]) + "</script>"
+    assert [job["title"] for job in extract_embedded_jobs(html, "https://example.com/careers")] == ["Data Engineer"]
+
+
 def test_generic_collector_rejects_navigation_but_retains_job_detail() -> None:
     assert not _is_accepted_job_page({"title": "About Us", "job_detail_url": "https://example.com/about"}, "generic_employer_site")
     assert _is_accepted_job_page({"title": "Data Engineer", "job_detail_url": "https://example.com/jobs/42"}, "generic_employer_site")
