@@ -12,6 +12,7 @@ UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
 EnvironmentFile=/etc/runr/description.env
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=RUNR_MIGRATION_HEAD=065_published_job_search_index
 ExecStart=/opt/runr/.venv/bin/python scripts/process_published_job_descriptions.py --limit 45 --cursor-file /srv/runr/state/description-turso-cursor.json
 CPUAccounting=true
 CPUQuota=200%
