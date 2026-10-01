@@ -30,7 +30,12 @@ def _text(value: object) -> str:
 
 
 def is_navigation_title(record: Mapping[str, object]) -> bool:
-    title = _text(record.get("job_title") or record.get("title")).casefold()
+    title = _text(record.get("job_title") or record.get("title")).casefold().replace("\u00ad", "")
+    if any(term in title for term in (
+        "bewerbungstipp", "bewerbungsprozess", "bewerberprofil", "richtig bewerben",
+        "erfolgreiche bewerbung", "application tips", "application process",
+    )):
+        return True
     return title in _NAVIGATION_TITLES or title.startswith(
         ("about us ", "contact us ", "privacy policy ")
     )
@@ -109,7 +114,7 @@ def _career_slug_matches_title(url: object, title: str) -> bool:
 def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     """Return a hard rejection reason for unverified generic site content."""
 
-    title = _text(record.get("job_title") or record.get("title")).casefold()
+    title = _text(record.get("job_title") or record.get("title")).casefold().replace("\u00ad", "")
     if is_navigation_title(record):
         return "generic_navigation_title"
     description = _text(record.get("description_text") or record.get("description"))
