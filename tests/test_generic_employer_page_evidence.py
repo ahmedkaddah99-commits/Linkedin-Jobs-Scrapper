@@ -119,3 +119,28 @@ def test_ats_named_employer_with_embedded_marketing_page_is_rejected() -> None:
     snapshot, rejected = SqliteAcquisitionStore._publication_rows_with_completeness(rows, policy=policy)
     assert snapshot == []
     assert rejected[0]["reasons"][0]["code"] == "unverified_generic_page"
+
+
+def test_static_career_category_with_generic_apply_link_is_not_a_job() -> None:
+    category = {
+        "job_title": "Accounting jobs", "source_job_url": "https://example.com/jobs/accounting",
+        "description_text": "Explore roles in finance and accounting across our current openings. " * 3,
+        "apply_url_canonical": "https://example.com/recruitment-jobs/apply",
+        "extraction_method": "static_html", "source_provider": "generic_employer_site",
+    }
+    assert generic_employer_non_job_reason(category) == "unlinked_application"
+    assert not _is_accepted_job_page({
+        "title": category["job_title"], "job_detail_url": category["source_job_url"],
+        "description": category["description_text"], "application_url": category["apply_url_canonical"],
+        "source_raw_payload": {"format": "static-html"},
+    }, "generic_employer_site")
+
+
+def test_static_job_with_posting_specific_application_is_accepted() -> None:
+    job = {
+        "job_title": "Data Engineer", "source_job_url": "https://example.com/jobs/data-engineer-42",
+        "description_text": "Build and maintain data platforms for our engineering team. " * 3,
+        "apply_url_canonical": "https://example.com/jobs/data-engineer-42/apply",
+        "extraction_method": "static_html", "source_provider": "generic_employer_site",
+    }
+    assert not generic_employer_non_job_reason(job)
