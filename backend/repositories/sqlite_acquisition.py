@@ -24,6 +24,7 @@ from backend.domain.company_identity import (
 from backend.application.company_reconciliation import build_url_reconciliation_report
 from backend.acquisition.network_policy import hostname_for_url
 from backend.acquisition.job_publication_completeness import validate_job_for_publication
+from backend.acquisition.job_page_evidence import generic_employer_non_job_reason
 from backend.acquisition.phase_g import (
     applicant_source_gate,
     has_applicant_evidence,
@@ -3679,7 +3680,24 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "last_seen_at": str(row.get("last_seen_at") or ""),
                 "last_verified_at": str(row.get("last_verified_at") or ""),
                 "lifecycle_state": str(row.get("lifecycle_state") or ""),
+                "canonical_url": str(row.get("canonical_url") or ""),
             }
+            if "generic_employer_site" in {
+                str(record.get("source_provider") or "").casefold(),
+                str(record.get("source_ats") or "").casefold(),
+            }:
+                non_job_reason = generic_employer_non_job_reason(record)
+                if non_job_reason:
+                    rejected.append({
+                        "canonical_job_id": record["canonical_job_id"],
+                        "external_job_id": record["source_job_id"],
+                        "title": record["title"],
+                        "target_id": str(row.get("source_target_id") or "publication"),
+                        "task_id": str(row.get("source_task_id") or "publication"),
+                        "reasons": [{"code": non_job_reason, "fields": ["title", "canonical_url"]}],
+                        "status": "rejected",
+                    })
+                    continue
             if validate_completeness:
                 result = validate_job_for_publication(
                     record,
