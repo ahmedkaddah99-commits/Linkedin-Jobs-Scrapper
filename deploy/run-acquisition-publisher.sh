@@ -46,6 +46,15 @@ if ! flock -n 9; then
   emit_telemetry lock_overlap 75
   exit 75
 fi
+# Producer state is SQLite and this read uses one consistent snapshot. Run the
+# public-head quality repair before the collector locks, so long source scans
+# cannot defer removal of pages already known to be invalid.
+quality_path="$receipt_root/publisher-quality-repair-latest.json"
+if ! timeout 300 "$python_bin" scripts/revalidate_published_employer_jobs.py \
+  --employer-state "$employer_state_db" --data-dir "$data_dir" \
+  --apply --automatic > "$quality_path" 2>&1; then
+  echo "publisher quality repair failed; inspect $quality_path" >&2
+fi
 # Read the two producer databases under the same locks used by their
 # collectors. This is the source barrier that makes an incremental snapshot
 # consistent without copying or replaying the full catalogs.
@@ -65,15 +74,6 @@ fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 metrics_path="$receipt_root/publisher-latest-metrics.json"
 receipt_path="$receipt_root/publisher-latest.json"
-quality_path="$receipt_root/publisher-quality-repair-latest.json"
-# Validate the existing public head before the expensive producer delivery.
-# This also repairs previously published source rows when delivery repeatedly
-# reaches its time limit. The script compares the head again before changing it.
-if ! timeout 300 "$python_bin" scripts/revalidate_published_employer_jobs.py \
-  --employer-state "$employer_state_db" --data-dir "$data_dir" \
-  --apply --automatic > "$quality_path" 2>&1; then
-  echo "publisher quality repair failed; inspect $quality_path" >&2
-fi
 status="failed"
 exit_code=1
 crosswalk_arg=""
