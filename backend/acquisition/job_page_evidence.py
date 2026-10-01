@@ -75,6 +75,16 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     location = _text(record.get("location_raw") or record.get("location"))
     apply_url = _text(record.get("apply_url_canonical") or record.get("application_url") or record.get("apply_url"))
     detail_url = record.get("source_job_url") or record.get("job_detail_url") or record.get("canonical_url")
+    method = _text(record.get("extraction_method") or record.get("format")).casefold().replace("-", "_")
+    raw_payload = record.get("source_raw_payload")
+    if not method and isinstance(raw_payload, Mapping):
+        method = _text(raw_payload.get("format")).casefold().replace("-", "_")
+    if method in {"embedded_json", "browser_rendered", "static_html", "html", "xhr"}:
+        if not (description and len(description) >= 80 and apply_url
+                and job_detail_url_has_evidence(detail_url)):
+            return "unverified_generic_page"
+    if method == "json_ld" and not (len(description) >= 80 and (location or apply_url)):
+        return "incomplete_job_posting"
     if not (description or location or apply_url or job_detail_url_has_evidence(detail_url)
             or _career_slug_matches_title(detail_url, title)):
         return "no_job_specific_evidence"
