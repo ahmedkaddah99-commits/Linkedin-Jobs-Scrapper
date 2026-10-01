@@ -59,6 +59,7 @@ from backend.acquisition.employer_coverage import (
     build_coverage_receipt,
     merge_receipts,
 )
+from backend.acquisition.job_page_evidence import generic_employer_non_job_reason
 
 
 DEFAULT_INPUT_CSV = (
@@ -680,6 +681,8 @@ def _job_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
 def _is_accepted_job_page(job: Mapping[str, Any], provider: str) -> bool:
     title = _first_value(job, ("title", "job_title", "text"))
     if not title:
+        return False
+    if provider not in NATIVE_ATS_CONNECTORS and generic_employer_non_job_reason(job):
         return False
     raw_payload = job.get("source_raw_payload")
     format_name = str(raw_payload.get("format") or "").casefold() if isinstance(raw_payload, Mapping) else ""

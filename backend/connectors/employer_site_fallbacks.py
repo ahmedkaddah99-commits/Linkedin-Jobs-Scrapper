@@ -12,6 +12,7 @@ from typing import Any, Callable
 from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
+from backend.acquisition.job_page_evidence import generic_employer_non_job_reason
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -180,6 +181,14 @@ def _job_from_mapping(
     )
     evidence = detail_url or job_id or description or location
     if not title or not evidence:
+        return None
+    if generic_employer_non_job_reason({
+        "title": title,
+        "job_detail_url": detail_url,
+        "description": description,
+        "location": location,
+        "application_url": apply_url,
+    }):
         return None
     return {
         "job_id": job_id,
