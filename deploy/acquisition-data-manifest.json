@@ -226,19 +226,6 @@
       "startup_validation": "deploy/validate_acquisition_runtime.py --role employer"
     },
     {
-      "path": "scripts/build_master_jobs_catalog.py",
-      "classification": "canonical_publication_builder",
-      "runtime_command": "/opt/runr/.venv/bin/python scripts/build_master_jobs_catalog.py --linkedin-csv /srv/runr/exports/linkedin/master_linkedin_jobs.csv --employer-csv /srv/runr/exports/employer/master_employer_jobs.csv --output /srv/runr/exports/combined/master_jobs.csv",
-      "required_input_files": ["linkedin_catalog_export", "employer_catalog_export"],
-      "required_state_databases": [],
-      "required_output_directories": ["/srv/runr/exports/combined"],
-      "environment_variables": [],
-      "committed_in_git": true,
-      "restore_separately": false,
-      "schema_checks": ["source generation IDs", "input hashes", "CSV row/header validation"],
-      "startup_validation": "validate source exports before publication"
-    },
-    {
       "path": "scripts/run_manifested_linkedin.py",
       "classification": "production_wrapper",
       "runtime_command": "/opt/runr/.venv/bin/python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin --state-dir /srv/runr/state/linkedin --require-existing-state --pagination-report /srv/runr/shared/inputs/linkedin_endpoint_pagination_validation.json --filters-report /srv/runr/shared/inputs/linkedin_guest_endpoint_filter_validation.json",

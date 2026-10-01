@@ -99,6 +99,10 @@ CATALOG_FIELDS = (
     "absence_count",
     "inactive_reason",
     "inactive_confirmed_at",
+    "direct_recheck_status",
+    "direct_recheck_at",
+    "direct_recheck_url",
+    "direct_recheck_http_status",
     "content_hash",
     "card_evidence_hash",
     "source_endpoint",
@@ -364,6 +368,32 @@ class ResponseEnvelope:
     proxy_id: str
     elapsed_seconds: float
     error: str = ""
+
+
+def classify_direct_job_recheck(row: Mapping[str, object], response: ResponseEnvelope) -> str:
+    """Only an identified posting with matching ownership can prove closure."""
+    if response.error or response.status_code != 200 or _blocked_body(response.text):
+        return "unknown"
+    soup = BeautifulSoup(response.text, "html.parser")
+    job_id = re.escape(_clean(row.get("linkedin_job_id", "")))
+    if not job_id or not re.search(rf"(?:/jobs/view/|jobPosting:){job_id}(?!\d)", response.text):
+        return "unknown"
+    expected = canonical_company_url(row.get("observed_company_url") or row.get("source_company_url"))
+    companies = {
+        canonical_company_url(
+            f"https://www.linkedin.com{anchor.get('href')}"
+            if str(anchor.get("href", "")).startswith("/") else anchor.get("href")
+        )
+        for anchor in soup.select("a[href*='/company/']")
+    }
+    if not expected or expected not in companies:
+        return "unknown"
+    visible = _clean(soup.get_text(" ", strip=True)).lower()
+    if "no longer accepting applications" in visible or "bewerbungen werden nicht mehr angenommen" in visible:
+        return "closed"
+    if soup.select_one(".top-card-layout__title, h1"):
+        return "active"
+    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -2242,7 +2272,7 @@ class StateStore:
         timestamp = now or _utc_now()
         normalized = str(status or "").upper()
         if normalized in COMPLETE_SCAN_STATUSES:
-            delay = timedelta(hours=168)
+            delay = timedelta(hours=24)
             failure_increment = 0
         elif normalized == "BUDGET_EXHAUSTED":
             delay = timedelta(minutes=15)
@@ -2895,6 +2925,20 @@ class StateStore:
             raise KeyError((linkedin_company_id, linkedin_job_id))
         return json.loads(row[0])
 
+    def closure_candidates(self, linkedin_company_id: str, observed_job_ids: set[str]) -> tuple[dict[str, str], ...]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT row_json FROM job_company_observations WHERE linkedin_company_id=? ORDER BY linkedin_job_id",
+                (str(linkedin_company_id),),
+            ).fetchall()
+        candidates = (
+            data for (raw,) in rows
+            if (data := json.loads(raw)).get("linkedin_job_id") not in observed_job_ids
+            and int(data.get("absence_count") or 0) >= 1
+            and data.get("lifecycle_status") != "inactive"
+        )
+        return tuple(sorted(candidates, key=lambda data: (data.get("direct_recheck_at", ""), data["linkedin_job_id"])))
+
     def reconcile_lifecycle(
         self,
         linkedin_company_id: str,
@@ -2902,6 +2946,7 @@ class StateStore:
         scan_status: str,
         observed_job_ids: set[str],
         scan_at: str,
+        direct_rechecks: Mapping[str, tuple[str, str, int]] | None = None,
     ) -> int:
         if scan_status not in COMPLETE_SCAN_STATUSES:
             return 0
@@ -2934,10 +2979,17 @@ class StateStore:
                     data["absence_count"] = str(count)
                     data["last_successful_company_scan_at"] = scan_at
                     if count >= 2 and data.get("lifecycle_status") != "inactive":
-                        data["lifecycle_status"] = "inactive"
-                        data["inactive_reason"] = "absent_from_two_complete_company_scans"
-                        data["inactive_confirmed_at"] = scan_at
-                        newly_inactive += 1
+                        verdict, url, http_status = (direct_rechecks or {}).get(job_id, ("unknown", "", 0))
+                        if url:
+                            data["direct_recheck_status"] = verdict
+                            data["direct_recheck_at"] = scan_at
+                            data["direct_recheck_url"] = url
+                            data["direct_recheck_http_status"] = str(http_status)
+                        if verdict == "closed":
+                            data["lifecycle_status"] = "inactive"
+                            data["inactive_reason"] = "absent_from_two_complete_company_scans_and_direct_closed"
+                            data["inactive_confirmed_at"] = scan_at
+                            newly_inactive += 1
                 self.connection.execute(
                     "UPDATE job_company_observations SET row_json=?, last_seen_at=? WHERE linkedin_company_id=? AND linkedin_job_id=?",
                     (
@@ -3189,6 +3241,8 @@ class InterProcessLock:
 
 
 class CatalogRunner:
+    DIRECT_RECHECK_REQUEST_BUDGET = 20
+
     def __init__(
         self, config: RunnerConfig, *, transport=None, request_limiter: AdaptiveConcurrency | None = None, now=_utc_now
     ):
@@ -3474,6 +3528,33 @@ class CatalogRunner:
             status_code=response.status_code, blocked=_blocked_body(response.text), provider="linkedin"
         )
         return response
+
+    def _direct_rechecks(self, company_id: str, observed_job_ids: set[str], budget: int) -> tuple[dict[str, tuple[str, str, int]], int]:
+        assert self.store is not None
+        results: dict[str, tuple[str, str, int]] = {}
+        for row in self.store.closure_candidates(company_id, observed_job_ids):
+            job_id = row["linkedin_job_id"]
+            source_url = _clean(row.get("linkedin_job_url"))
+            urls = []
+            if is_linkedin_host(source_url) and re.search(rf"/jobs/view/{re.escape(job_id)}(?:[/?#]|$)", source_url):
+                urls.append(source_url)
+            urls.append(f"{DETAIL_ENDPOINT}/{job_id}")
+            verdict = "unknown"
+            last_url = ""
+            last_code = 0
+            for url in dict.fromkeys(urls):
+                if budget <= 0:
+                    break
+                response = self._get(url, kind="direct_recheck")
+                budget -= 1
+                last_url, last_code = url, response.status_code
+                verdict = classify_direct_job_recheck(row, response)
+                if verdict != "unknown":
+                    break
+            results[job_id] = (verdict, last_url, last_code)
+            if budget <= 0:
+                break
+        return results, budget
 
     def _persist_exclusion(self, company_id: str, job_id: str, reason: str, observation: Mapping[str, object]) -> None:
         assert self.store is not None
@@ -4298,6 +4379,7 @@ class CatalogRunner:
                     futures = [executor.submit(self._process_detail, entry) for entry in detail_entries]
                     for future in as_completed(futures):
                         future.result()
+            direct_recheck_budget = self.DIRECT_RECHECK_REQUEST_BUDGET
             for context in self.contexts.values():
                 status = context.search_status
                 if context.detail_failures and status in COMPLETE_SCAN_STATUSES:
@@ -4307,6 +4389,11 @@ class CatalogRunner:
                 context.search_status = status
                 self.store.finish_company_scan(context.scan_id, status, context.observed_job_ids, self.now())
                 self.store.update_company_scan_status_rows(context.scan_id, status)
+                direct_rechecks = {}
+                if status in COMPLETE_SCAN_STATUSES:
+                    direct_rechecks, direct_recheck_budget = self._direct_rechecks(
+                        context.group.linkedin_company_id, context.observed_job_ids, direct_recheck_budget
+                    )
                 self._increment(
                     "inactive_rows",
                     self.store.reconcile_lifecycle(
@@ -4315,6 +4402,7 @@ class CatalogRunner:
                         status,
                         context.observed_job_ids,
                         self.now(),
+                        direct_rechecks=direct_rechecks,
                     ),
                 )
                 if status in COMPLETE_SCAN_STATUSES:

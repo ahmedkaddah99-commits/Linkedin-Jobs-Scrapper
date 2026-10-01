@@ -60,6 +60,18 @@ from scripts.master_linkedin_jobs_catalog import (
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def test_complete_linkedin_company_is_due_again_after_one_day(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    try:
+        store.record_company_checkpoint(
+            "22", run_id="run-1", status="COMPLETE", now="2026-10-01T08:00:00Z"
+        )
+        assert "22" not in store.due_company_ids(["22"], "2026-10-02T07:59:59Z")
+        assert "22" in store.due_company_ids(["22"], "2026-10-02T08:00:00Z")
+    finally:
+        store.close()
+
+
 def write_source_csv(path: Path, rows: list[dict[str, str]]) -> None:
     fields = [
         "canonical_CompanyID",
@@ -553,7 +565,7 @@ def test_lifecycle_requires_two_distinct_complete_scans_and_reactivates(tmp_path
     first_absence = store.get_catalog_row("22", "1234567890")
     assert first_absence["absence_count"] == lifecycle_fixture["first_complete_absence"]["absence_count"]
     assert first_absence["lifecycle_status"] == lifecycle_fixture["first_complete_absence"]["lifecycle_status"]
-    store.reconcile_lifecycle("22", "scan-complete-2", "COMPLETE", set(), "2026-09-03T08:00:00Z")
+    store.reconcile_lifecycle("22", "scan-complete-2", "COMPLETE", set(), "2026-09-03T08:00:00Z", direct_rechecks={"1234567890": ("closed", "https://www.linkedin.com/jobs/view/1234567890", 200)})
     inactive = store.get_catalog_row("22", "1234567890")
     assert inactive["lifecycle_status"] == lifecycle_fixture["second_complete_absence"]["lifecycle_status"]
     assert inactive["inactive_confirmed_at"] == "2026-09-03T08:00:00Z"
@@ -564,6 +576,53 @@ def test_lifecycle_requires_two_distinct_complete_scans_and_reactivates(tmp_path
     row = store.get_catalog_row("22", "1234567890")
     assert row["lifecycle_status"] == "active"
     assert row["absence_count"] == "0"
+    store.close()
+
+
+def test_direct_recheck_requires_matching_job_and_company_for_closure() -> None:
+    row = make_catalog_row()
+    closed = '<a href="/jobs/view/1234567890">Job</a><a href="/company/acme">Acme</a><p>No longer accepting applications</p>'
+    response = ResponseEnvelope(200, closed, "proxy", 0.1)
+    assert catalog_module.classify_direct_job_recheck(row, response) == "closed"
+    assert catalog_module.classify_direct_job_recheck(row, ResponseEnvelope(200, closed.replace("1234567890", "999"), "proxy", 0.1)) == "unknown"
+    assert catalog_module.classify_direct_job_recheck(row, ResponseEnvelope(200, closed.replace("/company/acme", "/company/other"), "proxy", 0.1)) == "unknown"
+
+
+@pytest.mark.parametrize("status", [404, 410, 429, 500])
+def test_direct_recheck_http_failures_do_not_confirm_closure(status: int) -> None:
+    assert catalog_module.classify_direct_job_recheck(make_catalog_row(), ResponseEnvelope(status, "", "proxy", 0.1)) == "unknown"
+
+
+def test_lifecycle_withholds_closure_without_direct_evidence(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    store.upsert_catalog_row(make_catalog_row())
+    store.reconcile_lifecycle("22", "scan-1", "COMPLETE", set(), "2026-09-02T08:00:00Z")
+    store.reconcile_lifecycle("22", "scan-2", "COMPLETE", set(), "2026-09-03T08:00:00Z", direct_rechecks={"1234567890": ("unknown", "https://www.linkedin.com/jobs/view/1234567890", 429)})
+    row = store.get_catalog_row("22", "1234567890")
+    assert row["lifecycle_status"] == "active"
+    assert row["direct_recheck_http_status"] == "429"
+    assert row["direct_recheck_status"] == "unknown"
+    store.reconcile_lifecycle("22", "scan-3", "COMPLETE", set(), "2026-09-04T08:00:00Z", direct_rechecks={"1234567890": ("closed", "https://www.linkedin.com/jobs/view/1234567890", 200)})
+    assert store.get_catalog_row("22", "1234567890")["lifecycle_status"] == "inactive"
+    store.close()
+
+
+def test_lifecycle_without_recheck_evidence_fails_closed(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    store.upsert_catalog_row(make_catalog_row())
+    store.reconcile_lifecycle("22", "scan-1", "COMPLETE", set(), "2026-09-02T08:00:00Z")
+    store.reconcile_lifecycle("22", "scan-2", "COMPLETE", set(), "2026-09-03T08:00:00Z")
+    assert store.get_catalog_row("22", "1234567890")["lifecycle_status"] == "active"
+    store.close()
+
+
+def test_closure_candidates_prioritize_never_checked_jobs(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    for job_id in ("1", "2", "3"):
+        store.upsert_catalog_row(make_catalog_row(job_id=job_id))
+    store.reconcile_lifecycle("22", "scan-1", "COMPLETE", set(), "2026-09-02T08:00:00Z")
+    store.reconcile_lifecycle("22", "scan-2", "COMPLETE", set(), "2026-09-03T08:00:00Z", direct_rechecks={"1": ("unknown", "https://www.linkedin.com/jobs/view/1", 429)})
+    assert [row["linkedin_job_id"] for row in store.closure_candidates("22", set())] == ["2", "3", "1"]
     store.close()
 
 

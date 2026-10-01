@@ -121,7 +121,7 @@ if [ "$validation_code" -eq 0 ]; then
       --require-existing-state \
       --limit "$company_cap" \
       --max-requests "$source_cap" \
-      --easy-first \
+      --automatic-queue \
       --timeout "${RUNR_EMPLOYER_REQUEST_TIMEOUT_SECONDS:-10}" \
       --max-targets "${RUNR_EMPLOYER_MAX_TARGETS:-5}" \
       --max-pages "${RUNR_EMPLOYER_MAX_PAGES:-5}" \

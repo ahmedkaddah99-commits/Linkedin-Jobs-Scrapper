@@ -45,6 +45,163 @@ def _company_with_id(company_id: str, name: str) -> EmployerCompany:
     )
 
 
+def test_automatic_employer_queue_finishes_easy_pass_before_serial_browser_work(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    companies = [_company_with_id(key, key) for key in ("a", "b", "c")]
+    state = EmployerState(tmp_path / "state.db")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("a", json.dumps({"coverage": {"method_attempts": [
+                {"method": "browser_rendered_collection", "status": "deferred", "reason": "easy_first_policy"}
+            ]}}), "partial", "", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, companies, limit=10, now="2026-01-02T00:00:00Z")
+        assert phase == "easy"
+        assert [company.canonical_company_id for company in work] == ["b", "c"]
+
+        for key in ("b", "c"):
+            state.connection.execute(
+                "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+                (key, json.dumps({"coverage": {"method_attempts": []}}), "completed", "", "2026-01-01T00:00:00Z"),
+            )
+            state.connection.execute(
+                "INSERT INTO company_scan_schedule(company_key,next_scan_at,updated_at) VALUES(?,?,?)",
+                (key, "2026-01-03T00:00:00Z", "2026-01-01T00:00:00Z"),
+            )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, companies, limit=10, now="2026-01-02T00:00:00Z")
+        assert phase == "browser"
+        assert [company.canonical_company_id for company in work] == ["a"]
+    finally:
+        state.close()
+
+
+def test_browser_failure_waits_three_days_with_durable_schedule(tmp_path: Path) -> None:
+    state = EmployerState(tmp_path / "state.db")
+    try:
+        state.record_company_checkpoint(
+            _company(), run_id="r1", status="source_failed", now="2026-01-01T00:00:00Z",
+            browser_attempted=True, productive=False,
+        )
+        row = state.connection.execute(
+            "SELECT next_scan_at FROM company_scan_schedule WHERE company_key=?", ("canonical-acme",)
+        ).fetchone()
+        assert row["next_scan_at"] == "2026-01-04T00:00:00Z"
+    finally:
+        state.close()
+
+
+def test_deferred_browser_work_starts_after_easy_pass_without_daily_wait(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    company = _company_with_id("browser", "Browser")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("browser", json.dumps({"coverage": {"method_attempts": [
+                {"method": "browser_rendered_collection", "status": "deferred"}
+            ]}}), "partial", "", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.execute(
+            "INSERT INTO company_scan_schedule(company_key,next_scan_at,updated_at) VALUES(?,?,?)",
+            ("browser", "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, [company], limit=10, now="2026-01-01T00:01:00Z")
+        assert (phase, work) == ("browser", [company])
+    finally:
+        state.close()
+
+
+def test_automatic_queue_retries_incomplete_easy_scan_before_browser(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    companies = [_company_with_id("partial", "Partial"), _company_with_id("browser", "Browser")]
+    try:
+        for key, status, attempts in (
+            ("partial", "partial", [{"method": "direct_http", "status": "attempted"}]),
+            ("browser", "partial", [{"method": "browser_rendered_collection", "status": "deferred"}]),
+        ):
+            state.connection.execute(
+                "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+                (key, json.dumps({"coverage": {"method_attempts": attempts}}), status, "", "2026-01-01T00:00:00Z"),
+            )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, companies, limit=10, now="2026-01-02T00:00:00Z")
+        assert (phase, [item.canonical_company_id for item in work]) == ("easy", ["partial"])
+    finally:
+        state.close()
+
+
+def test_automatic_queue_rechecks_productive_browser_site_with_browser(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    company = _company_with_id("browser", "Browser")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("browser", json.dumps({"coverage": {"method_attempts": [
+                {"method": "browser_rendered_collection", "status": "attempted"}
+            ]}}), "completed", "", "2026-01-01T00:00:00Z"),
+        )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, [company], limit=10, now="2026-01-02T00:00:00Z")
+        assert (phase, work) == ("browser", [company])
+    finally:
+        state.close()
+
+
+def test_browser_no_jobs_cooldown_survives_negative_evidence_override(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    company = _company_with_id("browser", "Browser")
+    try:
+        state.connection.execute(
+            "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+            ("browser", json.dumps({"coverage": {"method_attempts": [
+                {"method": "browser_rendered_collection", "status": "attempted"}
+            ]}}), "no_jobs", "", "2026-01-01T00:00:00Z"),
+        )
+        state.record_company_checkpoint(
+            company, run_id="r1", status="no_jobs", now="2026-01-01T00:00:00Z",
+            browser_attempted=True, productive=False,
+        )
+        work, _phase = select_automatic_employer_work(state, [company], limit=10, now="2026-01-02T00:00:00Z")
+        assert work == []
+    finally:
+        state.close()
+
+
+def test_automatic_queue_rotates_daily_direct_and_browser_work(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+
+    state = EmployerState(tmp_path / "state.db")
+    companies = [_company_with_id("direct", "Direct"), _company_with_id("browser", "Browser")]
+    try:
+        for key, attempts in (
+            ("direct", []), ("browser", [{"method": "browser_rendered_collection", "status": "attempted"}]),
+        ):
+            state.connection.execute(
+                "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)",
+                (key, json.dumps({"coverage": {"method_attempts": attempts}}), "completed", "", "2026-01-01T00:00:00Z"),
+            )
+        state.connection.commit()
+        work, phase = select_automatic_employer_work(state, companies, limit=10, now="2026-01-02T00:00:00Z")
+        assert (phase, [item.canonical_company_id for item in work]) == ("easy", ["direct"])
+        state.set_cursor(1)
+        work, phase = select_automatic_employer_work(state, companies, limit=10, now="2026-01-02T00:00:00Z")
+        assert (phase, [item.canonical_company_id for item in work]) == ("browser", ["browser"])
+    finally:
+        state.close()
+
+
 def _discovery(*, url: str, ats_type: str = "", source: str = "homepage_link") -> SimpleNamespace:
     return SimpleNamespace(
         homepage_url="https://acme.example",
