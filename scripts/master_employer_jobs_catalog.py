@@ -1369,11 +1369,11 @@ def collect_company(
                         snapshots.append(
                             {
                                 "jobs": embedded_jobs,
-                                "status": "completed",
-                                "complete_snapshot": True,
-                                "pagination_complete": True,
+                                "status": "incomplete",
+                                "complete_snapshot": False,
+                                "pagination_complete": False,
                                 "credible_evidence": True,
-                                "stop_reason": "embedded_payload_complete",
+                                "stop_reason": "embedded_payload_coverage_unverified",
                                 "request_url": _text(getattr(direct_page, "requested_url", "")) or target_url,
                                 "resolved_url": _text(getattr(direct_page, "final_url", "")) or target_url,
                                 "transport": _text(getattr(direct_page, "transport", "direct")) or "direct",

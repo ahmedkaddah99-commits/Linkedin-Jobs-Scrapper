@@ -922,12 +922,14 @@ def test_collect_company_uses_embedded_json_before_generic_html(monkeypatch: pyt
             "resolved_url": "https://acme.example/careers",
         },
     )
+    monkeypatch.setattr(catalog, "fetch_browser_snapshot", lambda *_args, **_kwargs: {"jobs": [], "status": "partial"})
 
     result = collect_company(_company(), lambda _: fetch_result, CollectorLimits(max_targets=1))
 
     assert len(result.jobs) == 1
     assert result.jobs[0]["extraction_method"] == "embedded_json"
     assert result.jobs[0]["source_job_id"] == "embedded-1"
+    assert result.coverage["outcome"] != "confirmed_complete"
 
 
 def test_collect_company_uses_browser_xhr_after_direct_methods_miss(monkeypatch: pytest.MonkeyPatch) -> None:
