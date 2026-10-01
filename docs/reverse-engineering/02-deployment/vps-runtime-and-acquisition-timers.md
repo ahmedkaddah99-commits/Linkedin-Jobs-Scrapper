@@ -367,3 +367,6 @@ sh -n deploy/run-acquisition-source.sh deploy/run-acquisition-publisher.sh deplo
   4. Bind `static_server.py` to a configurable host, defaulting to loopback on the VPS (WS7-G9).
   5. ~~Add a backup timer or record that backups are manual (WS7-G11).~~ Done by T44 (RUN-44).
   6. Reconcile the enrichment switch with WS-3 (WS7-G8).
+# Employer automatic queue
+
+The employer source wrapper uses `--automatic-queue`. It first scans every eligible company without browser fallback, bounded by the per-run company and request limits. Incomplete direct scans remain due for an easy retry. The company checkpoint and method audit persist browser deferrals. After the initial pass, the queue alternates due easy and browser work when both are available; browser work processes companies serially within each bounded run instead of waiting for another timer interval after every company. Productive direct and browser sources are due again after 24 hours; a browser attempt that yields no jobs waits 72 hours, including when negative coverage evidence requires a later recheck. The state database retains the next scan time and the employer method audit exports the extraction trail. A newly added company enters the easy pass before more browser work.

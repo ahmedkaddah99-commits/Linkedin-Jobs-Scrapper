@@ -581,12 +581,68 @@ def _source_group_from_rows(
             source_company_ids.add(source_company_id)
         item = dict(payload)
         if source == SOURCE_LINKEDIN:
+            # Inactive postings remain in producer state for history, but must
+            # not be presented as observations in an active snapshot.
+            if _text(item.get("lifecycle_status")) == "inactive":
+                continue
             item.setdefault("linkedin_company_id", source_company_id)
             item.setdefault("linkedin_job_id", _text(_row_value(row, "linkedin_job_id")))
             item.setdefault("run_id", _text(_row_value(row, "run_id")))
             item.setdefault("company_scan_id", _text(_row_value(row, "company_scan_id")))
         grouped.setdefault(canonical_id, []).append(item)
     return grouped, source_company_ids
+
+
+def _current_employer_jobs(
+    connection: sqlite3.Connection,
+    groups: dict[str, list[dict[str, object]]],
+    crosswalk: Mapping[str, str] | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    """Exclude retained jobs absent from a verified complete employer scan.
+
+    Partial scans preserve older jobs. Legacy jobs without a generation marker
+    are retired only after the company has a new complete generation.
+    """
+    if not groups:
+        return groups
+    result = dict(groups)
+    keys = set(groups)
+    keys.update(
+        old for old, winner in (crosswalk or {}).items()
+        if _resolve_company_id(winner, crosswalk) in groups
+    )
+    ordered_keys = sorted(keys)
+    for start in range(0, len(ordered_keys), 400):
+        batch = ordered_keys[start:start + 400]
+        placeholders = ",".join("?" for _ in batch)
+        rows = connection.execute(
+            f"""SELECT companies.company_key, companies.payload_json,
+                       coverage_receipts.receipt_json
+                FROM companies LEFT JOIN coverage_receipts
+                  ON coverage_receipts.company_key=companies.company_key
+                WHERE companies.company_key IN ({placeholders})""",
+            tuple(batch),
+        ).fetchall()
+        for row in rows:
+            payload = _decode(row["payload_json"], {})
+            if not isinstance(payload, Mapping):
+                continue
+            receipt = _decode(row["receipt_json"], {})
+            generation = _text(payload.get("generation_id"))
+            verified = (
+                isinstance(receipt, Mapping)
+                and _text(receipt.get("generation_id")) == generation
+                and _text(receipt.get("terminal_classification")) == "confirmed_complete"
+            )
+            company_id = _resolve_company_id(
+                payload.get("canonical_company_id") or row["company_key"], crosswalk
+            )
+            if company_id in groups and verified and generation:
+                result[company_id] = [
+                    job for job in groups[company_id]
+                    if _text(job.get("last_seen_generation_id")) == generation
+                ]
+    return result
 
 
 def _load_incremental_source(
@@ -637,6 +693,8 @@ def _load_incremental_source(
             selected_ids=selected_ids,
             crosswalk=crosswalk,
         )
+        if source == SOURCE_EMPLOYER:
+            grouped = _current_employer_jobs(connection, grouped, crosswalk)
         next_checkpoint.update(
             {
                 "source": source,
@@ -694,6 +752,8 @@ def _load_incremental_source(
         selected_ids=selected_ids,
         crosswalk=crosswalk,
     )
+    if source == SOURCE_EMPLOYER:
+        grouped = _current_employer_jobs(connection, grouped, crosswalk)
     changed_ids = set(grouped)
     if source == SOURCE_EMPLOYER:
         changed_ids.update(changed_companies)
@@ -802,17 +862,33 @@ def _latest_employer_statuses(
     if ids:
         placeholders = ",".join("?" for _ in ids)
         rows = connection.execute(
-            f"SELECT company_key, status, payload_json FROM companies WHERE company_key IN ({placeholders})",
+            f"""SELECT companies.company_key, companies.status, companies.payload_json,
+                       coverage_receipts.receipt_json
+                FROM companies LEFT JOIN coverage_receipts
+                  ON coverage_receipts.company_key=companies.company_key
+                WHERE companies.company_key IN ({placeholders})""",
             tuple(ids),
         ).fetchall()
     else:
-        rows = connection.execute("SELECT company_key, status, payload_json FROM companies").fetchall()
+        rows = connection.execute(
+            """SELECT companies.company_key, companies.status, companies.payload_json,
+                      coverage_receipts.receipt_json
+               FROM companies LEFT JOIN coverage_receipts
+                 ON coverage_receipts.company_key=companies.company_key"""
+        ).fetchall()
     result: dict[str, tuple[str, str]] = {}
     for row in rows:
         payload = _decode(row["payload_json"], {})
         payload = payload if isinstance(payload, Mapping) else {}
-        coverage = payload.get("coverage") if isinstance(payload.get("coverage"), Mapping) else {}
-        classification = _text(coverage.get("outcome") or payload.get("terminal_classification"))
+        receipt = _decode(row["receipt_json"], {})
+        classification = (
+            "confirmed_complete"
+            if isinstance(receipt, Mapping)
+            and _text(receipt.get("generation_id"))
+            and _text(receipt.get("generation_id")) == _text(payload.get("generation_id"))
+            and _text(receipt.get("terminal_classification")) == "confirmed_complete"
+            else "partial"
+        )
         result[_text(row["company_key"])] = (_text(row["status"]), classification)
     return result
 

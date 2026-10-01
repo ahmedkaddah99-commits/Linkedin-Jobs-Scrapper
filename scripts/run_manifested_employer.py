@@ -1084,6 +1084,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="collect direct/ATS/structured sources first and audit browser-required companies for a later hard-case pass",
     )
+    parser.add_argument(
+        "--automatic-queue",
+        action="store_true",
+        help="finish the durable easy pass, then revisit browser-required companies serially",
+    )
     parser.add_argument("--max-targets", type=int, default=25)
     parser.add_argument(
         "--max-requests",
@@ -1249,6 +1254,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_requests=args.max_requests or None,
                 timeout_seconds=args.timeout,
                 easy_first=args.easy_first,
+                automatic_queue=args.automatic_queue,
                 company_concurrency=args.company_concurrency,
                 max_pending=args.max_pending,
                 http_concurrency=args.http_concurrency,

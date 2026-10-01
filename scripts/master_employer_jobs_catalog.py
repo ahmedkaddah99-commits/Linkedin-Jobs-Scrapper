@@ -229,6 +229,68 @@ def select_due_company_window(
     return selected, (start + examined) % len(ordered), examined
 
 
+def select_automatic_employer_work(
+    state: "EmployerState", companies: list["EmployerCompany"], *, limit: int, now: str
+) -> tuple[list["EmployerCompany"], str]:
+    """Finish initial direct scans before spending browser capacity."""
+
+    def window(candidates: list[EmployerCompany]) -> list[EmployerCompany]:
+        if limit <= 0 or len(candidates) <= limit:
+            return candidates
+        # A timed-out company may not leave a checkpoint. Advance to another
+        # slice on the next run so it cannot strand the remaining queue.
+        start = (state.get_cursor() * limit) % len(candidates)
+        return [candidates[(start + offset) % len(candidates)] for offset in range(limit)]
+
+    unseen = [company for company in companies if not state.company_status(company)]
+    if unseen:
+        return window(unseen), "easy"
+    due = state.due_company_keys(
+        [company.canonical_company_id or company.website_url for company in companies], now
+    )
+    browser: list[EmployerCompany] = []
+    direct: list[EmployerCompany] = []
+    audit = {row["company_key"]: row for row in state.iter_company_method_audit()}
+    for company in companies:
+        key = company.canonical_company_id or company.website_url
+        attempts = audit.get(key, {}).get("method_attempts", [])
+        outcome = audit.get(key, {}).get("outcome", "")
+        browser_ever_productive = bool(audit.get(key, {}).get("browser_ever_productive"))
+        browser_deferred = any(
+            attempt.get("method", "").startswith("browser_rendered")
+            and attempt.get("status") == "deferred"
+            for attempt in attempts
+        )
+        browser_attempted = any(
+            attempt.get("method", "").startswith("browser_rendered")
+            and attempt.get("status") == "attempted"
+            for attempt in attempts
+        )
+        # A confirmed empty browser scan is evidence that this source did not
+        # produce jobs. Keep uncertain failures retryable, and keep sites that
+        # have produced jobs in the daily queue even after a quiet scan.
+        if browser_attempted and outcome == "confirmed_zero" and not browser_ever_productive:
+            continue
+        if key not in due and not (browser_deferred and not browser_attempted):
+            continue
+        if browser_deferred or browser_attempted:
+            schedule = state.connection.execute(
+                "SELECT next_scan_at FROM company_scan_schedule WHERE company_key=?", (key,)
+            ).fetchone()
+            if browser_attempted and schedule and str(schedule["next_scan_at"] or "") > now:
+                continue
+            browser.append(company)
+        else:
+            direct.append(company)
+    if direct and browser and state.get_cursor() % 2:
+        return window(browser), "browser"
+    if direct:
+        return window(direct), "easy"
+    if browser:
+        return window(browser), "browser"
+    return [], "easy"
+
+
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split())
 
@@ -1685,12 +1747,18 @@ class EmployerState:
         status: str,
         error: str = "",
         now: str | None = None,
+        browser_attempted: bool = False,
+        productive: bool = False,
     ) -> None:
         key = company.canonical_company_id or company.website_url
         timestamp = now or utc_now()
         normalized = str(status or "").casefold()
-        if normalized in {"completed", "no_jobs"}:
-            delay = timedelta(hours=168 if normalized == "completed" else 24)
+        if browser_attempted and not productive:
+            delay = timedelta(hours=72)
+            failure_increment = 1
+        elif normalized in {"completed", "no_jobs"}:
+            # Productive sites must be revisited in each daily acquisition cycle.
+            delay = timedelta(hours=24)
             failure_increment = 0
         else:
             delay = timedelta(hours=1)
@@ -1910,12 +1978,36 @@ class EmployerState:
         company_key = result.company.canonical_company_id or result.company.website_url
         result.outcome = result.resolved_outcome()
         with self.connection:
+            previous_row = self.connection.execute(
+                "SELECT payload_json FROM companies WHERE company_key=?", (company_key,)
+            ).fetchone()
+            try:
+                previous = json.loads(previous_row[0]) if previous_row else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                previous = {}
+            previous_coverage = previous.get("coverage") if isinstance(previous, dict) else {}
+            previous_browser_attempted = any(
+                attempt.get("method", "").startswith("browser_rendered")
+                and attempt.get("status") == "attempted"
+                for attempt in (previous_coverage.get("method_attempts") or [])
+            ) if isinstance(previous_coverage, dict) else False
+            browser_attempted = any(
+                attempt.get("method", "").startswith("browser_rendered")
+                and attempt.get("status") == "attempted"
+                for attempt in result.coverage.get("method_attempts", [])
+            )
+            browser_ever_productive = bool(
+                previous.get("browser_ever_productive")
+                or (previous_browser_attempted and previous.get("jobs"))
+                or (browser_attempted and result.jobs)
+            ) if isinstance(previous, dict) else bool(browser_attempted and result.jobs)
             self.connection.execute(
                 "INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(company_key) DO UPDATE SET payload_json=excluded.payload_json,status=excluded.status,error=excluded.error,updated_at=excluded.updated_at",
                 (
                     company_key,
-                    json.dumps(asdict(result), ensure_ascii=False),
+                    json.dumps({**asdict(result), "generation_id": generation_id,
+                                "browser_ever_productive": browser_ever_productive}, ensure_ascii=False),
                     result.status,
                     json.dumps(result.failures, ensure_ascii=False),
                     utc_now(),
@@ -1925,7 +2017,14 @@ class EmployerState:
                 key = "|".join(_job_key(job))
                 self.connection.execute(
                     "INSERT INTO jobs(source_key,payload_json,updated_at) VALUES(?,?,?) ON CONFLICT(source_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at",
-                    (key, json.dumps(job, ensure_ascii=False), utc_now()),
+                    (
+                        key,
+                        json.dumps(
+                            {**job, **({"last_seen_generation_id": generation_id} if generation_id else {})},
+                            ensure_ascii=False,
+                        ),
+                        utc_now(),
+                    ),
                 )
         self.save_coverage_receipt(result, generation_id=generation_id, source_version=source_version)
         failure = result.failures[-1] if result.failures else {}
@@ -1934,6 +2033,12 @@ class EmployerState:
             run_id=generation_id,
             status=result.status,
             error=failure.get("error", "") if isinstance(failure, Mapping) else "",
+            browser_attempted=any(
+                attempt.get("method", "").startswith("browser_rendered")
+                and attempt.get("status") == "attempted"
+                for attempt in result.coverage.get("method_attempts", [])
+            ),
+            productive=bool(result.jobs),
         )
 
     def jobs(self) -> list[dict[str, Any]]:
@@ -1964,6 +2069,13 @@ class EmployerState:
                 "website_url": _text((payload.get("company") or {}).get("website_url")) if isinstance(payload, Mapping) else "",
                 "status": str(row["status"] or ""),
                 "outcome": _text(coverage.get("outcome")) if isinstance(coverage, Mapping) else "",
+                "browser_ever_productive": bool(payload.get("browser_ever_productive") or (
+                    payload.get("jobs") and any(
+                        attempt.get("method", "").startswith("browser_rendered")
+                        and attempt.get("status") == "attempted"
+                        for attempt in (coverage.get("method_attempts") or [])
+                    )
+                )) if isinstance(payload, Mapping) and isinstance(coverage, Mapping) else False,
                 "method_attempts": list(coverage.get("method_attempts") or []) if isinstance(coverage, Mapping) else [],
                 "source_inventory": list(coverage.get("source_inventory") or []) if isinstance(coverage, Mapping) else [],
                 "updated_at": str(row["updated_at"] or ""),
@@ -2266,6 +2378,7 @@ def run_collection(
     account_concurrency: int = 4,
     per_origin_concurrency: int = 1,
     easy_first: bool = False,
+    automatic_queue: bool = False,
     autocomplete: Any | None = None,
 ) -> dict[str, Any]:
     load_project_dotenv()
@@ -2374,11 +2487,25 @@ def run_collection(
         )
 
         work: list[EmployerCompany] = []
-        use_cursor = resume and limit > 0 and not company_id
+        use_cursor = resume and limit > 0 and not company_id and not automatic_queue
         cursor = 0
         ordered = companies
         selection_next_cursor = 0
         selection_examined = 0
+        if automatic_queue and resume and not company_id:
+            ordered, queue_phase = select_automatic_employer_work(
+                state, companies, limit=limit, now=utc_now()
+            )
+            if ordered:
+                state.set_cursor(state.get_cursor() + 1)
+            limits = replace(limits, allow_browser_fallback=queue_phase == "browser")
+            metrics["collection_policy"] = f"automatic_{queue_phase}"
+            metrics["queue_phase"] = queue_phase
+            if queue_phase == "browser":
+                worker_count = 1
+                pending_limit = 1
+                metrics["concurrency"]["company_workers"] = 1
+                metrics["concurrency"]["max_pending"] = 1
         if use_cursor and companies:
             cursor = state.get_cursor() % len(companies)
             company_keys = [company.canonical_company_id or company.website_url for company in companies]

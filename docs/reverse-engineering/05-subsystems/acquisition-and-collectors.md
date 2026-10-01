@@ -2,6 +2,32 @@
 
 # Acquisition and collectors (WS-3 primary)
 
+## Daily source coverage and closure evidence (2026-10-01 local revision)
+
+Completed LinkedIn company scans become due again after 24 hours. The rotating
+window still limits companies and requests in each run; a ten-minute timer does
+not imply every eligible company was scanned in the last day. Before a posting
+absent from two complete company scans is marked inactive, the runner performs
+bounded direct checks of its existing posting URL and the LinkedIn guest detail
+endpoint. Only an identified response with matching company ownership and
+explicit closure text confirms closure. Blocked, missing, and ambiguous
+responses remain unknown, so some deleted postings can remain active until
+stronger evidence appears. Direct-check results are retained in producer state.
+
+The employer wrapper uses an automatic queue. It first attempts direct/ATS/
+structured collection for companies without a prior result. Later rounds use
+the durable method audit to run browser-dependent companies serially, processing
+multiple companies within a run when its request and time limits allow.
+Productive sources are due in 24 hours; browser attempts with no jobs wait 72
+hours. Easy and browser work alternate when both are due. Bounded page and
+request limits can still yield partial results rather than complete coverage.
+
+LinkedIn source CSV generations are local compatibility exports, not the
+customer catalog. After publishing a new generation, the collector retains
+that generation and the most recent prior run generation and removes older
+run-generation directories. This bounds repeated large CSV exports; source
+SQLite state and the published catalog are unaffected.
+
 Before changing VPS execution, read the [owner operating policy](../02-deployment/vps-acquisition-operating-policy.md). The owner requires dedicated collectors and publisher to remain enabled for unattended validation; assumed customer traffic is not a reason to disable them.
 
 Scope: the two job **producers** (LinkedIn guest-endpoint collector, employer career-site collector), the connector/ATS layer they share with the legacy Phase A scheduler, the eligibility-manifest input contract, the VPS wrapper call graph into `scripts/`, and an inventory of all 45 `scripts/` files and 7 `data/` files. Publication, identity/logos, applicant intelligence and source-state storage are split into secondary docs:

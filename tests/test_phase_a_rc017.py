@@ -232,3 +232,24 @@ def test_abandoned_generation_is_manifested_without_moving_current_pointer(tmp_p
     assert manifest["published"] is False
     assert after == before
     assert read_current_catalog_generation(output)["manifest"]["generation_id"] == "generation_old"
+
+
+def test_publishing_prunes_old_linkedin_csv_generations(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    for index in range(4):
+        generation_id = f"generation_run_20260930T00000{index}Z"
+        generation_dir = output / GENERATION_DIRECTORY_NAME / generation_id
+        generation_dir.mkdir(parents=True)
+        for name in GENERATION_ARTIFACT_NAMES:
+            (generation_dir / name).write_text(str(index), encoding="utf-8")
+        publish_catalog_generation(
+            output,
+            generation_id=generation_id,
+            run_id=f"run-{index}",
+            input_sha256="input-hash",
+            run_status="FINISHED",
+            run_outcome="COMPLETE",
+        )
+    assert sorted(path.name for path in (output / GENERATION_DIRECTORY_NAME).iterdir()) == [
+        "generation_run_20260930T000002Z", "generation_run_20260930T000003Z"
+    ]

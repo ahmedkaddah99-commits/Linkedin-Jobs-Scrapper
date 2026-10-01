@@ -12,6 +12,9 @@ from scripts.publish_producer_states import (
     SOURCE_EMPLOYER,
     SOURCE_LINKEDIN,
     _crosswalk_already_applied,
+    _current_employer_jobs,
+    _latest_employer_statuses,
+    _source_group_from_rows,
     _delivery_transaction_batches,
     _enrich_source_groups,
     _publisher_transaction_limits,
@@ -22,8 +25,58 @@ from scripts.publish_producer_states import (
     run_delivery,
 )
 
+import json
+import sqlite3
 import pytest
 from datetime import datetime, timezone
+
+
+def test_complete_employer_generation_excludes_retained_jobs_but_partial_keeps_them():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute("CREATE TABLE companies(company_key TEXT, payload_json TEXT, status TEXT)")
+    connection.execute("CREATE TABLE coverage_receipts(company_key TEXT, receipt_json TEXT)")
+    connection.executemany(
+        "INSERT INTO companies VALUES(?, ?, ?)",
+        [
+            ("complete", json.dumps({"generation_id": "new", "coverage": {"outcome": "confirmed_complete"}}), "completed"),
+            ("partial", json.dumps({"generation_id": "new", "coverage": {"outcome": "partial"}}), "partial"),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO coverage_receipts VALUES(?, ?)",
+        [
+            ("complete", json.dumps({"generation_id": "new", "terminal_classification": "confirmed_complete"})),
+            ("partial", json.dumps({"generation_id": "old", "terminal_classification": "confirmed_complete"})),
+        ],
+    )
+    groups = {
+        "complete": [{"source_job_id": "old", "last_seen_generation_id": "old"}, {"source_job_id": "new", "last_seen_generation_id": "new"}],
+        "partial": [{"source_job_id": "old", "last_seen_generation_id": "old"}],
+    }
+
+    filtered = _current_employer_jobs(connection, groups)
+
+    assert [row["source_job_id"] for row in filtered["complete"]] == ["new"]
+    assert [row["source_job_id"] for row in filtered["partial"]] == ["old"]
+    statuses = _latest_employer_statuses(connection)
+    assert statuses["complete"][1] == "confirmed_complete"
+    assert statuses["partial"][1] == "partial"
+
+
+def test_inactive_linkedin_observation_is_not_sent_as_an_active_job():
+    rows = [
+        {"linkedin_company_id": "123", "linkedin_job_id": "old", "row_json": json.dumps({"canonical_company_id": "company", "lifecycle_status": "inactive"})},
+        {"linkedin_company_id": "123", "linkedin_job_id": "live", "row_json": json.dumps({"canonical_company_id": "company", "lifecycle_status": "active"})},
+    ]
+    groups, _ = _source_group_from_rows(
+        rows,
+        source=SOURCE_LINKEDIN,
+        canonical_by_source_company={"123": "company"},
+        selected_ids={"company"},
+    )
+
+    assert [row["linkedin_job_id"] for row in groups["company"]] == ["live"]
 
 
 def test_bulk_trace_reports_database_error_without_swallowing_it(capsys):
