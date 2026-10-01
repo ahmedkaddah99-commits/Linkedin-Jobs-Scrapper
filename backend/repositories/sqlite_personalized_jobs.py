@@ -1084,12 +1084,17 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         return _row_payload(row) if row is not None else None
 
     @staticmethod
-    def _feed_filter_sql(filters: Mapping[str, Any] | None) -> tuple[list[str], list[Any]]:
+    def _feed_filter_sql(filters: Mapping[str, Any] | None, *, search_index_ready: bool = True) -> tuple[list[str], list[Any]]:
         filters = dict(filters or {})
         predicates: list[str] = []
         params: list[Any] = []
         search_terms = filters.get("search_text") or []
         for term in (search_terms if isinstance(search_terms, (list, tuple, set)) else [search_terms]):
+            if not search_index_ready:
+                text_expr = "LOWER(COALESCE(catalog.title, '') || ' ' || COALESCE(catalog.company, '') || ' ' || COALESCE(catalog.location, '') || ' ' || COALESCE(catalog.version_location, '') || ' ' || COALESCE(catalog.description, '') || ' ' || COALESCE(catalog.version_payload_json, ''))"
+                predicates.append(f"{text_expr} LIKE ?")
+                params.append(f"%{str(term).casefold()}%")
+                continue
             tokens = re.findall(r"[^\W_]+", str(term).casefold(), flags=re.UNICODE)[:12]
             if not tokens:
                 predicates.append("0 = 1")
@@ -1298,7 +1303,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if publication is None:
                 return {"publication": None, "rows": [], "total": 0}
             publication_payload = _row_payload(publication)
-            predicates, filter_params = self._feed_filter_sql(filters)
+            search_index_ready = True
+            if (filters or {}).get("search_text"):
+                search_index_ready = bool(connection.execute(
+                    "SELECT ready FROM published_job_search_backfill WHERE id = 1"
+                ).fetchone()["ready"])
+            predicates, filter_params = self._feed_filter_sql(filters, search_index_ready=search_index_ready)
             # Filters are applied to the outer ``page`` alias.  Keep the
             # catalog-qualified expressions for the scoped subquery builder,
             # then bind them to the visible query alias here.

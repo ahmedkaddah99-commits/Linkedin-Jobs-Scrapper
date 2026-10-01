@@ -3369,13 +3369,14 @@ def _apply_published_job_search_index_migration(connection: DatabaseConnection) 
         CREATE VIRTUAL TABLE IF NOT EXISTS published_job_search USING fts5(
             title, company, description, payload_json
         );
-        DELETE FROM published_job_search;
-        INSERT INTO published_job_search(rowid, title, company, description, payload_json)
-        SELECT j.rowid, j.title, c.canonical_name,
-               COALESCE(v.description, ''), COALESCE(v.payload_json, '')
-        FROM canonical_jobs j
-        JOIN canonical_companies c ON c.company_id = j.company_id
-        LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id;
+        CREATE TABLE IF NOT EXISTS published_job_search_backfill (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_rowid INTEGER NOT NULL DEFAULT 0,
+            target_rowid INTEGER NOT NULL DEFAULT 0,
+            ready INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        INSERT OR IGNORE INTO published_job_search_backfill(id) VALUES (1);
 
         CREATE TRIGGER IF NOT EXISTS published_job_search_insert
         AFTER INSERT ON canonical_jobs BEGIN
