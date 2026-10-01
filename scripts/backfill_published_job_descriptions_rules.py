@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from time import monotonic
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +37,12 @@ def run_rules_backfill(
     written = failed = pages = 0
     wrapped = False
     while written + failed < limit:
+        phase_started = monotonic()
         rows = next_batch(
             store, cursor, min(page_size, limit - written - failed),
             upgrade_rules=False,
         )
+        print(json.dumps({"phase": "selected", "rows": len(rows), "seconds": round(monotonic() - phase_started, 2)}), flush=True)
         if not rows:
             if cursor and not wrapped:
                 cursor = ""
@@ -54,7 +57,9 @@ def run_rules_backfill(
             except (TypeError, ValueError):
                 failed += 1
         if prepared:
+            phase_started = monotonic()
             save_batch(store, prepared, preserve_model=True)
+            print(json.dumps({"phase": "saved", "rows": len(prepared), "seconds": round(monotonic() - phase_started, 2)}), flush=True)
             written += len(prepared)
         cursor = str(rows[-1]["canonical_job_id"])
         _save_cursor(cursor_file, cursor)
