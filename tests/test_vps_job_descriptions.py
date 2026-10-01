@@ -77,18 +77,19 @@ def test_backfill_selects_only_current_unprocessed_published_versions(tmp_path: 
             CREATE TABLE acquisition_publication_jobs (publication_id TEXT, canonical_job_id TEXT);
             CREATE TABLE canonical_jobs (canonical_job_id TEXT, current_version_id TEXT, title TEXT, canonical_url TEXT);
             CREATE TABLE job_posting_versions (version_id TEXT, version_number INTEGER, content_hash TEXT,
-                description TEXT, payload_json TEXT, location TEXT, apply_url TEXT);
+                description TEXT, payload_json TEXT, location TEXT, apply_url TEXT, created_at TEXT);
             CREATE TABLE job_description_intelligence (version_id TEXT, content_hash TEXT, prompt_version TEXT);
             INSERT INTO acquisition_publication_head VALUES (1, 'publication');
             INSERT INTO acquisition_publication_jobs VALUES ('publication', 'job-a'), ('publication', 'job-b'), ('publication', 'job-c');
             INSERT INTO canonical_jobs VALUES ('job-a', 'v-a', 'A', ''), ('job-b', 'v-b', 'B', ''), ('job-c', 'v-c', 'C', '');
-            INSERT INTO job_posting_versions VALUES ('v-a', 1, 'hash-a', 'Description A', '{}', '', '');
-            INSERT INTO job_posting_versions VALUES ('v-b', 1, 'hash-b', 'Description B', '{}', '', '');
-            INSERT INTO job_posting_versions VALUES ('v-c', 1, 'hash-c', '', '{}', '', '');
+            INSERT INTO job_posting_versions VALUES ('v-a', 1, 'hash-a', 'Description A', '{}', '', '', '2026-09-30');
+            INSERT INTO job_posting_versions VALUES ('v-b', 1, 'hash-b', 'Description B', '{}', '', '', '2026-10-01');
+            INSERT INTO job_posting_versions VALUES ('v-c', 1, 'hash-c', '', '{}', '', '', '2026-10-02');
             INSERT INTO job_description_intelligence VALUES ('v-a', 'hash-a', 'runr_description_v1');
         """)
     store = SqlitePersonalizedJobsStore(db, initialize=False)
     assert [row["canonical_job_id"] for row in next_batch(store, "", 10)] == ["job-b"]
+    assert [row["canonical_job_id"] for row in next_batch(store, "job-z", 10, newest=True)] == ["job-b"]
     assert next_batch(store, "job-b", 10) == []
 
 

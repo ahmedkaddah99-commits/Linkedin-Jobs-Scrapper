@@ -22,10 +22,13 @@ from backend.application.vps_job_descriptions import (
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 
 
-def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int) -> list[dict]:
+def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int, *, newest: bool = False) -> list[dict]:
+    cursor_clause = "" if newest else "AND j.canonical_job_id > ?"
+    order_clause = "v.created_at DESC, j.canonical_job_id" if newest else "j.canonical_job_id"
+    parameters = (PROMPT_VERSION, limit) if newest else (after_id, PROMPT_VERSION, limit)
     with store._connect() as connection:
         rows = connection.execute(
-            """
+            f"""
             SELECT j.canonical_job_id, j.current_version_id, j.title, j.canonical_url,
                    v.version_number, v.content_hash, v.description,
                    v.payload_json AS version_payload_json, v.location AS version_location,
@@ -35,13 +38,13 @@ def next_batch(store: SqlitePersonalizedJobsStore, after_id: str, limit: int) ->
             JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN job_posting_versions v ON v.version_id = j.current_version_id
             LEFT JOIN job_description_intelligence d ON d.version_id = v.version_id
-            WHERE h.head_id = 1 AND j.canonical_job_id > ?
+            WHERE h.head_id = 1 {cursor_clause}
               AND TRIM(COALESCE(v.description, '')) != ''
               AND (d.version_id IS NULL OR COALESCE(d.content_hash, '') != v.content_hash
                    OR COALESCE(d.prompt_version, '') != ?)
-            ORDER BY j.canonical_job_id LIMIT ?
+            ORDER BY {order_clause} LIMIT ?
             """,
-            (after_id, PROMPT_VERSION, limit),
+            parameters,
         ).fetchall()
     return [{key: row[key] for key in row.keys()} for row in rows]
 
@@ -90,8 +93,13 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
     counts = {"requests": 0, "attempted": 0, "completed": 0, "failed": 0}
     errors: list[str] = []
     rate_limited = False
+    recent_requests = min(10, max(0, limit - 1))
     while counts["requests"] < limit and not rate_limited:
-        candidates = next_batch(store, cursor, 5)
+        newest = counts["requests"] < recent_requests
+        candidates = next_batch(store, cursor, 5, newest=newest)
+        if not candidates and newest:
+            recent_requests = counts["requests"]
+            continue
         # Keep full postings intact while bounding a multi-job request's size.
         batch = []
         source_chars = 0
@@ -123,7 +131,8 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
             errors.append(type(exc).__name__)
             break
         counts["completed"] += len(batch)
-        cursor = str(batch[-1]["canonical_job_id"])
+        if not newest:
+            cursor = str(batch[-1]["canonical_job_id"])
     cursor_file.parent.mkdir(parents=True, exist_ok=True)
     temp = cursor_file.with_suffix(".tmp")
     temp.write_text(json.dumps({"after_id": cursor}), encoding="utf-8")
