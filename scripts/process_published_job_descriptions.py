@@ -8,6 +8,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from time import sleep
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -112,16 +113,28 @@ def run(store: SqlitePersonalizedJobsStore, *, limit: int, cursor_file: Path) ->
         if not batch:
             cursor = ""
             break
-        counts["requests"] += 1
-        try:
-            results = build_runr_descriptions(batch, openrouter_generate)
-        except RateLimitError:
-            rate_limited = True
+        results = None
+        model_error = None
+        for attempt in range(3):
+            if counts["requests"] >= limit:
+                break
+            counts["requests"] += 1
+            try:
+                results = build_runr_descriptions(batch, openrouter_generate)
+                break
+            except RateLimitError:
+                rate_limited = True
+                break
+            except Exception as exc:
+                model_error = exc
+                if attempt < 2 and counts["requests"] < limit:
+                    sleep(5 * (attempt + 1))
+        if rate_limited:
             break
-        except Exception as exc:
+        if results is None:
             counts["attempted"] += len(batch)
             counts["failed"] += len(batch)
-            errors.append(type(exc).__name__)
+            errors.append(type(model_error).__name__ if model_error is not None else "request_limit")
             break
         counts["attempted"] += len(batch)
         try:

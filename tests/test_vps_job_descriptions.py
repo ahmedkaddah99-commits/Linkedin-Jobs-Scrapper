@@ -169,3 +169,33 @@ def test_failed_write_is_retried_before_cursor_advances(tmp_path: Path, monkeypa
     assert json.loads(cursor_file.read_text())["after_id"] == ""
     second = run(store, limit=1, cursor_file=cursor_file)
     assert second["completed"] == 2 and second["failed"] == 0
+
+
+def test_transient_model_failure_retries_without_advancing_cursor(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app)
+    calls = 0
+
+    def generate(prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("temporary model timeout")
+        postings = json.loads(prompt.split("Postings:\n", 1)[1])
+        return {"jobs": [{
+            "id": posting["id"], "source_language": "en", "overview": "Prepared job",
+            "responsibilities": [], "required_qualifications": [],
+            "preferred_qualifications": [], "benefits": [], "application_details": [],
+        } for posting in postings]}
+
+    monkeypatch.setattr("scripts.process_published_job_descriptions.openrouter_generate", generate)
+    monkeypatch.setattr("scripts.process_published_job_descriptions.sleep", lambda _: None)
+    cursor_file = tmp_path / "cursor.json"
+    result = run(app.repositories.personalized_jobs_store, limit=2, cursor_file=cursor_file)
+    assert calls == 2
+    assert result["requests"] == 2
+    assert result["completed"] == 2
+    assert result["failed"] == 0
