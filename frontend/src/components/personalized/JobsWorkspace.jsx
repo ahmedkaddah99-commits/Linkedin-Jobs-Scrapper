@@ -314,22 +314,30 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
 function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const summary = job.runrSummary || {};
   const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
-  const sections = [
-    ["Responsibilities", summary.responsibilities],
-    ["Required qualifications", summary.required_qualifications],
-    ["Preferred qualifications", summary.preferred_qualifications],
-    ["Benefits", summary.benefits],
-    ["Application details", summary.application_details],
-  ];
+  const available = job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview;
+  const itemsFor = (key) => Array.isArray(summary[key]) ? summary[key].filter((item) => typeof (typeof item === "string" ? item : item?.text) === "string" && (typeof item === "string" ? item : item.text).trim()) : [];
+  const responsibilities = itemsFor("responsibilities");
+  const required = itemsFor("required_qualifications");
+  const preferred = itemsFor("preferred_qualifications");
+  const benefits = itemsFor("benefits");
+  const applicationDetails = itemsFor("application_details");
+  const list = (items) => <ul className="jobs-reading__list">{items.map((item, index) => <li key={index}>{typeof item === "string" ? item : item.text}</li>)}</ul>;
+  const languageCode = summary.output_language || summary.source_language;
+  const language = languageCode && languageCode !== "und" ? (new Intl.DisplayNames(["en"], { type: "language" }).of(languageCode) || languageCode) : "";
+  const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
   return <article className="jobs-reading">
-    <header className="jobs-reading__header"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><div><p>{job.company} · {formatJobDate(job.postedAt)}</p><h1>{job.title}</h1><span>{[job.location, job.workArrangement, job.employmentType].filter((value) => value && value !== "Unknown").join(" · ")}</span></div></header>
-    <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>visibility_off</Icon>Hide</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
-    {job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview ? <>
-      <section className="jobs-reading__section"><h2>Overview</h2><p>{summary.overview}</p></section>
-      {sections.map(([title, items]) => Array.isArray(items) && items.length ? <section className="jobs-reading__section" key={title}><h2>{title}</h2><ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item.text || String(item)}</li>)}</ul></section> : null)}
-      <p className="jobs-reading__note">Runr organized this description from the employer’s posting. View the Original job post tab for the employer’s exact wording.</p>
-    </> : <section className="jobs-reading__section" role="status"><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></section>}
-    <section className="jobs-reading__section"><h2>Company</h2><p>{company?.name || job.company}</p>{company?.profile?.fields?.description?.state === "known" ? <p>{company.profile.fields.description.value}</p> : null}</section>
+    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong><small>{formatJobDate(job.postedAt)}</small></span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{[["location_on", job.location], ["home_work", job.workArrangement], ["schedule", job.employmentType], ["payments", job.salaryLabel]].filter(([, value]) => value && value !== "Unknown").map(([icon, value]) => <span key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
+    <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
+    {available ? <>
+      <div className="jobs-reading__edition"><Icon>auto_awesome</Icon><span>Organized by Runr{language ? ` · ${language}` : ""}</span></div>
+      <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section>
+      {responsibilities.length > 0 ? <section className="jobs-reading__section" id="job-responsibilities"><h2><Icon>checklist</Icon>Responsibilities</h2>{list(responsibilities)}</section> : null}
+      {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
+      {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
+      {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
+      <p className="jobs-reading__note">Runr organized this description from the employer’s posting. The Original job post tab shows the employer’s wording.</p>
+    </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></div></section>}
+    <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
     <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
   </article>;
 }
@@ -337,7 +345,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
 function OriginalJob({ job }) {
   const original = job.originalPosting || {};
   const description = original.description_text || original.description || job.description;
-  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div><p>{job.company}</p><h1>{original.title || job.title}</h1><span>Original employer posting</span></div></header>{description || original.description_html ? <DescriptionBlock description={description} html={original.description_html} /> : <p>This employer posting has no description text available.</p>}</article>;
+  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong><small>Employer’s original wording</small></span></div><h1>{original.title || job.title}</h1></header><div className="jobs-reading__original-content">{description || original.description_html ? <DescriptionBlock description={description} html={original.description_html} /> : <p>This employer posting has no description text available.</p>}</div></article>;
 }
 
 function DrawerFilterControl({ filter, value, onChange }) {
