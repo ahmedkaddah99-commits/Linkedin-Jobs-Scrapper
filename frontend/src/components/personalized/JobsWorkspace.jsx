@@ -18,7 +18,7 @@ import {
 import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
-import { descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "../../lib/jobReadingPresentation";
+import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "../../lib/jobReadingPresentation";
 
 const NETWORK_ITEMS = [
   ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
@@ -328,7 +328,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const seniorityLabel = (value) => ({ entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
   const scrapedSalary = present(job.salaryLabel) && job.salary?.period ? `${job.salaryLabel}/${job.salary.period}` : null;
   const employment = employmentTypeLabel(present(job.employmentType), extracted("employment_type"), job.title);
-  const seniority = seniorityFromYears(yearsMin) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
+  const seniority = seniorityFromYears(yearsMin) || alternativeSeniority(summary.required_qualifications, structured.source_passages) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
   const facts = pilot ? [
     ["location_on", present(job.location) || extracted("location")],
     ["home_work", arrangementLabel(present(job.workArrangement)) || arrangementLabel(extracted("work_arrangement"))],

@@ -15,6 +15,33 @@ export function seniorityFromYears(minimum) {
   return "Lead level";
 }
 
+export function alternativeSeniority(requiredItems, sourcePassages) {
+  if (!Array.isArray(requiredItems) || !Array.isArray(sourcePassages)) return null;
+  const byId = new Map(sourcePassages.map((passage) => [passage.id, passage.text]));
+  const order = ["Entry level", "Mid level", "Senior level", "Lead level"];
+  const matches = [];
+  for (const item of requiredItems) {
+    for (const sourceId of item?.source_ids || []) {
+      const source = byId.get(sourceId);
+      if (typeof source !== "string") continue;
+      const alternatives = source.split(/\bor\b/i);
+      if (alternatives.length !== 2) continue;
+      const levels = alternatives.map((part) => {
+        if (!/\bexperience\b/i.test(part)) return null;
+        const years = [...part.matchAll(/\b(\d+(?:\.\d+)?)(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*\+?\s*years?\b/gi)];
+        return years.length === 1 ? seniorityFromYears(Number(years[0][1])) : null;
+      });
+      if (levels.every(Boolean)) matches.push(levels);
+    }
+  }
+  if (matches.length !== 1) return null;
+  const [first, second] = matches[0];
+  const [lower, higher] = [first, second].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  if (lower === higher) return higher;
+  if (order.indexOf(higher) - order.indexOf(lower) > 1) return higher;
+  return `${lower.replace(/ level$/, "")} / ${higher}`;
+}
+
 export function employmentTypeLabel(scraped, extracted, title = "") {
   const labels = {
     full_time: "Full-time", part_time: "Part-time", contract: "Contract",
