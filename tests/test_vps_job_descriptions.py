@@ -27,6 +27,34 @@ def test_pilot_accepts_multiple_sections_per_source_and_hides_invalid_numeric_ou
     assert "experience_years_min:invalid_output" in result["structured_description"]["rejected_fields"]
 
 
+def test_pilot_reanchors_stated_years_and_hides_invented_or_alternative_years():
+    source = "Qualifications:\nA degree in engineering.\nAt least 5 years of engineering experience."
+    result = build_pilot_description({"description": source}, lambda _: {
+        "items": [], "header_candidates": {"experience_years_min": {"value": 5, "source_ids": ["p2"]}},
+    })
+    assert result["structured_description"]["experience_years_min"]["source_ids"] == ["p3"]
+
+    invented = build_pilot_description({"description": "Qualifications:\nHands-on Salesforce experience."}, lambda _: {
+        "items": [], "header_candidates": {"experience_years_min": {"value": 1, "source_ids": ["p2"]}},
+    })
+    assert invented["structured_description"]["experience_years_min"] is None
+
+    alternative = build_pilot_description({"description": "3-4 years of professional experience or a minimum of 2 years transferable recruiting experience."}, lambda _: {
+        "items": [], "header_candidates": {"experience_years_min": {"value": 3, "source_ids": ["p1"]}},
+    })
+    assert alternative["structured_description"]["experience_years_min"] is None
+
+    bounded = build_pilot_description({"description": "2-5 years of experience selling crop protection, seed or agronomy services."}, lambda _: {
+        "items": [], "header_candidates": {"experience_years_min": {"value": 2, "source_ids": ["p1"]}},
+    })
+    assert bounded["structured_description"]["experience_years_min"]["value"] == 2
+
+    wrapped = build_pilot_description({"description": "Qualifications:\n5+ years\nof experience in IT security."}, lambda _: {
+        "items": [], "header_candidates": {"experience_years_min": {"value": 5, "source_ids": ["p2"]}},
+    })
+    assert wrapped["structured_description"]["experience_years_min"]["source_ids"] == ["p2", "p3"]
+
+
 def test_pilot_recovers_omitted_explicit_qualification_lists_without_legal_text():
     row = {"description": "Responsibilities\nBuild reports.\nQualifications:\nDegree required.\nPreferred Additional Skills:\nSQL is a plus.\nAcme is an Equal Opportunity Employer."}
     result = build_pilot_description(row, lambda _: {
@@ -262,7 +290,7 @@ def test_pilot_description_is_served_to_customer_from_shared_version(tmp_path: P
     detail = app.get_personalized_job_detail("user-a", "job-a")
     assert detail["description_intelligence"]["prompt_version"] == "runr_description_nemo_v2"
     assert detail["runr_summary"]["responsibilities"][0]["text"] == "Build reports."
-    assert detail["structured_description"]["experience_years_min"]["value"] == 1
+    assert detail["structured_description"]["experience_years_min"] is None
 
 
 def test_rule_backfill_prepares_all_jobs_and_model_can_upgrade_them(tmp_path: Path, monkeypatch):

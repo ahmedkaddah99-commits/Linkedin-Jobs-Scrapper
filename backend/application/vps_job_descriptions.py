@@ -42,10 +42,63 @@ PILOT_HEADINGS = {
 }
 PILOT_OTHER_HEADINGS = {"about us", "company description", "project description", "job description", "equal opportunity", "why join us", "what will help you succeed", "person specification", "hiscox values", "application deadline", "information about our talent acquisition process", "identity statement", "candidate ai usage policy", "work model", "commitment to non-discrimination", "what we value", "your way to us"}
 PILOT_BENEFIT_SUBHEADINGS = {"professional & personal growth", "rofessional & personal growth", "flexible work-life balance", "embrace diversity & sustainability", "comprehensive benefits"}
+PILOT_YEAR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+PILOT_YEAR_NUMBER = r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+PILOT_YEAR_PATTERN = re.compile(rf"\b({PILOT_YEAR_NUMBER})(?:\s*[-–]\s*({PILOT_YEAR_NUMBER}))?\s*\+?\s*years?\b", re.IGNORECASE)
+
+
+def _supported_experience_years(text: str) -> set[float]:
+    """Return years explicitly tied to experience in one short source passage."""
+    if not re.search(r"\bexperience\b", text, re.IGNORECASE):
+        return set()
+    values: set[float] = set()
+    for match in PILOT_YEAR_PATTERN.finditer(text):
+        for raw in match.groups():
+            if raw:
+                values.add(float(PILOT_YEAR_WORDS.get(raw.lower(), raw) if not raw.isdigit() else raw))
+    return values
+
+
+def _ambiguous_experience_years(text: str) -> bool:
+    return bool(re.search(r"\bor\b", text, re.IGNORECASE) and len(list(PILOT_YEAR_PATTERN.finditer(text))) > 1)
+
+
+def _validate_experience_sources(result: dict[str, Any]) -> None:
+    structured = result["structured_description"]
+    passages = structured["source_passages"]
+    by_id = {passage["id"]: passage["text"] for passage in passages}
+    for field in ("experience_years_min", "experience_years_max"):
+        candidate = structured.get(field)
+        if not isinstance(candidate, dict):
+            continue
+        value = float(candidate["value"])
+        cited = " ".join(by_id.get(source_id, "") for source_id in candidate["source_ids"])
+        cited_years = _supported_experience_years(cited)
+        if value in cited_years and not _ambiguous_experience_years(cited):
+            continue
+        contexts = []
+        for index, passage in enumerate(passages):
+            ids = [passage["id"]]
+            text = passage["text"]
+            if PILOT_YEAR_PATTERN.search(text) and not re.search(r"\bexperience\b", text, re.IGNORECASE) and index + 1 < len(passages):
+                ids.append(passages[index + 1]["id"])
+                text += " " + passages[index + 1]["text"]
+            if value in _supported_experience_years(text):
+                contexts.append((ids, text))
+        anchors = contexts
+        if len(anchors) == 1:
+            ids, text = anchors[0]
+            if not _ambiguous_experience_years(text):
+                candidate["source_ids"] = ids
+                candidate["method"] = "source_reanchored"
+                continue
+        structured[field] = None
+        structured["rejected_fields"].append(f"{field}:unsupported_or_ambiguous_source")
 
 
 def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
     """Use exact English source items if Nemo omitted a whole labeled section."""
+    _validate_experience_sources(result)
     summary = result["summary"]
     corrected_required = []
     for item in summary["required_qualifications"]:
