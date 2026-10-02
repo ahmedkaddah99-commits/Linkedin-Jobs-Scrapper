@@ -354,6 +354,8 @@ export function toPersonalizedJobView(job = {}) {
     : text(latestApplicants.label) || (applicantIntelligence.state === "available" ? "Applicant data available in Runr Pro" : "Unknown");
   const applyUrl = approvedApplyUrl(safeJob);
   const viewJobUrl = approvedViewJobUrl(safeJob);
+  const applicationEntryUrl = applyUrl || viewJobUrl;
+  const applicationEntryKind = applyUrl ? "direct_apply" : (viewJobUrl ? "job_detail" : "unavailable");
   const companyLogoUrl = text(companyProfile.logo_url || companyProfile.fields?.logo?.value);
   const companyMonogram = text(companyProfile.monogram);
   return {
@@ -382,6 +384,8 @@ export function toPersonalizedJobView(job = {}) {
     applyUrl,
     directApplyUrl: applyUrl,
     viewJobUrl,
+    applicationEntryUrl,
+    applicationEntryKind,
     lifecycleState: unknown(safeJob.lifecycle_state),
     userState: text(safeJob.user_state) || "none",
     evaluation,

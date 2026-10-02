@@ -18,6 +18,8 @@ test("real Jobs view exposes only approved Apply URL and user-safe fields", () =
 
   assert.equal(view.dataMode, "real");
   assert.equal(view.applyUrl, "https://jobs.greenhouse.io/acme/jobs/1");
+  assert.equal(view.applicationEntryUrl, "https://jobs.greenhouse.io/acme/jobs/1");
+  assert.equal(view.applicationEntryKind, "direct_apply");
   assert.equal(view.viewJobUrl, "https://boards.example/jobs/1");
   assert.equal(view.canonicalUrl, undefined);
   assert.equal(view.source, "greenhouse");
@@ -67,6 +69,8 @@ test("real Jobs view never exposes a LinkedIn job-detail Apply URL", () => {
   assert.equal(view.applyUrl, "");
   assert.equal(view.directApplyUrl, "");
   assert.equal(view.viewJobUrl, "https://www.linkedin.com/jobs/view/3");
+  assert.equal(view.applicationEntryUrl, "https://www.linkedin.com/jobs/view/3");
+  assert.equal(view.applicationEntryKind, "job_detail");
 });
 
 test("View job prefers the original posting over a different application candidate", () => {
@@ -81,6 +85,21 @@ test("View job prefers the original posting over a different application candida
 
   assert.equal(view.applyUrl, "");
   assert.equal(view.viewJobUrl, "https://www.linkedin.com/jobs/view/5");
+  assert.equal(view.applicationEntryUrl, "https://www.linkedin.com/jobs/view/5");
+});
+
+test("Apply remains unavailable without a direct or valid job-detail URL", () => {
+  const view = toPersonalizedJobView({
+    canonical_job_id: "job-6",
+    title: "Engineer",
+    company: "Gamma",
+    job_detail_url: "javascript:alert(1)",
+  });
+
+  assert.equal(view.applyUrl, "");
+  assert.equal(view.viewJobUrl, "");
+  assert.equal(view.applicationEntryUrl, "");
+  assert.equal(view.applicationEntryKind, "unavailable");
 });
 
 test("real Jobs view preserves a server-approved external Apply URL from a LinkedIn-sourced job", () => {
