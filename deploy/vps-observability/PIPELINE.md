@@ -78,6 +78,12 @@ the deployed publication policy. Source rows, company records, unique jobs,
 active jobs and current publication membership are separate units. Latest-run
 metrics are gauges, not cumulative counters suitable for `rate()`.
 
+The scraper service memory chart plots systemd `MemoryPeak` readings from the
+health observer at their Grafana sample times. Each value is the peak for the
+service run retained by systemd, not the highest value ever recorded across
+all runs. Gaps mean no sample was exported; earlier history is limited by
+Grafana retention and the observer installation date.
+
 Backlog is a **rowid-distance proxy**, not exact pending eligible jobs. Source
 rowid gaps or deletions matter. Historical import completeness is a separate
 1/0 metric. Manifest exclusion reasons overlap and describe the input snapshot,

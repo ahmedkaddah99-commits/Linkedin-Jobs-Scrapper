@@ -139,6 +139,17 @@ def test_stage_and_run_outcomes_have_real_time_axis_for_each_source():
             assert 'day=' not in chart['targets'][0]['expr']
 
 
+def test_scraper_service_run_peak_memory_is_charted_over_time():
+    result = dashboard.build('prom', 'logs')
+    chart = next(panel for panel in result['panels'] if panel['title'] == 'Scraper service run peak memory over time')
+    assert chart['type'] == 'timeseries'
+    assert chart['targets'][0]['expr'] == 'runr_acquisition_service_memory_peak_bytes{source=~"${source:regex}"}'
+    assert chart['targets'][0]['range'] is True
+    assert chart['targets'][0]['instant'] is False
+    assert chart['fieldConfig']['defaults']['unit'] == 'bytes'
+    assert 'not an all-time maximum' in chart['description']
+
+
 def test_metric_labels_use_utf8_not_json_unicode_escape():
     line = pipeline.render({'chart': {'up': True, 'timestamp': 1,
         'metrics': [pipeline.metric('stage_city_jobs', 1, city='Münster')]}}, 2)

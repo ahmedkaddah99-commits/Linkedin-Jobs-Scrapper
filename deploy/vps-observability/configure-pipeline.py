@@ -175,7 +175,9 @@ def build(prom_uid='grafanacloud-prom', logs_uid='grafanacloud-logs'):
         'Compare saturation with budget use and error outcomes.', kind='timeseries', unit='percent', height=7)
     panel('VPS available memory', 'node_memory_MemAvailable_bytes{instance=~"${host:regex}"}', '{{instance}}', kind='timeseries', unit='bytes')
     panel('VPS root filesystem free space', 'node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs",instance=~"${host:regex}"}', '{{instance}}', kind='stat', unit='bytes', height=4)
-    panel('Scraper service peak memory', 'runr_acquisition_service_memory_peak_bytes{' + source + '}', '{{source}}', kind='stat', unit='bytes', height=4)
+    panel('Scraper service run peak memory over time', 'runr_acquisition_service_memory_peak_bytes{' + source + '}', '{{source}}',
+        'Each sample is the systemd MemoryPeak value for the service at observation time. The line changes when the recorded run peak changes; gaps mean no sample. This is not an all-time maximum. History is limited to retained Grafana samples.',
+        kind='timeseries', unit='bytes', height=8)
     panel('Aggregate collector duration / overhead', 'runr_pipeline_section_duration_seconds', '{{section}}', kind='stat', unit='s', height=4)
     text('How to interpret problems — and remaining visibility gaps',
         '- Budget fully used + budget-exhausted/deferred work + idle host: configured cap is a likely bottleneck.\n'
