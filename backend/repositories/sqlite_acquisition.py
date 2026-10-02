@@ -3786,6 +3786,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         target_scope_params: tuple[Any, ...],
         policy,
         page_size: int = 400,
+        include_previous: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Read and validate publication candidates in bounded remote pages.
 
@@ -3800,6 +3801,28 @@ class SqliteAcquisitionStore(_SqliteStore):
         rejected_rows: list[dict[str, Any]] = []
         after_canonical_job_id = ""
         bounded_page_size = max(1, min(500, int(page_size)))
+        previous_scope = (
+            "OR EXISTS (SELECT 1 FROM acquisition_publication_jobs previous_jobs "
+            "WHERE previous_jobs.canonical_job_id = j.canonical_job_id "
+            "AND previous_jobs.publication_id = "
+            "(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1))"
+            if include_previous else ""
+        )
+        changed_join = (
+            "JOIN (SELECT DISTINCT o.canonical_job_id FROM job_source_observations o "
+            f"WHERE {target_scope} AND o.cycle_id=?) batch_jobs "
+            "ON batch_jobs.canonical_job_id=j.canonical_job_id"
+            if not include_previous else ""
+        )
+        candidate_scope = (
+            "AND (EXISTS (SELECT 1 FROM job_source_observations o "
+            "WHERE o.canonical_job_id=j.canonical_job_id "
+            f"AND {target_scope} AND o.cycle_id=?) {previous_scope})"
+            if include_previous else ""
+        )
+        query_parameters = (
+            (*target_scope_params, cycle_id) if not include_previous else ()
+        )
         while True:
             with self._connect() as connection:
                 candidate_rows = connection.execute(
@@ -3818,6 +3841,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                                     latest_o.target_id AS source_target_id,
                                     latest_o.task_id AS source_task_id
                     FROM canonical_jobs j
+                    {changed_join}
                     JOIN canonical_companies c ON c.company_id = j.company_id
                     LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
                     LEFT JOIN job_source_observations latest_o ON latest_o.observation_id = (
@@ -3827,24 +3851,16 @@ class SqliteAcquisitionStore(_SqliteStore):
                     )
                     WHERE j.canonical_job_id > ?
                       AND j.lifecycle_state != 'closed'
-                      AND (
-                        EXISTS (
-                            SELECT 1 FROM job_source_observations o
-                            WHERE o.canonical_job_id = j.canonical_job_id
-                              AND {target_scope} AND o.cycle_id = ?
-                        )
-                        OR EXISTS (
-                            SELECT 1 FROM acquisition_publication_jobs previous_jobs
-                            WHERE previous_jobs.canonical_job_id = j.canonical_job_id
-                              AND previous_jobs.publication_id = (
-                                  SELECT publication_id FROM acquisition_publication_head WHERE head_id=1
-                              )
-                        )
-                      )
+                      {candidate_scope}
                     ORDER BY j.canonical_job_id
                     LIMIT ?
                     """,
-                    (after_canonical_job_id, *target_scope_params, cycle_id, bounded_page_size),
+                    (
+                        *query_parameters,
+                        after_canonical_job_id,
+                        *((*target_scope_params, cycle_id) if include_previous else ()),
+                        bounded_page_size,
+                    ),
                 ).fetchall()
             page_snapshot, page_rejected = self._publication_rows_with_completeness(
                 candidate_rows,
@@ -3870,12 +3886,14 @@ class SqliteAcquisitionStore(_SqliteStore):
         policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
         lease_owner: str = "",
         lease_token: str = "",
+        batch_key: str = "",
     ) -> str:
         target_ids = tuple(str(item) for item in valid_target_ids if str(item).strip())
         if not target_ids:
             return ""
         now = utc_now_iso()
         publication_id = f"acq_publication_{uuid4().hex}"
+        publication_cycle_id = f"{cycle_id}:{batch_key}" if batch_key else cycle_id
         normalized_origin = _publication_origin(origin, default="scheduled")
         policy = get_publication_policy(policy_version)
         normalized_created_by = str(created_by or "system").strip()
@@ -3908,12 +3926,45 @@ class SqliteAcquisitionStore(_SqliteStore):
             placeholders = ",".join("?" for _ in target_ids)
             target_scope = f"o.target_id IN ({placeholders})"
             target_scope_params = target_ids
+        previous_head_id = ""
+        previous_snapshot: list[dict[str, Any]] = []
+        changed_job_ids: set[str] = set()
+        if batch_key:
+            with self._connect() as connection:
+                head = connection.execute(
+                    "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+                ).fetchone()
+                previous_head_id = str(head["publication_id"] or "") if head else ""
+                if previous_head_id:
+                    previous = connection.execute(
+                        "SELECT snapshot_json FROM acquisition_publications WHERE publication_id=?",
+                        (previous_head_id,),
+                    ).fetchone()
+                    decoded = _decode(previous["snapshot_json"], []) if previous else []
+                    previous_snapshot = [dict(item) for item in decoded if isinstance(item, Mapping)]
+                changed_rows = connection.execute(
+                    f"SELECT DISTINCT o.canonical_job_id FROM job_source_observations o "
+                    f"WHERE o.cycle_id=? AND {target_scope}",
+                    (cycle_id, *target_scope_params),
+                ).fetchall()
+                changed_job_ids = {str(row["canonical_job_id"]) for row in changed_rows}
+                for offset in range(0, len(target_ids), 400):
+                    batch = target_ids[offset:offset + 400]
+                    placeholders = ",".join("?" for _ in batch)
+                    state_rows = connection.execute(
+                        f"SELECT DISTINCT j.canonical_job_id FROM job_source_states s "
+                        f"JOIN canonical_jobs j ON j.canonical_job_id=s.canonical_job_id "
+                        f"WHERE s.target_id IN ({placeholders}) AND j.lifecycle_state='closed'",
+                        batch,
+                    ).fetchall()
+                    changed_job_ids.update(str(row["canonical_job_id"]) for row in state_rows)
         try:
-            snapshot, rejected_rows = self._prepare_publication_snapshot(
+            changed_snapshot, rejected_rows = self._prepare_publication_snapshot(
                 cycle_id=cycle_id,
                 target_scope=target_scope,
                 target_scope_params=target_scope_params,
                 policy=policy,
+                include_previous=not bool(batch_key),
             )
         finally:
             if scope_id:
@@ -3923,6 +3974,18 @@ class SqliteAcquisitionStore(_SqliteStore):
                         (scope_id,),
                     )
                 )
+
+        if batch_key:
+            by_id = {
+                str(row["canonical_job_id"]): row for row in previous_snapshot
+                if str(row.get("canonical_job_id") or "") not in changed_job_ids
+            }
+            by_id.update({str(row["canonical_job_id"]): row for row in changed_snapshot})
+            snapshot = sorted(by_id.values(), key=lambda row: (str(row.get("title") or ""), str(row.get("canonical_job_id") or "")))
+            if snapshot == previous_snapshot:
+                return previous_head_id
+        else:
+            snapshot = changed_snapshot
 
         def publish(connection):
             if lease_token:
@@ -3935,7 +3998,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 )
             existing = connection.execute(
                 "SELECT publication_id FROM acquisition_publications WHERE cycle_id = ? LIMIT 1",
-                (cycle_id,),
+                (publication_cycle_id,),
             ).fetchone()
             if existing is not None:
                 existing_id = str(existing["publication_id"])
@@ -3965,6 +4028,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
             previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            if batch_key and previous_publication_id != previous_head_id:
+                raise StalePublicationHeadError("Publication head changed during batch preparation.")
             _assert_publication_size_is_safe(
                 connection,
                 previous_publication_id=previous_publication_id,
@@ -3986,17 +4051,31 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ) VALUES (?, ?, 'valid', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    publication_id, cycle_id, _json(snapshot), now, str(valid_until or ""),
+                    publication_id, publication_cycle_id, _json(snapshot), now, str(valid_until or ""),
                     previous_publication_id, normalized_origin, normalized_created_by,
                     normalized_scheduled_run_id, _json(preflight), policy.version,
                 ),
             )
-            _insert_publication_jobs_batched(
-                connection,
-                publication_id=publication_id,
-                canonical_job_ids=(str(row["canonical_job_id"]) for row in snapshot),
-                batch_size=5000,
-            )
+            if batch_key and previous_publication_id:
+                connection.execute(
+                    "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) "
+                    "SELECT ?, canonical_job_id FROM acquisition_publication_jobs "
+                    "WHERE publication_id=? AND canonical_job_id NOT IN "
+                    "(SELECT CAST(value AS TEXT) FROM json_each(?))",
+                    (publication_id, previous_publication_id, _json(sorted(changed_job_ids))),
+                )
+                _insert_publication_jobs_batched(
+                    connection,
+                    publication_id=publication_id,
+                    canonical_job_ids=(str(row["canonical_job_id"]) for row in changed_snapshot),
+                )
+            else:
+                _insert_publication_jobs_batched(
+                    connection,
+                    publication_id=publication_id,
+                    canonical_job_ids=(str(row["canonical_job_id"]) for row in snapshot),
+                    batch_size=5000,
+                )
             if previous_publication_id:
                 changed = connection.execute(
                     """

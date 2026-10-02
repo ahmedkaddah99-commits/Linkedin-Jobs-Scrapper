@@ -15,6 +15,34 @@ from backend.bootstrap import create_backend
 
 
 class PublicationPolicyRollbackTests(unittest.TestCase):
+    def test_incremental_batches_preserve_prior_jobs_and_rollback(self):
+        app, store, target = self._store_with_target()
+        try:
+            cycle_one, target_id = self._seed_cycle(store, target, "batch-base", 1)
+            first = store.publish_valid_snapshot(cycle_id=cycle_one, valid_target_ids=[target_id])
+            second_target = {**target, "target_id": "batch-second-target", "source_token": "batch-second"}
+            store.ensure_targets([second_target])
+            cycle_two, second_id = self._seed_cycle(store, second_target, "batch-next", 2)
+            second = store.publish_valid_snapshot(
+                cycle_id=cycle_two, valid_target_ids=[second_id], batch_key="001",
+            )
+            self.assertNotEqual(second, first)
+            catalog = store.get_public_catalog()
+            self.assertEqual(catalog["publication"]["publication_id"], second)
+            self.assertEqual(len(catalog["jobs"]), 2)
+            self.assertEqual(catalog["publication"]["previous_publication_id"], first)
+            job_ids = [item["canonical_job_id"] for item in catalog["jobs"]]
+            for job_id in job_ids:
+                self.assertIsNotNone(app.repositories.personalized_jobs_store.get_published_job_row(job_id))
+            self.assertEqual(
+                store.publish_valid_snapshot(
+                    cycle_id=cycle_two, valid_target_ids=[second_id], batch_key="001",
+                ),
+                second,
+            )
+        finally:
+            self._publication_test_directory.cleanup()
+
     def _app(self):
         temporary_directory = tempfile.TemporaryDirectory()
         app = create_backend(Path(temporary_directory.name), storage_backend="sqlite")

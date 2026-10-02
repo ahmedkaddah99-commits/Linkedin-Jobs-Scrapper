@@ -1228,6 +1228,49 @@ def test_failure_threshold_stops_without_advancing_checkpoint_and_resume_is_safe
         if hasattr(store, "close"):
             store.close()
 
+
+def test_bounded_incremental_run_publishes_before_resuming_remaining_targets(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    monkeypatch.setenv("RUNR_PUBLISHER_INCREMENTAL_PUBLICATION", "1")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    manifest = _manifest(tmp_path)
+    linkedin_path, employer_path = _seed_producer_states(tmp_path)
+    data_dir = tmp_path / "backend"
+
+    first = run_delivery(
+        manifest_path=manifest,
+        linkedin_state=linkedin_path,
+        employer_state=employer_path,
+        data_dir=data_dir,
+        source_version="fixture-incremental",
+        controls=BackfillControls(batch_size=1, max_companies=1),
+    )
+    assert first["status"] == "stopped"
+    store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+    try:
+        assert store.get_public_catalog()["total"] > 0
+        assert store.publisher_checkpoint(SOURCE_LINKEDIN)["source_rowid"] == 0
+    finally:
+        if hasattr(store, "close"):
+            store.close()
+
+    last = first
+    for _ in range(10):
+        last = run_delivery(
+            manifest_path=manifest,
+            linkedin_state=linkedin_path,
+            employer_state=employer_path,
+            data_dir=data_dir,
+            source_version="fixture-incremental",
+            controls=BackfillControls(batch_size=1, max_companies=1),
+        )
+        if last["status"] in {"completed", "degraded"}:
+            break
+    assert last["status"] in {"completed", "degraded"}
+    assert last["publication_id"]
+
 def test_crash_before_checkpoint_save_reruns_the_same_window_idempotently(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNR_ENV", "test")
     monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
