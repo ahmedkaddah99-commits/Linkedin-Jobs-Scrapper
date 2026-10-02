@@ -39,7 +39,7 @@ export function alternativeSeniority(requiredItems, sourcePassages) {
   const [lower, higher] = [first, second].sort((a, b) => order.indexOf(a) - order.indexOf(b));
   if (lower === higher) return higher;
   if (order.indexOf(higher) - order.indexOf(lower) > 1) return higher;
-  return `${lower.replace(/ level$/, "")} / ${higher}`;
+  return `${lower.replace(/ level$/, "")}, ${higher.replace(/ level$/, "")} Level`;
 }
 
 export function employmentTypeLabel(scraped, extracted, title = "") {

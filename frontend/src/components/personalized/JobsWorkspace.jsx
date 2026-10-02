@@ -332,7 +332,8 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const facts = pilot ? [
     ["location_on", present(job.location) || extracted("location")],
     ["home_work", arrangementLabel(present(job.workArrangement)) || arrangementLabel(extracted("work_arrangement"))],
-    ["work_history", seniority ? `${seniority} / ${employment}` : employment],
+    ["alarm", employment, "jobs-reading__fact--stacked"],
+    ["crown", seniority, "jobs-reading__fact--stacked"],
     ["calendar_month", years],
     ["payments", scrapedSalary || salaryText],
   ] : [["location_on", job.location], ["home_work", job.workArrangement], ["schedule", job.employmentType], ["payments", job.salaryLabel]];
@@ -348,7 +349,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
   const postingAge = formatPostingAge(job.publishedAt);
   return <article className="jobs-reading">
-    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value]) => <span key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
+    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value, className]) => <span className={className} key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
     <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
     {available ? <>
       {!pilot && summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}

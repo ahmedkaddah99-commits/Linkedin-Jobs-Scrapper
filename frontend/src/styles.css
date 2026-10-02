@@ -2264,6 +2264,7 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .jobs-reading__header h1 { color: #101b22; font-size: clamp(1.7rem, 2.5vw, 2.15rem); letter-spacing: -0.035em; line-height: 1.16; margin: 1.1rem 0 1rem; }
 .jobs-reading__facts { display: grid; gap: 0.7rem 1.5rem; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 42rem; }
 .jobs-reading__facts span { align-items: center; color: #465b65; display: flex; font-size: 0.84rem; gap: 0.4rem; min-width: 0; overflow-wrap: anywhere; }
+.jobs-reading__facts .jobs-reading__fact--stacked { grid-column: 1 / -1; }
 .jobs-reading__facts .material-symbols-outlined { color: #189f87; font-size: 1rem; flex: 0 0 auto; }
 .jobs-reading__actions { display: flex; flex-wrap: wrap; gap: 0.55rem; padding: 0 0 1.5rem; }
 .jobs-reading__actions .jobs-outline-button { border-radius: 999px; }
