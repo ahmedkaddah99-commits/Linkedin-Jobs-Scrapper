@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.application.vps_job_descriptions import (
     PROMPT_VERSION,
+    PILOT_PROMPT_VERSION,
     RateLimitError,
     build_runr_descriptions,
     openrouter_generate,
@@ -33,7 +34,7 @@ def next_batch(
     excluded_clause = f"AND j.canonical_job_id NOT IN ({','.join('?' for _ in excluded_ids)})" if excluded_ids else ""
     order_clause = "v.created_at DESC, j.canonical_job_id" if newest else "j.canonical_job_id"
     rule_clause = "OR d.provider = 'runr_rules'" if upgrade_rules else ""
-    parameters = (() if newest else (after_id,)) + tuple(sorted(excluded_ids)) + (PROMPT_VERSION, limit)
+    parameters = (() if newest else (after_id,)) + tuple(sorted(excluded_ids)) + (PROMPT_VERSION, PILOT_PROMPT_VERSION, limit)
     with store._connect() as connection:
         rows = connection.execute(
             f"""
@@ -49,7 +50,7 @@ def next_batch(
             WHERE h.head_id = 1 {cursor_clause} {excluded_clause}
               AND TRIM(COALESCE(v.description, '')) != ''
               AND (d.version_id IS NULL OR COALESCE(d.content_hash, '') != v.content_hash
-                   OR COALESCE(d.prompt_version, '') != ? {rule_clause})
+                   OR COALESCE(d.prompt_version, '') NOT IN (?, ?) {rule_clause})
             ORDER BY {order_clause} LIMIT ?
             """,
             parameters,

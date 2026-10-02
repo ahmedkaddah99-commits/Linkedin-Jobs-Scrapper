@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from html import unescape
@@ -15,6 +16,8 @@ from backend.application.personalized_jobs_intelligence import build_preserved_o
 
 
 PROMPT_VERSION = "runr_description_v1"
+PILOT_PROMPT_VERSION = "runr_description_nemo_v2"
+NEMO_MODEL = "mistralai/mistral-nemo"
 OUTPUT_LANGUAGE = "en"
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
@@ -25,6 +28,251 @@ SECTIONS = (
     "responsibilities", "required_qualifications", "preferred_qualifications",
     "benefits", "application_details",
 )
+
+PILOT_ARRANGEMENTS = {"onsite", "hybrid", "remote"}
+PILOT_EMPLOYMENT = {"full_time", "part_time", "contract", "temporary", "internship", "apprenticeship"}
+PILOT_SENIORITY = {"entry", "mid", "senior", "lead", "director", "executive"}
+
+PILOT_HEADINGS = {
+    "responsibilities": {"responsibilities", "your responsibilities", "your tasks", "key duties", "what you will do"},
+    "required_qualifications": {"qualifications", "requirements", "required qualifications", "minimum qualifications", "basic qualifications", "must have", "skills"},
+    "preferred_qualifications": {"preferred qualifications", "preferred additional skills", "nice to have", "good to have"},
+    "benefits": {"benefits", "what we offer", "our benefits"},
+    "application_details": {"how to apply", "application process"},
+}
+PILOT_OTHER_HEADINGS = {"about us", "company description", "project description", "job description", "equal opportunity", "why join us"}
+
+
+def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
+    """Use exact English source items if Nemo omitted a whole labeled section."""
+    summary = result["summary"]
+    corrected_required = []
+    for item in summary["required_qualifications"]:
+        wording = item["text"]
+        mixed = re.match(r"^(.+?),\s*((?:additional|any other) .+? (?:is|will be) a plus\.?$)", wording, re.IGNORECASE)
+        degree = re.match(r"^(.+?degree required)\s*\((.+?) preferred\)\.?$", wording, re.IGNORECASE)
+        ideal = re.match(r"^(.+?),\s*ideally with\s+(.+?)(?:\.\s+(.+))?$", wording, re.IGNORECASE)
+        if mixed:
+            corrected_required.append({**item, "text": mixed.group(1).strip() + "."})
+            summary["preferred_qualifications"].append({**item, "text": mixed.group(2).strip()})
+        elif degree:
+            corrected_required.append({**item, "text": degree.group(1).strip() + "."})
+            summary["preferred_qualifications"].append({**item, "text": "Degree in " + degree.group(2).strip() + " preferred."})
+        elif ideal:
+            corrected_required.append({**item, "text": ideal.group(1).strip() + "."})
+            if ideal.group(3):
+                summary["preferred_qualifications"].append({**item, "text": ideal.group(3).strip()})
+            summary["preferred_qualifications"].append({**item, "text": "Ideally, experience with " + ideal.group(2).strip().rstrip(".") + "."})
+        elif re.search(r"\bpreferred\b|\bnice to have\b|\bis a plus\b|\bwill also be considered\b", wording, re.IGNORECASE) and not re.search(r"\brequired\b", wording, re.IGNORECASE):
+            summary["preferred_qualifications"].append(item)
+        else:
+            corrected_required.append(item)
+    summary["required_qualifications"] = corrected_required
+    passages = result["structured_description"]["source_passages"]
+    found: dict[str, list[dict[str, Any]]] = {section: [] for section in SECTIONS}
+    current: str | None = None
+    for passage in passages:
+        wording = passage["text"].strip()
+        if wording == ":":
+            continue
+        heading = wording.lower().rstrip(": ")
+        matched = next((section for section, names in PILOT_HEADINGS.items() if heading in names), None)
+        if matched:
+            current = matched
+            continue
+        inline = re.match(r"^(?:(?:qualifications|requirements)\s+)?(?:education|skills|experience(?=\s+\d))\s+(.+)$", wording, re.IGNORECASE)
+        if not inline:
+            inline = re.match(r"^Qualifications\s+Required Knowledge, Skills, and Experience:\s*(.+)$", wording, re.IGNORECASE)
+        if inline:
+            current = "required_qualifications"
+            wording = inline.group(1).strip()
+        if (heading in PILOT_OTHER_HEADINGS or wording.startswith("*All Telecommuters")
+                or wording.startswith("This position is based") or heading.startswith("additional information ")
+                or heading.startswith("more information about ")
+                or re.search(r"equal opportunity employer|e-verify employer|drug-free workplace|by submitting your resume", heading)
+                or (wording.endswith(":") and len(wording) < 90)):
+            current = None
+            continue
+        if current and wording and not wording.startswith("#"):
+            section = "preferred_qualifications" if current == "required_qualifications" and re.search(r"\bpreferred\b|\bhighly desirable\b|\bnice to have\b", wording, re.IGNORECASE) else current
+            mixed_preference = re.match(r"^(.+?),\s*preferably\s+(.+?)\.\s*(.+)$", wording, re.IGNORECASE)
+            if current == "required_qualifications" and mixed_preference:
+                found[current].append({"text": mixed_preference.group(1).strip() + ".", "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+                found["preferred_qualifications"].append({"text": "Experience " + mixed_preference.group(2).strip() + " is preferred.", "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+                found[current].append({"text": mixed_preference.group(3).strip(), "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+            else:
+                found[section].append({"text": wording, "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+    supplemented = []
+    for section in SECTIONS:
+        if found[section] and (not summary[section] or all(item.get("method") == "source_boundary_fallback" for item in summary[section])):
+            summary[section] = found[section]
+            supplemented.append(section)
+    if not summary["benefits"]:
+        for passage in passages:
+            match = re.search(r"\bwe offer benefits such as,?\s*(.+)", passage["text"], re.IGNORECASE)
+            if match:
+                wording = re.sub(r"\s*\(all benefits.*", "", match.group(1), flags=re.IGNORECASE).strip(" .")
+                if wording:
+                    summary["benefits"] = [{"text": wording + ".", "source_ids": [passage["id"]], "method": "source_boundary_fallback"}]
+                    supplemented.append("benefits")
+                    break
+    if result["structured_description"].get("salary") is None:
+        for passage in passages:
+            wording = passage["text"]
+            amounts = re.search(r"([$€£])\s*([\d,]+(?:\.\d+)?)\s*(?:to|[-–])\s*\1\s*([\d,]+(?:\.\d+)?)", wording, re.IGNORECASE)
+            period_match = re.search(r"\b(?:per\s+)?(hour|day|week|month|year)\b|\b(hourly|daily|weekly|monthly|annually|annual)\b", wording, re.IGNORECASE)
+            if not amounts or not period_match:
+                continue
+            period = (period_match.group(1) or period_match.group(2)).lower()
+            period = {"hourly": "hour", "daily": "day", "weekly": "week", "monthly": "month", "annually": "year", "annual": "year"}.get(period, period)
+            value = {"min": float(amounts.group(2).replace(",", "")), "max": float(amounts.group(3).replace(",", "")),
+                     "currency": {"$": "USD", "€": "EUR", "£": "GBP"}[amounts.group(1)], "period": period}
+            if _pilot_salary(value):
+                result["structured_description"]["salary"] = {"value": value, "source_ids": [passage["id"]], "method": "source_boundary_fallback"}
+                break
+    result["structured_description"]["supplemented_sections"] = supplemented
+    return result
+
+
+def pilot_passages(source: str) -> list[dict[str, str]]:
+    """Split visible source boundaries without assigning meaning to headings."""
+    from html import unescape
+
+    source = unescape(source).replace("\r", "")
+    source = re.sub(r"(?i)<br\s*/?>|</(?:p|li|div|h[1-6])>", "\n", source)
+    source = re.sub(r"<[^>]+>", " ", source)
+    source = re.sub(r"[•●▪]\s*", "\n", source)
+    pieces: list[str] = []
+    for line in source.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line:
+            continue
+        # Only split very long flattened blocks at sentence boundaries.
+        chunks = re.split(r"(?<=[.!?])\s+(?=[A-ZÄÖÜ])", line) if len(line) > 450 else [line]
+        pieces.extend(chunk.strip() for chunk in chunks if chunk.strip())
+    return [{"id": f"p{i}", "text": piece} for i, piece in enumerate(pieces, 1)]
+
+
+def _pilot_ids(value: Any, lookup: Mapping[str, str]) -> list[str] | None:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) or item not in lookup for item in value):
+        return None
+    return list(dict.fromkeys(value))
+
+
+def _pilot_number(value: Any) -> int | float | None:
+    # Model output must be a JSON number; numeric strings are deliberately rejected.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 60:
+        return None
+    return value
+
+
+def _pilot_salary(value: Any) -> bool:
+    if not isinstance(value, Mapping) or value.get("period") not in {"hour", "day", "week", "month", "year"}:
+        return False
+    currency = value.get("currency")
+    if not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency):
+        return False
+    bounds = [value.get("min"), value.get("max")]
+    if not any(bound is not None for bound in bounds):
+        return False
+    if any(bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float)) or not math.isfinite(bound) or bound < 0) for bound in bounds):
+        return False
+    return bounds[0] is None or bounds[1] is None or bounds[0] <= bounds[1]
+
+
+def build_pilot_description(
+    row: Mapping[str, Any], generate: Callable[[str], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Extract one posting; reject bad fields without retrying the whole job."""
+    original = build_preserved_original_posting(row)
+    source = str(original.get("description_text") or original.get("description") or "").strip()
+    passages = pilot_passages(source)
+    if not passages:
+        raise ValueError("posting description is empty")
+    lookup = {entry["id"]: entry["text"] for entry in passages}
+    prompt = (
+        "Read this ONE English employer job posting. Return one JSON object only with keys items and header_candidates. "
+        "Follow this shape exactly: {\"items\":[{\"section\":\"responsibilities\",\"text\":\"One fact\",\"source_ids\":[\"p1\"]}],"
+        "\"header_candidates\":{\"location\":null,\"work_arrangement\":{\"value\":\"remote\",\"source_ids\":[\"p2\"]},"
+        "\"employment_type\":null,\"seniority\":null,\"experience_years_min\":{\"value\":1,\"source_ids\":[\"p3\"]},"
+        "\"experience_years_max\":null,\"salary\":null}}. "
+        "Repeat section in EVERY item, including consecutive items in the same section. "
+        "Every non-null header candidate must be an object with value and nonempty source_ids. "
+        "items is an array of short independently readable facts, each with section, text, source_ids. "
+        "Allowed sections: responsibilities, required_qualifications, preferred_qualifications, benefits, application_details. "
+        "A source ID may support multiple facts and sections. Do not invent or omit job facts. Ignore employer advertising and boilerplate. "
+        "Qualifications in a profile/requirements section without preference wording are required. "
+        "Preferred, ideally, nice to have, advantage, and 'we would like' make the associated item or following list preferred until context changes. "
+        "Separate mixed required and preferred qualifications. Preserve numbers, licences, languages, conditions, and salary units. "
+        "header_candidates has keys location, work_arrangement, employment_type, seniority, experience_years_min, experience_years_max, salary. "
+        "Each candidate is null when absent, otherwise an object with value and source_ids. "
+        "work_arrangement value is onsite, hybrid, or remote. employment_type value is full_time, part_time, contract, temporary, internship, or apprenticeship. "
+        "seniority value is entry, mid, senior, lead, director, or executive. Do not infer seniority from years or title alone. "
+        "experience_years_min and experience_years_max values must be JSON numbers, never strings. An unstated bound is null. "
+        "salary value is an object with min, max (JSON numbers or null), currency (ISO code), and period (hour, day, week, month, year). "
+        "If salary currency or period is unstated, return null. Use null for unsupported facts. "
+        "Posting: " + json.dumps({"title": str(row.get("title") or ""), "passages": passages}, ensure_ascii=False)
+    )
+    response = generate(prompt)
+    if not isinstance(response, Mapping) or not isinstance(response.get("items"), list):
+        raise ValueError("model response missing items array")
+    summary: dict[str, Any] = {section: [] for section in SECTIONS}
+    rejected: list[str] = []
+    for item in response["items"]:
+        if not isinstance(item, Mapping):
+            rejected.append("invalid_item")
+            continue
+        section = item.get("section")
+        ids = _pilot_ids(item.get("source_ids"), lookup)
+        wording = item.get("text")
+        if section not in SECTIONS or not ids or not isinstance(wording, str) or not wording.strip():
+            rejected.append("invalid_item")
+            continue
+        summary[section].append({"text": wording.strip(), "source_ids": ids})
+    candidates = response.get("header_candidates")
+    if not isinstance(candidates, Mapping):
+        candidates = {}
+        rejected.append("missing_header_candidates")
+    structured: dict[str, Any] = {"source_passages": passages, "rejected_fields": rejected}
+    for field in ("location", "work_arrangement", "employment_type", "seniority", "experience_years_min", "experience_years_max", "salary"):
+        raw = candidates.get(field)
+        structured[field] = None
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping) or not _pilot_ids(raw.get("source_ids"), lookup):
+            rejected.append(f"{field}:missing_source")
+            continue
+        value = raw.get("value")
+        if field == "location":
+            valid = isinstance(value, str) and bool(value.strip()) and value.strip().lower() not in {"remote", "hybrid", "onsite", "on-site"}
+        elif field == "work_arrangement":
+            valid = isinstance(value, str) and value in PILOT_ARRANGEMENTS
+        elif field == "employment_type":
+            valid = isinstance(value, str) and value in PILOT_EMPLOYMENT
+        elif field == "seniority":
+            valid = isinstance(value, str) and value in PILOT_SENIORITY
+        elif field.startswith("experience_years_"):
+            valid = _pilot_number(value) is not None
+        else:
+            valid = _pilot_salary(value)
+        if valid:
+            structured[field] = {"value": value, "source_ids": _pilot_ids(raw["source_ids"], lookup)}
+        else:
+            rejected.append(f"{field}:invalid_output")
+    result = {
+        "version_id": str(row.get("current_version_id") or ""),
+        "canonical_job_id": str(row.get("canonical_job_id") or ""),
+        "content_hash": str(row.get("content_hash") or ""),
+        "summary": summary,
+        "structured_description": structured,
+        "original_posting": original,
+        "provider": "openrouter",
+        "model": str(response.get("_runr_model") or NEMO_MODEL),
+        "prompt_version": PILOT_PROMPT_VERSION,
+    }
+    return supplement_explicit_sections(result)
+
+
 
 _RULE_HEADINGS = {
     "responsibilities": {
@@ -232,17 +480,19 @@ def openrouter_generate(prompt: str) -> Mapping[str, Any]:
     if not key:
         raise RuntimeError("description_model_key_missing")
     model = os.getenv("RUNR_DESCRIPTION_MODEL", DEFAULT_MODEL)
-    if not (model == "openrouter/free" or model.endswith(":free")):
-        raise ValueError("description model must be free-tier")
-    body = json.dumps({
+    if not (model == "openrouter/free" or model.endswith(":free") or model == NEMO_MODEL):
+        raise ValueError("description model must be free-tier or the approved Nemo pilot")
+    parameters = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
         "provider": {"require_parameters": True},
         "temperature": 0,
-        "reasoning": {"effort": "none"},
         "max_tokens": 16384,
-    }).encode("utf-8")
+    }
+    if model != NEMO_MODEL:
+        parameters["reasoning"] = {"effort": "none"}
+    body = json.dumps(parameters).encode("utf-8")
     request = Request(
         "https://openrouter.ai/api/v1/chat/completions", data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -254,7 +504,12 @@ def openrouter_generate(prompt: str) -> Mapping[str, Any]:
     except HTTPError as exc:
         if exc.code == 429:
             raise RateLimitError("openrouter_rate_limited") from exc
-        raise
+        try:
+            failure = json.load(exc)
+            message = str((failure.get("error") or {}).get("message") or "")[:300]
+        except (ValueError, AttributeError):
+            message = ""
+        raise RuntimeError(f"openrouter_http_{exc.code}: {message}") from exc
     content = payload["choices"][0]["message"]["content"]
     if not isinstance(content, str):
         raise ValueError("model response content is not text")

@@ -3,12 +3,73 @@ import pytest
 import sqlite3
 from pathlib import Path
 
-from backend.application.vps_job_descriptions import build_runr_description, build_runr_description_rules, build_runr_descriptions, openrouter_generate
+from backend.application.vps_job_descriptions import build_pilot_description, build_runr_description, build_runr_description_rules, build_runr_descriptions, openrouter_generate
 from backend.bootstrap import create_backend
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 from scripts.process_published_job_descriptions import next_batch, run, save_batch
 from scripts.backfill_published_job_descriptions_rules import run_rules_backfill
-from tests.test_phase_c_personalized_jobs import _seed_catalog
+from test_phase_c_personalized_jobs import _seed_catalog
+
+
+def test_pilot_accepts_multiple_sections_per_source_and_hides_invalid_numeric_output():
+    row = {"current_version_id": "v2", "description": "Build reports. We would like Excel experience. Minimum one year experience."}
+    result = build_pilot_description(row, lambda _: {
+        "items": [
+            {"section": "responsibilities", "text": "Build reports.", "source_ids": ["p1"]},
+            {"section": "preferred_qualifications", "text": "Excel experience.", "source_ids": ["p1"]},
+        ],
+        "header_candidates": {"experience_years_min": {"value": "1", "source_ids": ["p1"]}},
+    })
+    assert result["prompt_version"] == "runr_description_nemo_v2"
+    assert len(result["summary"]["responsibilities"]) == 1
+    assert len(result["summary"]["preferred_qualifications"]) == 1
+    assert result["structured_description"]["experience_years_min"] is None
+    assert "experience_years_min:invalid_output" in result["structured_description"]["rejected_fields"]
+
+
+def test_pilot_recovers_omitted_explicit_qualification_lists_without_legal_text():
+    row = {"description": "Responsibilities\nBuild reports.\nQualifications:\nDegree required.\nPreferred Additional Skills:\nSQL is a plus.\nAcme is an Equal Opportunity Employer."}
+    result = build_pilot_description(row, lambda _: {
+        "items": [{"section": "responsibilities", "text": "Build reports.", "source_ids": ["p2"]}],
+        "header_candidates": {},
+    })
+    assert [item["text"] for item in result["summary"]["required_qualifications"]] == ["Degree required."]
+    assert [item["text"] for item in result["summary"]["preferred_qualifications"]] == ["SQL is a plus."]
+    assert result["structured_description"]["supplemented_sections"] == ["required_qualifications", "preferred_qualifications"]
+
+
+def test_pilot_splits_required_and_preferred_wording_in_one_model_item():
+    result = build_pilot_description({"description": "Languages: English and German required, additional European language is a plus."}, lambda _: {
+        "items": [{"section": "required_qualifications", "text": "English and German required, additional European language is a plus.", "source_ids": ["p1"]}],
+        "header_candidates": {},
+    })
+    assert result["summary"]["required_qualifications"][0]["text"] == "English and German required."
+    assert result["summary"]["preferred_qualifications"][0]["text"] == "additional European language is a plus."
+
+
+def test_pilot_separates_ideal_platform_and_preferred_degree_field():
+    result = build_pilot_description({"description": "Qualifications: Core banking experience, ideally with Oracle. Bachelor's degree required (Finance preferred)."}, lambda _: {
+        "items": [
+            {"section": "required_qualifications", "text": "Core banking experience, ideally with Oracle.", "source_ids": ["p1"]},
+            {"section": "required_qualifications", "text": "Bachelor's degree required (Finance preferred).", "source_ids": ["p1"]},
+        ],
+        "header_candidates": {},
+    })
+    required = [item["text"] for item in result["summary"]["required_qualifications"]]
+    preferred = [item["text"] for item in result["summary"]["preferred_qualifications"]]
+    assert "Core banking experience." in required
+    assert "Bachelor's degree required." in required
+    assert "Ideally, experience with Oracle." in preferred
+    assert "Degree in Finance preferred." in preferred
+
+
+def test_pilot_recovers_salary_only_with_explicit_currency_and_period():
+    result = build_pilot_description({"description": "Responsibilities\nBuild reports.\nPay ranges from $24.00 to $43.00 per hour."}, lambda _: {
+        "items": [{"section": "responsibilities", "text": "Build reports.", "source_ids": ["p2"]}],
+        "header_candidates": {"salary": {"min": 24, "max": 43, "currency": "USD", "period": "hour"}},
+    })
+    assert result["structured_description"]["salary"]["value"] == {"min": 24.0, "max": 43.0, "currency": "USD", "period": "hour"}
+    assert result["structured_description"]["salary"]["source_ids"] == ["p3"]
 
 
 def test_builds_shared_english_description_from_german_posting():
@@ -109,6 +170,9 @@ def test_backfill_selects_only_current_unprocessed_published_versions(tmp_path: 
     assert [row["canonical_job_id"] for row in next_batch(store, "", 10)] == ["job-b"]
     assert [row["canonical_job_id"] for row in next_batch(store, "job-z", 10, newest=True)] == ["job-b"]
     assert next_batch(store, "job-b", 10) == []
+    with sqlite3.connect(db) as connection:
+        connection.execute("INSERT INTO job_description_intelligence VALUES ('v-b', 'hash-b', 'runr_description_nemo_v2', 'openrouter')")
+    assert next_batch(store, "", 10) == []
 
 
 def test_shared_description_is_returned_to_multiple_users(tmp_path: Path, monkeypatch):
@@ -132,6 +196,25 @@ def test_shared_description_is_returned_to_multiple_users(tmp_path: Path, monkey
         assert detail["runr_summary"]["overview"] == "Readable overview"
         assert detail["original_posting"]["description_text"]
         assert detail["description_intelligence"]["prompt_version"] == "runr_description_v1"
+
+
+def test_pilot_description_is_served_to_customer_from_shared_version(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app)
+    store = app.repositories.personalized_jobs_store
+    row = store.get_published_job_row("job-a")
+    result = build_pilot_description(row, lambda _: {
+        "items": [{"section": "responsibilities", "text": "Build reports.", "source_ids": ["p1"]}],
+        "header_candidates": {"experience_years_min": {"value": 1, "source_ids": ["p1"]}},
+    })
+    store.save_description_intelligence(**result)
+    detail = app.get_personalized_job_detail("user-a", "job-a")
+    assert detail["description_intelligence"]["prompt_version"] == "runr_description_nemo_v2"
+    assert detail["runr_summary"]["responsibilities"][0]["text"] == "Build reports."
+    assert detail["structured_description"]["experience_years_min"]["value"] == 1
 
 
 def test_rule_backfill_prepares_all_jobs_and_model_can_upgrade_them(tmp_path: Path, monkeypatch):
