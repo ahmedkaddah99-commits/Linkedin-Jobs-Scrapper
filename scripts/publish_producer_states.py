@@ -335,6 +335,25 @@ def _publisher_telemetry(
 _PROGRESS_LOCK = Lock()
 
 
+def _timing_event(action: str, *, duration_seconds: float | None = None, **counts: int) -> None:
+    """Append bounded publisher timing evidence without job URLs or payloads."""
+    destination = os.getenv("RUNR_PUBLISHER_TIMING_FILE", "").strip()
+    if not destination:
+        return
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
+        "counts": counts,
+    }
+    with _PROGRESS_LOCK:
+        try:
+            with Path(destination).open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, sort_keys=True) + "\n")
+        except OSError as error:
+            print(f"publisher_timing_write_failed:{type(error).__name__}", file=sys.stderr, flush=True)
+
+
 def _progress(phase: str, **counts: int) -> None:
     """Optional bounded status file; does not change the final metrics format."""
     destination = os.getenv("RUNR_PUBLISHER_PROGRESS_FILE", "").strip()
@@ -343,6 +362,7 @@ def _progress(phase: str, **counts: int) -> None:
     path = Path(destination)
     payload = {"phase": phase, "timestamp": datetime.now(timezone.utc).isoformat(),
                "pid": os.getpid(), "counts": counts}
+    _timing_event("phase:" + phase, **counts)
     with _PROGRESS_LOCK:
         try:
             temporary = path.with_suffix(path.suffix + ".tmp")
@@ -1667,8 +1687,9 @@ def run_delivery(
         SOURCE_LINKEDIN: linkedin_changed_ids,
         SOURCE_EMPLOYER: employer_changed_ids,
     }
+    incremental_publication = os.getenv("RUNR_PUBLISHER_INCREMENTAL_PUBLICATION", "1").strip() == "1"
     deferred_companies = False
-    if controls.max_companies is not None:
+    if controls.max_companies is not None and not incremental_publication:
         remaining = controls.max_companies
         bounded_changed_by_source: dict[str, set[str]] = {}
         for source, company_ids_for_source in changed_by_source.items():
@@ -1777,6 +1798,32 @@ def run_delivery(
     resumed_target_ids = current_target_ids.intersection(terminal_task_statuses)
     partial = any(terminal_task_statuses[target_id] == "partial" for target_id in resumed_target_ids)
     valid_target_ids: list[str] = sorted(resumed_target_ids)
+    last_publication_id = _text(linkedin_checkpoint.get("last_publication_id") or employer_checkpoint.get("last_publication_id"))
+
+    def publish_targets(target_ids: Iterable[str]) -> None:
+        nonlocal last_publication_id
+        selected = sorted({_text(value) for value in target_ids if _text(value)})
+        if not incremental_publication or not selected:
+            return
+        for offset in range(0, len(selected), 50):
+            batch = selected[offset:offset + 50]
+            batch_key = hashlib.sha256("|".join(batch).encode("utf-8")).hexdigest()[:24]
+            started = monotonic()
+            _timing_event("publication_batch_start", companies=len(batch))
+            publication_id = store.publish_valid_snapshot(
+                cycle_id=cycle_id,
+                valid_target_ids=batch,
+                origin="scheduled",
+                created_by="producer_bridge",
+                scheduled_run_id=cycle_id,
+                policy_version=policy_version,
+                batch_key=batch_key,
+            )
+            if publication_id:
+                last_publication_id = publication_id
+            _timing_event("publication_batch", duration_seconds=monotonic() - started,
+                          companies=len(batch))
+
     failures = 0
     companies_attempted = 0
     stop_reason = ""
@@ -1935,7 +1982,11 @@ def run_delivery(
         }
         final_result: dict[str, object] = {}
         for chunk in _split_large_bulk_snapshot(snapshot, max_rows=max_rows):
+            chunk_started = monotonic()
+            _timing_event("large_company_chunk_start", jobs=len(chunk["jobs"]))
             projected = store.ingest_snapshots_bulk([chunk])
+            _timing_event("large_company_chunk", duration_seconds=monotonic() - chunk_started,
+                          jobs=len(chunk["jobs"]))
             final_result = dict(projected["targets"][_text(delivered["target_id"])])
             for key in totals:
                 totals[key] += int(final_result.get(key) or 0)
@@ -1966,6 +2017,7 @@ def run_delivery(
     try:
         delivered_companies = len(resumed_target_ids)
         _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
+        publish_targets(resumed_target_ids)
         delivery_items: list[tuple[str, str]] = []
         bulk_empty_items: list[tuple[str, str, str, bool, bool, str]] = []
         source_state_target_ids = _source_state_target_ids(store)
@@ -2063,6 +2115,7 @@ def run_delivery(
             )
             delivered_companies += len(bulk)
             companies_attempted += len(bulk)
+            publish_targets(target_id for _source, target_id, *_rest in bulk)
             for source, target_id, _task_id, valid_snapshot, closure_safe, _status in bulk:
                 valid_target_ids.append(target_id)
                 if not closure_safe:
@@ -2099,9 +2152,15 @@ def run_delivery(
                             (source, *prepare_bulk_snapshot(source, company_id))
                             for source, company_id in transaction_batch
                         ]
+                        batch_started = monotonic()
+                        _timing_event("delivery_batch_start", companies=len(prepared),
+                                      jobs=sum(len(snapshot["jobs"]) for _source, snapshot, _delivered in prepared))
                         bulk_result = store.ingest_snapshots_bulk(
                             [snapshot for _source, snapshot, _delivered in prepared]
                         )
+                        _timing_event("delivery_batch", duration_seconds=monotonic() - batch_started,
+                                      companies=len(prepared),
+                                      jobs=sum(len(snapshot["jobs"]) for _source, snapshot, _delivered in prepared))
                         for source, _snapshot, delivered in prepared:
                             target_result = bulk_result["targets"][_text(delivered["target_id"])]
                             delivered = {**delivered, "result": target_result}
@@ -2115,7 +2174,6 @@ def run_delivery(
                         )))
                     for source, delivered in committed:
                         record_delivery(source, delivered)
-                    _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
                 except Exception as exc:
                     failures += 1
                     partial = True
@@ -2125,6 +2183,8 @@ def run_delivery(
                     stop_reason = "max_failures"
                     stop_requested = True
                     break
+                publish_targets(_text(delivered["target_id"]) for _source, delivered in committed)
+                _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
 
         for batch_start in range(0, len(delivery_items), delivery_batch_size):
             if delivery_workers == 1 and not controls.rate_per_second:
@@ -2136,6 +2196,7 @@ def run_delivery(
             batch = delivery_items[batch_start : batch_start + delivery_batch_size]
             companies_attempted += len(batch)
             effective_workers = 1 if controls.rate_per_second else delivery_workers
+            published_batch_targets: list[str] = []
             with ThreadPoolExecutor(max_workers=min(effective_workers, len(batch))) as executor:
                 future_sources = {
                     executor.submit(deliver_with_worker_store, source, company_id): source
@@ -2144,7 +2205,9 @@ def run_delivery(
                 for future in as_completed(future_sources):
                     source = future_sources[future]
                     try:
-                        record_delivery(source, future.result())
+                        delivered = future.result()
+                        record_delivery(source, delivered)
+                        published_batch_targets.append(_text(delivered["target_id"]))
                         _progress("delivery", companies_completed=delivered_companies, targets=len(targets))
                     except Exception as exc:
                         failures += 1
@@ -2155,6 +2218,7 @@ def run_delivery(
                         stop_requested = True
                         if controls.max_failures == 0 or failures >= controls.max_failures:
                             break
+            publish_targets(published_batch_targets)
             if stop_requested:
                 break
             if failures and (controls.max_failures == 0 or failures >= controls.max_failures):
@@ -2191,14 +2255,20 @@ def run_delivery(
                 stop_reason=stop_reason,
             )
         _progress("publication", companies_completed=delivered_companies)
-        publication_id = store.publish_valid_snapshot(
-            cycle_id=cycle_id,
-            valid_target_ids=valid_target_ids,
-            origin="scheduled",
-            created_by="producer_bridge",
-            scheduled_run_id=cycle_id,
-            policy_version=policy_version,
-        )
+        if incremental_publication:
+            publication_id = last_publication_id
+        else:
+            publication_started = monotonic()
+            publication_id = store.publish_valid_snapshot(
+                cycle_id=cycle_id,
+                valid_target_ids=valid_target_ids,
+                origin="scheduled",
+                created_by="producer_bridge",
+                scheduled_run_id=cycle_id,
+                policy_version=policy_version,
+            )
+            _timing_event("publication_snapshot", duration_seconds=monotonic() - publication_started,
+                          companies=delivered_companies)
         store.complete_cycle(
             cycle_id,
             status="degraded" if partial else "completed",

@@ -13,6 +13,7 @@ export_root="${RUNR_ACQUISITION_EXPORT_ROOT:-/srv/runr/exports}"
 receipt_root="${RUNR_ACQUISITION_RECEIPT_ROOT:-$export_root/receipts}"
 lock_root="${RUNR_ACQUISITION_LOCK_ROOT:-$state_root/locks}"
 run_timeout="${RUNR_PUBLISHER_RUN_TIMEOUT_SECONDS:-900}"
+export RUNR_PUBLISHER_TIMING_FILE="${RUNR_PUBLISHER_TIMING_FILE:-$receipt_root/publisher-timings.jsonl}"
 
 # Ownership: this wrapper is invoked only by the publisher timer. It holds
 # the publisher lock and both source locks, so an overlapping collector exits
@@ -71,6 +72,29 @@ if ! flock -n 8; then
   exit 75
 fi
 
+# Copy a consistent producer window while both source locks are held. Delivery
+# and remote publication use these read-only snapshots, so collectors can run
+# again as soon as the copies finish.
+snapshot_root="$state_root/publisher-snapshots"
+mkdir -p "$snapshot_root"
+snapshot_dir="$(mktemp -d "$snapshot_root/run-XXXXXXXX")"
+cleanup_snapshot() {
+  if [ -n "${snapshot_dir:-}" ] && [ -d "$snapshot_dir" ]; then
+    rm -rf -- "$snapshot_dir"
+  fi
+}
+trap cleanup_snapshot EXIT
+snapshot_receipt="$receipt_root/publisher-source-snapshots-latest.jsonl"
+: > "$snapshot_receipt"
+"$python_bin" scripts/snapshot_producer_states.py --source "$linkedin_state_db" \
+  --destination "$snapshot_dir/linkedin.db" >> "$snapshot_receipt"
+"$python_bin" scripts/snapshot_producer_states.py --source "$employer_state_db" \
+  --destination "$snapshot_dir/employer.db" >> "$snapshot_receipt"
+linkedin_state_db="$snapshot_dir/linkedin.db"
+employer_state_db="$snapshot_dir/employer.db"
+exec 7>&-
+exec 8>&-
+
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 metrics_path="$receipt_root/publisher-latest-metrics.json"
 receipt_path="$receipt_root/publisher-latest.json"
@@ -84,6 +108,13 @@ skip_status_only_arg=""
 if [ "${RUNR_PUBLISHER_SKIP_STATUS_ONLY:-0}" = "1" ]; then
   skip_status_only_arg="--skip-status-only"
 fi
+max_companies_arg=""
+if [ -n "${RUNR_PUBLISHER_MAX_COMPANIES:-}" ]; then
+  case "$RUNR_PUBLISHER_MAX_COMPANIES" in
+    *[!0-9]*|''|0) echo "Publisher company cap must be positive" >&2; exit 64 ;;
+  esac
+  max_companies_arg="--max-companies $RUNR_PUBLISHER_MAX_COMPANIES"
+fi
 
 set +e
 timeout --foreground "$run_timeout" "$python_bin" scripts/publish_producer_states.py \
@@ -94,6 +125,7 @@ timeout --foreground "$run_timeout" "$python_bin" scripts/publish_producer_state
   --source-version "${RUNR_SOURCE_VERSION:-unknown}" \
   $crosswalk_arg \
   $skip_status_only_arg \
+  $max_companies_arg \
   > "$metrics_path" 2>&1
 exit_code=$?
 set -e
