@@ -2274,7 +2274,7 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .jobs-reading__section h2 .material-symbols-outlined { align-items: center; background: #dcf9ef; border-radius: 0.45rem; color: #008f73; display: inline-flex; font-size: 1.3rem; height: 2rem; justify-content: center; width: 2rem; }
 .jobs-reading__section p, .jobs-reading__section li, .jobs-reading--original { font-size: 0.92rem; line-height: 1.65; }
 .jobs-reading__section p { margin: 0; max-width: 56rem; }
-.jobs-reading__list { margin: 0; padding-left: 1.3rem; }
+.jobs-reading__list { list-style: disc outside; margin: 0; padding-left: 1.3rem; }
 .jobs-reading__list li { padding-left: 0.15rem; }
 .jobs-reading__list li + li { margin-top: 0.6rem; }
 .jobs-reading__list li::marker { color: #11a888; }

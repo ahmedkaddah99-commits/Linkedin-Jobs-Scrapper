@@ -1,0 +1,31 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "./jobReadingPresentation.js";
+
+test("posting age stays in hours or days", () => {
+  const now = Date.parse("2026-10-02T12:00:00Z");
+  assert.equal(formatPostingAge("2026-10-02T05:00:00Z", now), "7 hours ago");
+  assert.equal(formatPostingAge("2026-09-25T12:00:00Z", now), "7 days ago");
+  assert.equal(formatPostingAge("2026-08-31T12:00:00Z", now), "32 days ago");
+  assert.equal(formatPostingAge("2026-8-31", now), "32 days ago");
+  assert.equal(formatPostingAge("", now), "");
+});
+
+test("years produce a consistent seniority band", () => {
+  assert.equal(seniorityFromYears(1), "Entry level");
+  assert.equal(seniorityFromYears(3), "Mid level");
+  assert.equal(seniorityFromYears(7), "Senior level");
+  assert.equal(seniorityFromYears(10), "Lead level");
+  assert.equal(seniorityFromYears("7"), null);
+});
+
+test("employment defaults to full-time without mistaking a contract specialist for a contractor", () => {
+  assert.equal(employmentTypeLabel(null, null, "Contract Specialist"), "Full-time");
+  assert.equal(employmentTypeLabel(null, null, "Marketing Assistant - 12 months temporary contract"), "Contract");
+  assert.equal(employmentTypeLabel(null, null, "Werkstudent Marketing"), "Working student");
+  assert.equal(employmentTypeLabel("part-time", null), "Part-time");
+});
+
+test("each source line becomes one list item", () => {
+  assert.deepEqual(descriptionLines([{ text: "First\n- Second" }, { text: "Third" }]), ["First", "Second", "Third"]);
+});

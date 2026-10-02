@@ -377,6 +377,7 @@ export function toPersonalizedJobView(job = {}) {
     salaryLabel: formatSalary(safeJob.salary),
     languages,
     postedAt: safeJob.posted_at || safeJob.first_seen_at || safeJob.last_verified_at || "",
+    publishedAt: safeJob.posted_at || "",
     lastVerifiedAt: safeJob.last_verified_at || "",
     applyUrl,
     directApplyUrl: applyUrl,

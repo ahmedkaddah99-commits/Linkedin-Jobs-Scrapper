@@ -38,6 +38,54 @@ def test_pilot_recovers_omitted_explicit_qualification_lists_without_legal_text(
     assert result["structured_description"]["supplemented_sections"] == ["required_qualifications", "preferred_qualifications"]
 
 
+def test_pilot_recovers_alternative_employer_headings_when_model_stops_after_duties():
+    row = {"description": "Main responsibilities:\nBuild reports.\nWhat we are looking for\nAt least 5 years of experience.\nKnowledge of Valmet DNA is preferred.\nAdditional requirements\nWillingness to travel.\nWhy join Valmet?\nCompany marketing.\nWe offer:\nTechnical training.\nWhat will help you succeed\nCompany values."}
+    result = build_pilot_description(row, lambda _: {
+        "items": [{"section": "responsibilities", "text": "Build reports.", "source_ids": ["p2"]}],
+        "header_candidates": {},
+    })
+    assert [item["text"] for item in result["summary"]["required_qualifications"]] == ["At least 5 years of experience.", "Willingness to travel."]
+    assert [item["text"] for item in result["summary"]["preferred_qualifications"]] == ["Knowledge of Valmet DNA is preferred."]
+    assert [item["text"] for item in result["summary"]["benefits"]] == ["Technical training."]
+
+
+def test_pilot_recovers_required_preferred_and_named_benefits():
+    row = {"description": "Person Specification:\nRequired:\n3+ years of pricing experience.\nPreferred:\nGLM experience.\nWhat Hiscox USA Offers:\nHealth insurance.\nAbout Hiscox USA:\nCompany marketing."}
+    result = build_pilot_description(row, lambda _: {"items": [], "header_candidates": {}})
+    assert [item["text"] for item in result["summary"]["required_qualifications"]] == ["3+ years of pricing experience."]
+    assert [item["text"] for item in result["summary"]["preferred_qualifications"]] == ["GLM experience."]
+    assert [item["text"] for item in result["summary"]["benefits"]] == ["Health insurance."]
+
+
+def test_pilot_recovers_candidate_and_job_qualification_headings():
+    row = {"description": "As a Senior GIS Specialist you will:\nMake maps.\nThe successful candidate will:\nHave a GIS degree.\nBenefits:\nPaid leave.\nJob Responsibilities:**\nLead a shift.\nJob Qualifications:**\n3+ years in production."}
+    result = build_pilot_description(row, lambda _: {"items": [], "header_candidates": {}})
+    assert [item["text"] for item in result["summary"]["responsibilities"]] == ["Make maps.", "Lead a shift."]
+    assert [item["text"] for item in result["summary"]["required_qualifications"]] == ["Have a GIS degree.", "3+ years in production."]
+
+
+def test_pilot_recovers_benefits_after_different_employer_headings():
+    row = {"description": "WHAT YOU BRING ALONG\nMust-have skills:\nApex experience.\nNice-to-have skills:\nJira experience.\nWHAT WE HAVE TO OFFER\nProfessional & Personal Growth:\nFree training.\nWHAT WE VALUE\nCompany values."}
+    result = build_pilot_description(row, lambda _: {"items": [], "header_candidates": {}})
+    assert [item["text"] for item in result["summary"]["required_qualifications"]] == ["Apex experience."]
+    assert [item["text"] for item in result["summary"]["preferred_qualifications"]] == ["Jira experience."]
+    assert [item["text"] for item in result["summary"]["benefits"]] == ["Free training."]
+
+
+def test_pilot_fallback_splits_mixed_preferences_and_joins_wrapped_lines():
+    row = {"description": "Job Qualifications:**\nHands-on DCS experience; knowledge of DNAe is preferred.\n3+ years of pricing experience, preferably in commercial lines.\nHave practical GIS experience and ideally within the energy sector\nHave a full UK driving licence\nand willingness to travel to project\nlocations"}
+    result = build_pilot_description(row, lambda _: {"items": [], "header_candidates": {}})
+    required = [item["text"] for item in result["summary"]["required_qualifications"]]
+    preferred = [item["text"] for item in result["summary"]["preferred_qualifications"]]
+    assert "Hands-on DCS experience" in required
+    assert "3+ years of pricing experience" in required
+    assert "Have practical GIS experience" in required
+    assert "Have a full UK driving licence and willingness to travel to project locations" in required
+    assert "knowledge of DNAe is preferred." in preferred
+    assert "Experience in commercial lines is preferred." in preferred
+    assert "Experience within the energy sector is preferred." in preferred
+
+
 def test_pilot_splits_required_and_preferred_wording_in_one_model_item():
     result = build_pilot_description({"description": "Languages: English and German required, additional European language is a plus."}, lambda _: {
         "items": [{"section": "required_qualifications", "text": "English and German required, additional European language is a plus.", "source_ids": ["p1"]}],

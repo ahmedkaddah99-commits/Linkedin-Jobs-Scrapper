@@ -18,6 +18,7 @@ import {
 import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
+import { descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "../../lib/jobReadingPresentation";
 
 const NETWORK_ITEMS = [
   ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
@@ -319,46 +320,41 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const present = (value) => value && String(value).toLowerCase() !== "unknown" ? value : null;
   const yearsMin = extracted("experience_years_min");
   const yearsMax = extracted("experience_years_max");
-  const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}–${yearsMax} years` : `${yearsMin}+ years`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years` : null);
+  const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}–${yearsMax} years experience` : `${yearsMin}+ years experience`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years experience` : null);
   const salary = extracted("salary");
   const salaryAmounts = salary && typeof salary === "object" ? [salary.min, salary.max].filter((value) => typeof value === "number").map((value) => new Intl.NumberFormat("en-US").format(value)).join("–") : "";
   const salaryText = salaryAmounts && salary?.currency && salary?.period ? `${salaryAmounts} ${salary.currency}/${salary.period}` : null;
   const arrangementLabel = (value) => ({ onsite: "On-site", on_site: "On-site", in_person: "On-site", hybrid: "Hybrid", remote: "Remote" })[String(value || "").toLowerCase()] || null;
-  const employmentLabel = (value) => ({ full_time: "Full-time", "full-time": "Full-time", part_time: "Part-time", "part-time": "Part-time", contract: "Contract", temporary: "Temporary", internship: "Internship", apprenticeship: "Apprenticeship" })[String(value || "").toLowerCase()] || null;
   const seniorityLabel = (value) => ({ entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
   const scrapedSalary = present(job.salaryLabel) && job.salary?.period ? `${job.salaryLabel}/${job.salary.period}` : null;
+  const employment = employmentTypeLabel(present(job.employmentType), extracted("employment_type"), job.title);
+  const seniority = seniorityFromYears(yearsMin) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
   const facts = pilot ? [
     ["location_on", present(job.location) || extracted("location")],
     ["home_work", arrangementLabel(present(job.workArrangement)) || arrangementLabel(extracted("work_arrangement"))],
-    ["schedule", employmentLabel(present(job.employmentType)) || employmentLabel(extracted("employment_type"))],
+    ["work_history", seniority ? `${seniority} / ${employment}` : employment],
     ["calendar_month", years],
-    ["stairs", seniorityLabel(present(job.experienceLevel)) || seniorityLabel(extracted("seniority"))],
     ["payments", scrapedSalary || salaryText],
   ] : [["location_on", job.location], ["home_work", job.workArrangement], ["schedule", job.employmentType], ["payments", job.salaryLabel]];
   const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
   const available = (job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview)
-    || (pilot && ["responsibilities", "required_qualifications", "preferred_qualifications", "benefits", "application_details"].some((key) => summary[key]?.length));
+    || (pilot && ["responsibilities", "required_qualifications", "preferred_qualifications", "benefits"].some((key) => summary[key]?.length));
   const itemsFor = (key) => Array.isArray(summary[key]) ? summary[key].filter((item) => typeof (typeof item === "string" ? item : item?.text) === "string" && (typeof item === "string" ? item : item.text).trim()) : [];
   const responsibilities = itemsFor("responsibilities");
   const required = itemsFor("required_qualifications");
   const preferred = itemsFor("preferred_qualifications");
   const benefits = itemsFor("benefits");
-  const applicationDetails = itemsFor("application_details");
-  const list = (items) => <ul className="jobs-reading__list">{items.map((item, index) => <li key={index}>{typeof item === "string" ? item : item.text}</li>)}</ul>;
-  const languageCode = summary.output_language || summary.source_language;
-  const language = languageCode && languageCode !== "und" ? (new Intl.DisplayNames(["en"], { type: "language" }).of(languageCode) || languageCode) : "";
+  const list = (items) => <ul className="jobs-reading__list">{descriptionLines(items).map((line, index) => <li key={index}>{line}</li>)}</ul>;
   const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
+  const postingAge = formatPostingAge(job.publishedAt);
   return <article className="jobs-reading">
-    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong><small>{formatJobDate(job.postedAt)}</small></span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value]) => <span key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
+    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value]) => <span key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
     <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
     {available ? <>
-      <div className="jobs-reading__edition"><Icon>auto_awesome</Icon><span>Organized by Runr{language ? ` · ${language}` : ""}</span></div>
       {!pilot && summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}
       {responsibilities.length > 0 ? <section className="jobs-reading__section" id="job-responsibilities"><h2><Icon>checklist</Icon>Responsibilities</h2>{list(responsibilities)}</section> : null}
       {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
       {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
-      {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>{pilot ? "How to apply" : "Application details"}</h2>{list(applicationDetails)}</section> : null}
-      <p className="jobs-reading__note">Runr organized this description from the employer’s posting. The Original job post tab shows the employer’s wording.</p>
     </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></div></section>}
     <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
     <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>

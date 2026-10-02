@@ -34,13 +34,14 @@ PILOT_EMPLOYMENT = {"full_time", "part_time", "contract", "temporary", "internsh
 PILOT_SENIORITY = {"entry", "mid", "senior", "lead", "director", "executive"}
 
 PILOT_HEADINGS = {
-    "responsibilities": {"responsibilities", "your responsibilities", "your tasks", "key duties", "what you will do"},
-    "required_qualifications": {"qualifications", "requirements", "required qualifications", "minimum qualifications", "basic qualifications", "must have", "skills"},
-    "preferred_qualifications": {"preferred qualifications", "preferred additional skills", "nice to have", "good to have"},
-    "benefits": {"benefits", "what we offer", "our benefits"},
+    "responsibilities": {"responsibilities", "job responsibilities", "your responsibilities", "your tasks", "key duties", "key responsibilities", "main responsibilities", "what you will do", "what you'll work on", "your role", "role description"},
+    "required_qualifications": {"qualifications", "job qualifications", "requirements", "required", "required qualifications", "minimum qualifications", "basic qualifications", "additional requirements", "what we are looking for", "the successful candidate will", "what you bring along", "must-have skills", "you have", "must have", "skills"},
+    "preferred_qualifications": {"preferred", "preferred qualifications", "preferred additional skills", "nice to have", "nice-to-have skills", "nice if you have", "good to have"},
+    "benefits": {"benefits", "what we offer", "we offer", "what we have to offer", "our benefits", "compensation"},
     "application_details": {"how to apply", "application process"},
 }
-PILOT_OTHER_HEADINGS = {"about us", "company description", "project description", "job description", "equal opportunity", "why join us"}
+PILOT_OTHER_HEADINGS = {"about us", "company description", "project description", "job description", "equal opportunity", "why join us", "what will help you succeed", "person specification", "hiscox values", "application deadline", "information about our talent acquisition process", "identity statement", "candidate ai usage policy", "work model", "commitment to non-discrimination", "what we value", "your way to us"}
+PILOT_BENEFIT_SUBHEADINGS = {"professional & personal growth", "rofessional & personal growth", "flexible work-life balance", "embrace diversity & sustainability", "comprehensive benefits"}
 
 
 def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
@@ -72,11 +73,15 @@ def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
     found: dict[str, list[dict[str, Any]]] = {section: [] for section in SECTIONS}
     current: str | None = None
     for passage in passages:
-        wording = passage["text"].strip()
-        if wording == ":":
+        wording = re.sub(r"^\s*[*•-]\s*", "", passage["text"]).strip()
+        if len(wording) < 2 or wording == ":":
             continue
-        heading = wording.lower().rstrip(": ")
+        heading = wording.lower().strip(": ?* \t")
         matched = next((section for section, names in PILOT_HEADINGS.items() if heading in names), None)
+        if matched is None and re.fullmatch(r"as a .+ you will", heading):
+            matched = "responsibilities"
+        if matched is None and re.fullmatch(r"what .+ offers", heading):
+            matched = "benefits"
         if matched:
             current = matched
             continue
@@ -86,14 +91,36 @@ def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
         if inline:
             current = "required_qualifications"
             wording = inline.group(1).strip()
-        if (heading in PILOT_OTHER_HEADINGS or wording.startswith("*All Telecommuters")
+        if (heading in PILOT_OTHER_HEADINGS or heading.startswith("why join ") or wording.startswith("*All Telecommuters")
                 or wording.startswith("This position is based") or heading.startswith("additional information ")
                 or heading.startswith("more information about ")
                 or re.search(r"equal opportunity employer|e-verify employer|drug-free workplace|by submitting your resume", heading)
-                or (wording.endswith(":") and len(wording) < 90)):
+                or (wording.endswith(":") and len(wording) < 90 and not (current == "benefits" and heading in PILOT_BENEFIT_SUBHEADINGS))):
             current = None
             continue
+        if current == "benefits" and heading in PILOT_BENEFIT_SUBHEADINGS:
+            continue
         if current and wording and not wording.startswith("#"):
+            def add(section: str, text: str) -> None:
+                previous = found[section][-1] if found[section] else None
+                if previous and text[0].islower() and not previous["text"].endswith(".") and (text.startswith("and ") or len(text.split()) <= 3):
+                    previous["text"] += " " + text
+                    previous["source_ids"].append(passage["id"])
+                else:
+                    found[section].append({"text": text, "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+
+            split_preferred = re.match(r"^(.+?);\s*(.+?\s+is preferred)\.?$", wording, re.IGNORECASE)
+            split_ideal = re.match(r"^(.+?)\s+and ideally\s+(in|within|with)\s+(.+?)\.?$", wording, re.IGNORECASE)
+            split_preferably = re.match(r"^(.+?),?\s+preferably\s+(in|within|with)\s+(.+?)\.?$", wording, re.IGNORECASE)
+            if current == "required_qualifications" and split_preferred:
+                add(current, split_preferred.group(1).strip())
+                add("preferred_qualifications", split_preferred.group(2).strip() + ".")
+                continue
+            if current == "required_qualifications" and (split_ideal or split_preferably):
+                match = split_ideal or split_preferably
+                add(current, match.group(1).strip())
+                add("preferred_qualifications", f"Experience {match.group(2)} {match.group(3).strip()} is preferred.")
+                continue
             section = "preferred_qualifications" if current == "required_qualifications" and re.search(r"\bpreferred\b|\bhighly desirable\b|\bnice to have\b", wording, re.IGNORECASE) else current
             mixed_preference = re.match(r"^(.+?),\s*preferably\s+(.+?)\.\s*(.+)$", wording, re.IGNORECASE)
             if current == "required_qualifications" and mixed_preference:
@@ -101,7 +128,7 @@ def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
                 found["preferred_qualifications"].append({"text": "Experience " + mixed_preference.group(2).strip() + " is preferred.", "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
                 found[current].append({"text": mixed_preference.group(3).strip(), "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
             else:
-                found[section].append({"text": wording, "source_ids": [passage["id"]], "method": "source_boundary_fallback"})
+                add(section, wording)
     supplemented = []
     for section in SECTIONS:
         if found[section] and (not summary[section] or all(item.get("method") == "source_boundary_fallback" for item in summary[section])):
