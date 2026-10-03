@@ -2,25 +2,74 @@ import { useEffect, useState } from "react";
 
 const SECTIONS = ["Basic Job Criteria", "Compensation & Sponsorship", "Areas of Interests", "Company Insights"];
 const FUNCTIONS = {
-  "Software/Internet/AI": ["Backend Engineer", "Full Stack Engineer", "Frontend Software Engineer", "Data Analyst", "Data Scientist", "Data Engineer", "Business/BI Analyst", "Machine Learning Engineer", "AI Engineer", "DevOps", "Cyber Security Analyst", "Software Testing/Quality Assurance Engineer", "Project/Program Manager", "Engineering Manager"],
-  Consulting: ["Business Analyst", "Data Consultant", "IT Consultant", "Business Strategy Consultant", "Market Research Analyst", "Operations Consultant", "Financial Consultant"],
-  Marketing: ["Content Marketing/Strategy", "Social Media Management", "SEO", "Copywriter", "Brand Manager", "Growth Marketing", "Performance Marketing", "Product Marketing"],
-  Finance: ["Financial Analyst", "Risk Analyst", "Quantitative Analyst/Researcher", "Portfolio Manager", "Investment Banker", "Credit Analyst", "Corporate Finance Analyst", "Underwriter", "Actuary"],
-  Product: ["Product Manager", "Product Analyst", "Technical Product Manager", "AI Product Manager", "Game Designer"],
-  Healthcare: ["Healthcare Data Analyst", "Clinical Research Associate", "Clinical Research Scientist", "Biostatistician", "Medical Writer", "Biomedical Engineer", "Health Product Manager"],
-  "Electrical Engineering": ["Embedded Software Engineer", "Electrical Engineer", "Electronics Engineer", "Hardware Engineer", "Robotics Engineer", "Network Engineer", "Battery Engineer"],
-  "Human Resource/Administrative/Legal": ["Administrative Assistant", "Executive Assistant", "Office Manager", "Human Resource Specialist", "Recruiter/Sourcer", "Paralegal", "Corporate Counsel"],
-  Sales: ["Business Development", "Sales Development Representative", "Account Executive", "Sales Manager", "Enterprise Sales", "Retail Sales", "Medical Sales"],
-  "Production/Manufacturing": ["Mechanical Engineer", "Manufacturing Engineer", "Process Engineer", "Operations Manager/Director", "Quality Assurance Specialist", "Automotive Engineer"],
-  "Customer Service": ["Customer Service Representative", "Customer Service Manager", "Customer Support", "Customer Success"],
-  "Creative & Design": ["UX Designer", "UI Designer", "Graphic Designer", "UX Researcher", "Video Editor", "Illustrator", "3D Designer", "Industrial Designer"],
-  "Logistics/Supply Chain": ["Supply Chain Manager", "Inventory Manager", "Logistics Manager", "Warehouse Manager", "Procurement Manager"],
-  "Public Sector and Government": ["Program Manager", "Policy Analyst", "Government Relations Manager"],
-  "Legal Services": ["Compliance Specialist", "Legal Assistant", "Paralegal", "Legal Operations Manager", "Lawyer"],
-  "Education and Training": ["Higher Education Teaching", "K-12 Teaching", "Corporate Training and Development", "Educational Administration"],
-  Accounting: ["Accountant", "Controller", "Auditor", "Tax Specialist"],
-  "Real Estate/Architecture": ["Construction Project Manager", "Civil Engineer", "Property Manager", "Architect", "Urban Planner"],
-  "Energy/Environmental": ["Renewable Energy Engineer", "Energy Engineer", "Environmental Scientist", "Environmental Engineer"],
+  "Software/Internet/AI": {
+    "Backend Engineering": ["Backend Engineer", "Full Stack Engineer"],
+    "Data & Analytics": ["Data Analyst", "Data Scientist", "Data Engineer", "Business/BI Analyst"],
+    "Machine Learning & AI": ["Machine Learning Engineer", "AI Engineer"],
+    "Frontend/Mobile/Game": ["Frontend Software Engineer"],
+    "System Reliability & Security": ["DevOps", "Cyber Security Analyst"],
+    Testing: ["Software Testing/Quality Assurance Engineer"],
+    "Project Management": ["Project/Program Manager"],
+    "Technical Leadership": ["Engineering Manager"],
+  },
+  Consulting: {
+    "IT Consulting": ["Business Analyst", "Data Consultant", "IT Consultant"],
+    "Business Strategy & Management Consulting": ["Business Strategy Consultant", "Market Research Analyst", "Operations Consultant"],
+    "Financial Advisory": ["Financial Consultant"],
+  },
+  Marketing: {
+    "SEO and Content Marketing": ["Content Marketing/Strategy", "Social Media Management", "SEO", "Copywriter"],
+    "Brand and Communications Marketing": ["Brand Manager"],
+    "Growth Marketing": ["Growth Marketing", "Performance Marketing"],
+    "Product Marketing": ["Product Marketing"],
+  },
+  Finance: {
+    "Investment/Financing": ["Financial Analyst", "Risk Analyst", "Quantitative Analyst/Researcher", "Portfolio Manager"],
+    Banking: ["Investment Banker", "Credit Analyst"],
+    "Corporate Finance": ["Corporate Finance Analyst"],
+    Insurance: ["Underwriter", "Actuary"],
+  },
+  Product: { "Product Management": ["Product Manager", "Product Analyst", "Technical Product Manager", "AI Product Manager", "Game Designer"] },
+  Healthcare: {
+    "Healthcare IT": ["Healthcare Data Analyst"],
+    "Health Product & Operations Management": ["Health Product Manager"],
+    "Clinical & Regulatory": ["Clinical Research Associate", "Clinical Research Scientist", "Biostatistician", "Medical Writer"],
+    "Biomedical Engineering & Technology": ["Biomedical Engineer"],
+  },
+  "Electrical Engineering": {
+    "Electronics & Hardware": ["Embedded Software Engineer", "Electronics Engineer", "Hardware Engineer"],
+    "Electrical & Automation": ["Electrical Engineer", "Robotics Engineer"],
+    Telecommunications: ["Network Engineer"],
+    "Electrical Vehicles": ["Battery Engineer"],
+  },
+  "Human Resource/Administrative/Legal": {
+    "Executive and Administrative": ["Administrative Assistant", "Executive Assistant", "Office Manager"],
+    "Human Resource": ["Human Resource Specialist", "Recruiter/Sourcer"],
+    Legal: ["Paralegal", "Corporate Counsel"],
+  },
+  Sales: {
+    "Business Development": ["Business Development"],
+    "Inside Sales": ["Sales Development Representative", "Account Executive"],
+    "Sales Management": ["Sales Manager"],
+    "Outside Sales": ["Enterprise Sales"],
+    "Retail Sales": ["Retail Sales"],
+    "Medical Sales": ["Medical Sales"],
+  },
+  "Production/Manufacturing": {
+    "Mechanical Design & Manufacturing": ["Mechanical Engineer", "Manufacturing Engineer", "Process Engineer"],
+    "Operations & Safety": ["Operations Manager/Director"],
+    "Quality Management": ["Quality Assurance Specialist"],
+    "Automotive R&D & Manufacturing": ["Automotive Engineer"],
+  },
+  "Customer Service": { "Customer Service": ["Customer Service Representative", "Customer Service Manager"], "Customer Support": ["Customer Support"], "Customer Success": ["Customer Success"] },
+  "Creative & Design": { "UI/UX Design": ["UX Designer", "UI Designer", "Graphic Designer", "UX Researcher"], "Art/3D/Animation": ["Video Editor", "Illustrator", "3D Designer"], "Industrial Design": ["Industrial Designer"] },
+  "Logistics/Supply Chain": { "Supply Chain Management": ["Supply Chain Manager", "Inventory Manager"], "Logistics Operations": ["Logistics Manager", "Warehouse Manager"], "Procurement and Facilities": ["Procurement Manager"] },
+  "Public Sector and Government": { "Non-profit": ["Program Manager"], "Policy and Planning": ["Policy Analyst"], "Public Administration": ["Government Relations Manager"] },
+  "Legal Services": { "Compliance & Risk Management": ["Compliance Specialist"], "Paralegals & Legal Support": ["Legal Assistant", "Paralegal"], "Legal Operations & Administration": ["Legal Operations Manager"], "Legal Practice": ["Lawyer"] },
+  "Education and Training": { "Academic Teaching": ["Higher Education Teaching", "K-12 Teaching"], "Corporate Training and Development": ["Corporate Training and Development"], "Educational Administration": ["Educational Administration"] },
+  Accounting: { Accounting: ["Accountant", "Controller"], "Tax and Audit": ["Auditor", "Tax Specialist"] },
+  "Real Estate/Architecture": { Construction: ["Construction Project Manager", "Civil Engineer"], "Real Estate": ["Property Manager"], Architecture: ["Architect", "Urban Planner"] },
+  "Energy/Environmental": { "Energy Engineering": ["Renewable Energy Engineer", "Energy Engineer"], "Environmental Engineering": ["Environmental Scientist", "Environmental Engineer"] },
 };
 
 const CHOICES = {
@@ -60,7 +109,7 @@ export default function AllJobFilters({ filters, initialSection = SECTIONS[0], o
     <header><button aria-label="Close filters" onClick={onClose} type="button">‹</button><h2>All Filters</h2><button className="runr-filter-confirm" onClick={() => onApply(draft)} type="button">Confirm</button></header>
     {tags.length ? <div className="runr-filter-summary">{tags.map(([key, item]) => <button key={`${key}-${item}`} onClick={() => removeTag(key, item)} type="button">{choiceLabel(key, item)} ×</button>)}</div> : null}
     <div className="runr-filter-layout"><nav aria-label="Filter sections">{SECTIONS.map((name) => <button className={section === name ? "is-active" : ""} key={name} onClick={() => { setSection(name); document.getElementById(`runr-filter-${SECTIONS.indexOf(name)}`)?.scrollIntoView({ block: "start", behavior: "smooth" }); }} type="button">{name}</button>)}</nav><div className="runr-filter-content" onScroll={(event) => { const nodes = [...event.currentTarget.querySelectorAll("section[id]")]; const visible = nodes.filter((node) => node.getBoundingClientRect().top < 300).at(-1); if (visible) setSection(visible.dataset.name); }}>
-      <section data-name={SECTIONS[0]} id="runr-filter-0"><h3>Basic Job Criteria</h3><div className="runr-filter-card"><strong>Job Function</strong><div className="runr-function-picker"><div>{Object.keys(FUNCTIONS).map((group) => <button className={group === functionGroup ? "is-active" : ""} key={group} onClick={() => setFunctionGroup(group)} type="button">{group}</button>)}</div><div>{FUNCTIONS[functionGroup].map((role) => <button className={asList(draft.role).includes(role) ? "is-active" : ""} key={role} onClick={() => set("role", asList(draft.role).includes(role) ? asList(draft.role).filter((item) => item !== role) : [...asList(draft.role), role])} type="button">{role}</button>)}</div></div><TagField filters={draft} label="Other job functions" name="role" set={set} /></div>
+      <section data-name={SECTIONS[0]} id="runr-filter-0"><h3>Basic Job Criteria</h3><div className="runr-filter-card"><strong>Job Function</strong><div className="runr-function-picker"><div>{Object.keys(FUNCTIONS).map((group) => <button className={group === functionGroup ? "is-active" : ""} key={group} onClick={() => setFunctionGroup(group)} type="button">{group}</button>)}</div><div>{Object.entries(FUNCTIONS[functionGroup]).map(([heading, roles]) => <section className="runr-function-group" key={heading}><h4>{heading}</h4><div>{roles.map((role) => <button className={asList(draft.role).includes(role) ? "is-active" : ""} key={role} onClick={() => set("role", asList(draft.role).includes(role) ? asList(draft.role).filter((item) => item !== role) : [...asList(draft.role), role])} type="button">{role}</button>)}</div></section>)}</div></div><TagField filters={draft} label="Other job functions" name="role" set={set} /></div>
       <TagField filters={draft} label="Excluded title" name="excludedTitle" set={set} /><MultiChoice filters={draft} label="Job Type" name="employmentType" options={CHOICES.employmentType} set={set} /><MultiChoice filters={draft} label="Work Model" name="workArrangement" options={CHOICES.workArrangement} set={set} />
       <div className="runr-filter-card"><strong>Location</strong><div className="runr-filter-grid"><label>Country<select onChange={(event) => set("country", event.target.value)} value={draft.country || ""}><option value="">Any country</option>{["United States", "Canada", "United Kingdom", "Australia", "Ireland", "New Zealand", "Germany"].map((country) => <option key={country}>{country}</option>)}</select></label><label>City or area<input onChange={(event) => set("location", event.target.value)} placeholder="Anywhere" value={draft.location || ""} /></label></div></div>
       <MultiChoice filters={draft} label="Experience Level" name="experienceLevel" options={CHOICES.experienceLevel} set={set} /><div className="runr-filter-card"><strong>Required Experience</strong><div className="runr-filter-grid"><label>Minimum years<input min="0" onChange={(event) => set("requiredExperienceMin", event.target.value)} type="number" value={draft.requiredExperienceMin || ""} /></label><label>Maximum years<input min="0" onChange={(event) => set("requiredExperienceMax", event.target.value)} type="number" value={draft.requiredExperienceMax || ""} /></label></div></div><div className="runr-filter-card"><strong>Date Posted</strong><div className="runr-filter-options">{[["all", "Any time"], ...CHOICES.datePosted].map(([value, label]) => <label key={value}><input checked={draft.datePosted === value} onChange={() => set("datePosted", value)} type="radio" />{label}</label>)}</div></div></section>

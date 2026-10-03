@@ -1757,6 +1757,10 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .runr-function-picker > div:first-child { border-right: 1px solid #edf0f0; display: block; }
 .runr-function-picker > div:first-child button { background: transparent; display: block; margin-bottom: .15rem; padding: .48rem .5rem; text-align: left; width: 100%; }
 .runr-function-picker > div:last-child button { flex: 0 0 auto; max-width: 100%; min-height: 1.6rem; text-align: left; white-space: normal; }
+.runr-function-picker .runr-function-group { border-bottom: 1px solid #edf0f0; margin: 0; padding: .35rem 0 .65rem; width: 100%; }
+.runr-function-picker .runr-function-group:last-child { border-bottom: 0; }
+.runr-function-group h4 { color: #172d36; font-size: .72rem; font-weight: 800; margin: 0 0 .45rem; }
+.runr-function-group > div { align-items: flex-start; display: flex; flex-wrap: wrap; gap: .3rem; }
 .runr-function-picker button.is-active { background: #aff5df; }
 .runr-function-picker button:hover { background: #e5f8f2; }
 .runr-filter-card .runr-filter-card { border: 0; border-top: 1px solid #edf0f0; border-radius: 0; margin: .7rem 0 0; padding: .75rem 0 0; }
