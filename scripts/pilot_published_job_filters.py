@@ -277,12 +277,12 @@ def verify() -> None:
 
 
 def rollback() -> None:
-    cohort = json.loads((AUDIT / "cohort.json").read_text(encoding="utf-8"))
+    results = json.loads((AUDIT / "results.json").read_text(encoding="utf-8"))
     previous = json.loads((AUDIT / "rollback.json").read_text(encoding="utf-8"))
     with connect_database(DB) as connection:
         connection.executemany(
             "DELETE FROM job_filter_intelligence WHERE version_id=? AND prompt_version=?",
-            [(row["version_id"], PROMPT_VERSION) for row in cohort],
+            [(result["version_id"], PROMPT_VERSION) for result in results.values()],
         )
         connection.executemany(
             "INSERT INTO job_filter_intelligence "
