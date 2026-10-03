@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { toPersonalizedJobView } from "./personalizedJobsApi.js";
+import { buildPersonalizedJobsQuery, toPersonalizedJobView } from "./personalizedJobsApi.js";
+
+test("All Filters selections reach the published jobs API", () => {
+  const query = new URLSearchParams(buildPersonalizedJobsQuery({
+    role: ["Business Analyst"], skillsInclude: ["SQL"], employmentType: ["full_time"],
+    requiredExperienceMin: 3, roleType: "ic", workArrangement: ["remote"],
+  }));
+  assert.deepEqual(query.getAll("role"), ["Business Analyst"]);
+  assert.deepEqual(query.getAll("skills_include"), ["SQL"]);
+  assert.deepEqual(query.getAll("employment_type"), ["full_time"]);
+  assert.equal(query.get("required_experience_min"), "3");
+  assert.equal(query.get("role_type"), "ic");
+  assert.deepEqual(query.getAll("work_arrangement"), ["remote"]);
+});
 
 test("real Jobs view exposes only approved Apply URL and user-safe fields", () => {
   const view = toPersonalizedJobView({

@@ -113,6 +113,32 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
                    "work_arrangement": ["remote", "hybrid"]}
         page = app.get_personalized_jobs("user-a", filters=filters, limit=1)
         self.assertEqual(page["total"], 1)
+
+    def test_version_bound_nemo_filters_are_searchable(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        with store._connect() as connection:
+            connection.execute(
+                "INSERT INTO job_filter_intelligence VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("version-job-a", "job-a", "hash-job-a", json.dumps({
+                    "role": "Business Analyst", "skills": ["SQL"],
+                    "required_experience_years": 3, "role_type": "ic",
+                }), "mistralai/mistral-nemo", "runr_filter_nemo_pilot_v1", utc_now_iso()),
+            )
+            connection.execute(
+                "INSERT INTO job_filter_intelligence VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("version-job-b", "job-b", "wrong-hash", json.dumps({
+                    "role": "Business Analyst", "skills": ["SQL"],
+                    "required_experience_years": 3,
+                }), "mistralai/mistral-nemo", "runr_filter_nemo_pilot_v1", utc_now_iso()),
+            )
+        for filters in ({"role": ["Business Analyst"]}, {"skills_include": ["SQL"]},
+                        {"required_experience_min": 3}, {"role_type": ["ic"]},
+                        {"skills_include": ["SQL"], "sort": "priority"}):
+            page = app.get_personalized_jobs("user-a", filters=filters)
+            self.assertEqual(page["total"], 1, filters)
+            self.assertEqual(page["jobs"][0]["canonical_job_id"], "job-a")
         self.assertEqual(page["jobs"][0]["posting_id"], "job-a")
 
     def test_filters_cursor_and_user_state_are_server_side_and_isolated(self):

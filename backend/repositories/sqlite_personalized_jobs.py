@@ -1129,12 +1129,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             params.extend((f"%{str(term).casefold()}%",) * 2)
 
         field_exprs = {
-            "role": ["catalog.title", "json_extract(catalog.version_payload_json, '$.role')", "json_extract(catalog.version_payload_json, '$.roles')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.function')"],
+            "role": ["json_extract(catalog.filter_json, '$.role')", "catalog.title", "json_extract(catalog.version_payload_json, '$.role')", "json_extract(catalog.version_payload_json, '$.roles')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.function')"],
             "category": ["json_extract(catalog.version_payload_json, '$.category')", "json_extract(catalog.version_payload_json, '$.categories')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.function')"],
             "location": ["catalog.location", "catalog.version_location", "json_extract(catalog.version_payload_json, '$.location')"],
-            "work_arrangement": ["json_extract(catalog.version_payload_json, '$.work_arrangement')", "json_extract(catalog.version_payload_json, '$.workplace')", "json_extract(catalog.version_payload_json, '$.workplace_type')", "json_extract(catalog.version_payload_json, '$.remote_type')"],
-            "employment_type": ["json_extract(catalog.version_payload_json, '$.employment_type')", "json_extract(catalog.version_payload_json, '$.job_type')", "json_extract(catalog.version_payload_json, '$.type')"],
-            "experience_level": ["json_extract(catalog.version_payload_json, '$.experience_level')", "json_extract(catalog.version_payload_json, '$.seniority')", "json_extract(catalog.version_payload_json, '$.level')"],
+            "work_arrangement": ["json_extract(catalog.filter_json, '$.work_arrangement')", "json_extract(catalog.version_payload_json, '$.work_arrangement')", "json_extract(catalog.version_payload_json, '$.workplace')", "json_extract(catalog.version_payload_json, '$.workplace_type')", "json_extract(catalog.version_payload_json, '$.remote_type')"],
+            "employment_type": ["json_extract(catalog.filter_json, '$.employment_type')", "json_extract(catalog.version_payload_json, '$.employment_type')", "json_extract(catalog.version_payload_json, '$.job_type')", "json_extract(catalog.version_payload_json, '$.type')"],
+            "experience_level": ["json_extract(catalog.filter_json, '$.experience_level')", "json_extract(catalog.version_payload_json, '$.experience_level')", "json_extract(catalog.version_payload_json, '$.seniority')", "json_extract(catalog.version_payload_json, '$.level')"],
             "language": ["json_extract(catalog.version_payload_json, '$.languages')", "json_extract(catalog.version_payload_json, '$.language_requirements')", "json_extract(catalog.version_payload_json, '$.required_languages')"],
             "work_authorization": ["json_extract(catalog.version_payload_json, '$.work_authorization')", "json_extract(catalog.version_payload_json, '$.authorization')", "json_extract(catalog.version_payload_json, '$.work_permit')"],
             "sponsorship": ["json_extract(catalog.version_payload_json, '$.sponsorship')", "json_extract(catalog.version_payload_json, '$.visa_sponsorship')", "json_extract(catalog.version_payload_json, '$.sponsors_h1b')"],
@@ -1147,8 +1147,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "company_size": ["json_extract(catalog.company_profile_json, '$.fields.company_size.value')", "json_extract(catalog.version_payload_json, '$.company_size')", "json_extract(catalog.version_payload_json, '$.size')"],
             "funding_stage": ["json_extract(catalog.company_profile_json, '$.fields.funding_stage.value')", "json_extract(catalog.version_payload_json, '$.funding_stage')"],
             "country": ["json_extract(catalog.version_payload_json, '$.country')", "json_extract(catalog.version_payload_json, '$.country_code')", "catalog.location"],
-            "skills_include": ["json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
-            "role_type": ["json_extract(catalog.version_payload_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.management_role')"],
+            "skills_include": ["json_extract(catalog.filter_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
+            "role_type": ["json_extract(catalog.filter_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.management_role')"],
         }
         for field, requested in filters.items():
             values = [str(item).strip().casefold() for item in (requested if isinstance(requested, (list, tuple, set)) else [requested]) if str(item).strip()]
@@ -1165,7 +1165,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 expressions = {
                     "excluded_title": ["catalog.title"],
                     "excluded_industry": ["json_extract(catalog.company_profile_json, '$.fields.industry.value')", "json_extract(catalog.version_payload_json, '$.industry')"],
-                    "skills_exclude": ["json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
+                    "skills_exclude": ["json_extract(catalog.filter_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
                 }[field]
                 for value in values:
                     for expr in expressions:
@@ -1173,7 +1173,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                         params.append(f"%{value}%")
             elif field in {"required_experience_min", "required_experience_max"}:
                 paths = ("$.experience_years_min", "$.structured_description.experience_years_min.value")
-                amount = "COALESCE(" + ", ".join(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL)" for path in paths) + ")"
+                amount = "COALESCE(CAST(json_extract(catalog.filter_json, '$.required_experience_years') AS REAL), " + ", ".join(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL)" for path in paths) + ")"
                 operator = ">=" if field.endswith("_min") else "<="
                 predicates.append(f"{amount} {operator} ?")
                 params.append(float(values[0]))
@@ -1232,12 +1232,14 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                    v.location AS version_location,
                    v.payload_json AS version_payload_json,
                    p.profile_json AS company_profile_json,
+                   CASE WHEN fi.content_hash = v.content_hash THEN fi.filters_json ELSE NULL END AS filter_json,
                    COALESCE(d.state, 'none') AS user_state
             FROM acquisition_publication_jobs pj
             JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN canonical_companies c ON c.company_id = j.company_id
             LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
             LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+            LEFT JOIN job_filter_intelligence fi ON fi.version_id = v.version_id
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
@@ -1649,6 +1651,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 j.canonical_job_id, j.company_id, c.canonical_name AS company,
                 c.entity_kind AS company_entity_kind, c.provenance_url AS company_provenance_url,
                 p.profile_json AS company_profile_json,
+                CASE WHEN fi.content_hash = v.content_hash THEN fi.filters_json ELSE NULL END AS filter_json,
                 p.logo_object_key AS company_logo_object_key,
                 p.logo_source_url AS company_logo_source_url,
                 p.logo_content_type AS company_logo_content_type,
@@ -1728,6 +1731,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             JOIN canonical_companies c ON c.company_id = j.company_id
             LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
             LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN job_filter_intelligence fi ON fi.version_id = v.version_id
             LEFT JOIN job_applicant_snapshots aps
               ON aps.snapshot_id = (
                   SELECT latest.snapshot_id

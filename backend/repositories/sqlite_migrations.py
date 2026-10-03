@@ -3453,6 +3453,23 @@ def _apply_personalized_filter_sets_migration(connection: DatabaseConnection) ->
     """)
 
 
+def _apply_published_job_filter_intelligence_migration(connection: DatabaseConnection) -> None:
+    """Keep inferred filters separate from the immutable employer posting."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS job_filter_intelligence (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            filters_json TEXT NOT NULL,
+            model TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_filter_intelligence_job
+            ON job_filter_intelligence(canonical_job_id);
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3817,6 +3834,11 @@ MIGRATIONS = (
         "067_personalized_filter_sets",
         "Store multiple named personalized job filter sets per user.",
         _apply_personalized_filter_sets_migration,
+    ),
+    Migration.from_callable(
+        "068_published_job_filter_intelligence",
+        "Store version-bound inferred job filters separately from employer postings.",
+        _apply_published_job_filter_intelligence_migration,
     ),
 )
 
