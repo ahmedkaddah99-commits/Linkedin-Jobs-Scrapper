@@ -1,0 +1,15 @@
+{
+  "candidate": {
+    "name": "Ahmed Kaddah",
+    "email": "ahmed.kaddah@tutamail.com",
+    "has_drivers_license": false,
+    "has_special_training": false
+  },
+  "job_search": {
+    "cities": ["Erlangen", "Nuremberg", "Nuernberg", "Fuerth"]
+  },
+  "filters": {
+    "exclude_driver_license_required": true,
+    "exclude_special_training_required": true
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "jobPostings": [
+    {
+      "externalId": "rc002-4001",
+      "title": "Platform Engineer",
+      "jobPostingInfo": {
+        "externalPath": "/job/rc002-4001",
+        "jobFamily": "Engineering",
+        "location": "Hamburg, Germany",
+        "description": "Operate platform services.",
+        "timeType": "Full-time"
+      },
+      "externalUrl": "https://wd5.myworkdaysite.com/rc002/job/rc002-4001"
+    },
+    {
+      "externalId": "rc002-4001",
+      "title": "Platform Engineer",
+      "jobPostingInfo": {
+        "externalPath": "/job/rc002-4001",
+        "jobFamily": "Engineering",
+        "location": "Hamburg, Germany",
+        "description": "Operate platform services.",
+        "timeType": "Full-time"
+      },
+      "externalUrl": "https://wd5.myworkdaysite.com/rc002/job/rc002-4001"
+    }
+  ],
+  "total": 2
+}

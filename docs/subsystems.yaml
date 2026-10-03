@@ -1,0 +1,364 @@
+# Runr subsystem registry (WS-12 synthesis, Phase 3)
+#
+# Source: deployment/render-turso-r2 | SHA: 58a96674b5cc77bd9da0877d2adaad64abe41b85 | Verified: 2026-09-14
+#
+# GitHub owns this file's content (technical truth: paths, entry points, docs, invariants).
+# Linear owns work status/priority/dependencies/assignment for tickets that reference a subsystem id.
+# Every implementation ticket that touches an owned path must update the matching entry and its doc.
+# Owned path sets are disjoint at the baseline (verified: 0 unowned, 0 double-owned tracked paths,
+# after the WS-11 wording correction in phase-1-delta-audit-2026-09-13.md §4).
+
+subsystems:
+  - id: http-api-cli
+    workstream: WS-1
+    linear_project: WS-01 HTTP API and CLI
+    purpose: >
+      HTTP API surface (routes, auth wiring, pagination, error handling) and the
+      workspace_runner.py operator CLI that fronts it.
+    owned_paths:
+      - backend/api/**
+      - workspace_runner.py
+    exclusions: []
+    entry_points:
+      - "workspace_runner.py serve-api -> backend/api/server.py"
+      - "route registry: backend/api/routes/registry.py"
+    documentation:
+      - docs/reverse-engineering/01-architecture/backend-api.md
+    dependencies: [application-services, data-domain-model, integrations-security]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_backend_api.py tests/test_customer_route_surface.py tests/test_workspace_runner.py
+    key_invariants:
+      - No admin.dashboard/users/tokens/secrets/analytics route may be registered (tests/test_customer_route_surface.py).
+      - Routes never touch a live/production database or external provider in tests.
+
+  - id: workers-orchestration
+    workstream: WS-2
+    linear_project: WS-02 Workers and Orchestration
+    purpose: Worker/orchestration engine, stage adapters, bootstrap, and worker roles (customer, acquisition).
+    owned_paths:
+      - backend/worker/**
+      - backend/orchestration/**
+      - backend/adapters/**
+      - backend/bootstrap.py
+      - backend/__init__.py
+    exclusions: []
+    entry_points:
+      - "workspace_runner.py run-worker / process-next"
+      - backend/worker/service.py (WorkerService)
+      - backend/worker/roles.py (customer, acquisition)
+    documentation:
+      - docs/reverse-engineering/01-architecture/backend-workers-and-orchestration.md
+    dependencies: [application-services, data-domain-model]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_worker_service.py tests/test_stage_adapters.py
+    key_invariants:
+      - The acquisition role never claims customer task-queue work; the customer role never runs acquisition/enrichment.
+      - No live acquisition network access or provider spending from a worker test.
+
+  - id: acquisition
+    workstream: WS-3
+    linear_project: WS-03 Acquisition and Collectors
+    purpose: >
+      Acquisition, collectors, publication, company identity/enrichment. Owns the VPS-side
+      producers, the publisher, and the catalog write path (not the catalog's schema, which is WS-5).
+    owned_paths:
+      - backend/acquisition/**
+      - backend/connectors/**
+      - backend/enrichment/**
+      - backend/application/acquisition_scheduler.py
+      - backend/application/company_enrichment.py
+      - backend/application/company_enrichment_resolution.py
+      - backend/application/company_identity_canonicalization.py
+      - backend/application/company_logo.py
+      - backend/application/company_logo_adapter.py
+      - backend/application/company_id_backfill.py
+      - backend/application/company_reconciliation.py
+      - backend/application/company_registry_reconciliation.py
+      - backend/application/company_operations.py
+      - backend/application/source_eligibility_manifest.py
+      - backend/application/expansion_wave_manifest.py
+      - backend/application/duplicate_decisions.py
+      - backend/repositories/sqlite_acquisition.py
+      - backend/repositories/sqlite_acquisition_audit.py
+      - scripts/**
+      - data/**
+    exclusions:
+      - deploy/** (WS-7 owns the systemd wrappers that call into scripts/)
+    entry_points:
+      - scripts/run_manifested_linkedin.py
+      - scripts/run_manifested_employer.py
+      - scripts/publish_producer_states.py
+      - scripts/build_master_jobs_catalog.py
+      - backend/acquisition/producer_adapters.py
+    documentation:
+      - docs/reverse-engineering/05-subsystems/acquisition-and-collectors.md
+      - docs/reverse-engineering/05-subsystems/publication-and-catalog.md
+      - docs/reverse-engineering/05-subsystems/company-identity-enrichment-and-logos.md
+      - docs/reverse-engineering/05-subsystems/applicant-intelligence.md
+      - docs/reverse-engineering/03-data/acquisition-source-state.md
+    dependencies: [data-domain-model, deployment-release-ci]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_producer_state_delivery.py tests/test_job_publication_completeness.py tests/test_job_source_merging.py
+      - node scripts/run-python.cjs -m pytest -q tests/test_company_identity_canonicalization.py
+    key_invariants:
+      - No NET-OPS script runs against a live provider outside an authorized host or without --dry-run/--help in review.
+      - RUNR_ACQUISITION_LIVE_NETWORK_ENABLED is never set true in tests.
+      - CompanyEnrich autocomplete is a distinct free, bounded, fail-closed domain-seed path; it never calls paid enrichment and never creates a career URL.
+      - Employer collection unions every independent validated career source (distinct host or ATS tenant) within the target/request budget; every discovered source persists in coverage.source_inventory with per-source counts and an explicit deferral reason.
+      - Migrations, deploy/**, and admin acquisition surfaces are never edited or restored from this subsystem.
+
+  - id: application-services
+    workstream: WS-4
+    linear_project: WS-04 Application Services
+    purpose: >
+      Customer-facing application services: personalized jobs, tailored documents, career
+      profiles/evidence, Assisted Apply preparation (not the extension itself), quotas, tracker sync.
+    owned_paths:
+      - backend/application/** # except the WS-3 files listed under `acquisition`
+      - backend/capabilities/**
+      - backend/career_memory/**
+      - backend/evidence/**
+      - backend/evidence_library/**
+      - backend/master_cv/**
+      - backend/profiles/**
+      - backend/work_experience/**
+      - backend/tools/**
+      - backend/scripts/**
+      - backend/repositories/sqlite_personalized_jobs.py
+      - backend/repositories/assisted_apply_preparation.py
+      - backend/repositories/document_payloads.py
+    exclusions:
+      - backend/application/{acquisition_scheduler,company_*,source_eligibility_manifest,expansion_wave_manifest,duplicate_decisions}.py  # WS-3
+    entry_points:
+      - backend/application/services.py (composition root)
+      - backend/application/personalized_jobs_service.py
+    documentation:
+      - docs/reverse-engineering/05-subsystems/personalized-jobs-and-customer-app-services.md
+      - docs/reverse-engineering/05-subsystems/career-profiles-and-documents.md
+    dependencies: [data-domain-model, integrations-security, acquisition]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_backend_application.py tests/test_career_profile_evidence.py tests/test_master_cv.py
+    key_invariants:
+      - No re-registration of /dashboard or analytics/events (retired).
+      - No live Gemini/DeepSeek/ScrapeOps calls in tests.
+      - No Assisted Apply submit path is added here (that boundary belongs to WS-9).
+
+  - id: data-domain-model
+    workstream: WS-5
+    linear_project: WS-05 Data and Domain Model
+    purpose: Database connection/migrations, repositories, object storage, config/env schema, domain model.
+    owned_paths:
+      - backend/database/**
+      - backend/repositories/** # except the WS-3/WS-4 files listed above
+      - backend/storage/**
+      - backend/config/**
+      - backend/domain/**
+    exclusions:
+      - backend/repositories/{sqlite_acquisition,sqlite_acquisition_audit}.py  # WS-3
+      - backend/repositories/{sqlite_personalized_jobs,assisted_apply_preparation,document_payloads}.py  # WS-4
+    entry_points:
+      - backend/database/connection.py
+      - backend/repositories/sqlite_migrations.py (MIGRATIONS tuple)
+    documentation:
+      - docs/reverse-engineering/01-architecture/domain-model.md
+      - docs/reverse-engineering/03-data/schema-and-migrations.md
+      - docs/reverse-engineering/03-data/turso-and-libsql.md
+      - docs/reverse-engineering/03-data/object-storage-r2.md
+    dependencies: []
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_database_migrations.py tests/test_database_connection.py tests/test_sqlite_repositories.py tests/test_object_storage.py tests/test_env_config.py
+    key_invariants:
+      - Migrations are append-only; never edit or reorder an existing migration (checksum break). New schema is always a new 06X_* entry.
+      - Migration 055_acquisition_analytics_indexes stays (retired-feature residue, not deletable without a new migration).
+      - No test contacts a real Turso/MySQL instance or uses production credentials.
+
+  - id: integrations-security
+    workstream: WS-6
+    linear_project: WS-06 Integrations and Security
+    purpose: Third-party integrations (Creem billing, ScrapeOps) and security primitives (auth, secrets).
+    owned_paths:
+      - backend/integrations/**
+      - backend/security/**
+    exclusions: []
+    entry_points:
+      - backend/security/auth.py
+      - backend/security/secrets.py
+      - backend/integrations/creem.py
+    documentation:
+      - docs/reverse-engineering/01-architecture/security-and-auth.md
+      - docs/reverse-engineering/05-subsystems/billing-and-creem.md
+    dependencies: [data-domain-model]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_creem_integration.py tests/test_scrapeops_integration.py tests/test_phase_h_runr_pro.py tests/test_log_privacy.py
+    key_invariants:
+      - Secret material is never printed, logged unredacted, or committed.
+      - No live Creem/ScrapeOps calls in tests; webhook/signature tests use fixtures only.
+
+  - id: deployment-release-ci
+    workstream: WS-7
+    linear_project: WS-07 Deployment Release and CI
+    purpose: Render/VPS deployment config, Docker images, CI, and the release-process/production-record trail.
+    owned_paths:
+      - deploy/**
+      - Dockerfile
+      - Dockerfile.api
+      - Dockerfile.worker
+      - .dockerignore
+      - render.yaml
+      - ecosystem.config.cjs
+      - .github/**
+      - backend/deployment/**
+      - backend/static_server.py
+      - RELEASE_LEDGER.md
+      - docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md
+      - requirements.txt
+      - requirements-linux.txt
+      - requirements-dev.txt
+      - pyproject.toml
+      - package.json
+      - package-lock.json
+      - run_daily.ps1
+    exclusions: []
+    entry_points:
+      - deploy/start.sh
+      - deploy/systemd/*.{service,timer}
+      - .github/workflows/ci.yml
+    documentation:
+      - docs/reverse-engineering/02-deployment/render.md
+      - docs/reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md
+      - docs/reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md
+      - docs/reverse-engineering/02-deployment/docker.md
+      - docs/reverse-engineering/02-deployment/ci-cd.md
+      - docs/reverse-engineering/02-deployment/release-process-and-production-records.md
+    dependencies: [data-domain-model, acquisition]
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q tests/test_rc022_build_release_contract.py tests/test_rc023_vps_runtime.py tests/test_rc024_backup_restore.py
+    key_invariants:
+      - No push that triggers Render auto-deploy without owner approval.
+      - No values for sync-false env keys committed to the repo.
+      - No enabling acquisition/enrichment switches on Render (acquisition runs on the VPS only).
+      - CI never pushes/loads Docker images (push:false, load:false).
+      - Local checkpoint pruning removes only generations with a verified off-host receipt and keeps at least two verified generations (RC-024/T44).
+
+  - id: frontend
+    workstream: WS-8
+    linear_project: WS-08 Frontend
+    purpose: Customer-facing React web application.
+    owned_paths:
+      - frontend/**
+    exclusions: []
+    entry_points:
+      - frontend/src/main.jsx
+      - frontend/src/App.jsx
+    documentation:
+      - docs/reverse-engineering/01-architecture/frontend-app.md
+    dependencies: [http-api-cli, integrations-security]
+    verification_commands:
+      - npm --prefix frontend run test
+      - npm --prefix frontend run check
+    key_invariants:
+      - No restoring admin routes/pages (retired).
+      - frontend/.env.local values are never read or printed.
+      - CV-render files (package.json, package-lock.json, scripts/render-cv-pdf.mjs, lib/cvStudio.js, lib/cvSocialLinks.js) change only with a coordinated WS-4/WS-7 review (they affect the deployed API/worker image filter).
+
+  - id: assisted-apply-extension
+    workstream: WS-9
+    linear_project: WS-09 Assisted Apply Extension
+    purpose: Browser extension and shared TypeScript packages for Assisted Apply, enforcing the never-submit boundary.
+    owned_paths:
+      - apps/**
+      - packages/**
+    exclusions: []
+    entry_points:
+      - apps/browser-extension/entrypoints/background.ts
+      - apps/browser-extension/entrypoints/application-form.ts
+      - packages/ats-core/src/submission-guard.ts
+    documentation:
+      - docs/reverse-engineering/01-architecture/apps-and-extensions.md
+      - docs/reverse-engineering/01-architecture/shared-packages.md
+      - docs/reverse-engineering/05-subsystems/assisted-apply.md
+    dependencies: [application-services, http-api-cli]
+    verification_commands:
+      - npm --prefix apps/browser-extension run check
+      - npm --prefix apps/browser-extension run verify:assisted-apply-boundary
+    key_invariants:
+      - Never-submit boundary is absolute -- no submit-capable adapter method, message, or UI; no dispatching a terminal submit control. See project memory runr-extension-safety-posture.
+      - installSubmissionGuard, the AtsAdapter type constraint, and the manifest submit/secret scans in verify-manifest.mjs are never removed or weakened.
+      - No manifest content_scripts or remote code; no session token or PKCE verifier exposed outside the service worker.
+
+  - id: backend-test-suite
+    workstream: WS-10
+    linear_project: WS-10 Backend Test Suite
+    purpose: The backend pytest suite and shared test scaffolding.
+    owned_paths:
+      - tests/**
+      - backend/testing/**
+    exclusions: []
+    entry_points:
+      - tests/conftest.py
+      - backend/testing/bootstrap.py
+    documentation:
+      - docs/reverse-engineering/04-testing/test-suite-map.md
+    dependencies: []
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest -q <changed test file>
+      - node scripts/run-python.cjs -m ruff check backend tests workspace_runner.py
+    key_invariants:
+      - No live-network or non-loopback HTTP call in any test (guarded by _forbid_non_loopback_http for requests; other HTTP clients are not covered -- see WS10-G2).
+      - test_customer_route_surface.py's retired-route assertions are never weakened without an explicit ticket to un-retire admin surfaces.
+
+  - id: docs-and-repository-artifacts
+    workstream: WS-11
+    linear_project: WS-11 Docs and Repository Artifacts
+    purpose: Documentation corpus and non-code repository artifact classification (evidence-only; not a product subsystem).
+    owned_paths:
+      - docs/** # except docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md (WS-7)
+      - "*.md"   # root reports, except RELEASE_LEDGER.md (WS-7)
+      - "*.json" # root reports, except package.json / package-lock.json (WS-7)
+      - test CV/**
+      - test-CV/**
+      - screenshots/**
+      - user_config/** # tracked entries only; most of user_config/ is gitignored personal data
+      - .agents/**
+      - .cline/**
+      - .codex/**
+      - image.png
+      - .gitignore
+      - .gitattributes
+    exclusions:
+      - docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md
+      - RELEASE_LEDGER.md
+      - package.json
+      - package-lock.json
+    entry_points: []
+    documentation:
+      - docs/reverse-engineering/06-history-and-provenance/repository-artifacts.md
+      - docs/reverse-engineering/06-history-and-provenance/retired-features.md
+      - docs/reverse-engineering/06-history-and-provenance/known-gaps.md
+      - docs/INDEX.md
+    dependencies: []
+    verification_commands:
+      - # link/path checks -- see docs/INDEX.md Verification section
+    key_invariants:
+      - No credential value, customer CV content, or proxy credential is ever pasted into a doc or ticket.
+      - A new doc is created only if the recommended-documentation-tree.md path is absent; existing docs are reconciled, not duplicated.
+
+  - id: synthesis
+    workstream: WS-12
+    linear_project: WS-12 Cross-subsystem Synthesis
+    purpose: Read-only cross-subsystem synthesis (this file, docs/INDEX.md, and the 00-overview/data-flow/branch-divergence docs). Owns no source paths.
+    owned_paths: []
+    exclusions: []
+    entry_points: []
+    documentation:
+      - docs/reverse-engineering/00-overview.md
+      - docs/reverse-engineering/01-architecture/data-flow.md
+      - docs/reverse-engineering/06-history-and-provenance/branch-divergence.md
+      - docs/INDEX.md
+      - docs/subsystems.yaml
+    dependencies: [http-api-cli, workers-orchestration, acquisition, application-services, data-domain-model, integrations-security, deployment-release-ci, frontend, assisted-apply-extension, backend-test-suite, docs-and-repository-artifacts]
+    verification_commands:
+      - # runs after every other subsystem's checks; see docs/INDEX.md Verification section
+    key_invariants:
+      - Never re-derives another workstream's evidence; always cites the owning doc.
+      - Never marks a live-production fact as verified -- only as recorded, with its source document named.

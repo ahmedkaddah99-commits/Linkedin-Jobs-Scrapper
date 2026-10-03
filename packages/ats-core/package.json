@@ -1,0 +1,20 @@
+{
+  "name": "@runr/ats-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./policy": "./src/policy.ts",
+    "./dynamic-form": "./src/dynamic-form.ts",
+    "./application-context": "./src/application-context.ts",
+    "./page-bridge": "./src/page-bridge.ts",
+    "./field-intent": "./src/field-intent.ts",
+    "./generic-inspector": "./src/generic-inspector.ts",
+    "./generic-planner": "./src/generic-planner.ts",
+    "./generic-upload": "./src/generic-upload.ts",
+    "./resume-match": "./src/resume-match.ts",
+    "./question-model": "./src/question-model.ts",
+    "./declarative-actions": "./src/declarative-actions.ts"
+  }
+}

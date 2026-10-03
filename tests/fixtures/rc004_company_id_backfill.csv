@@ -1,0 +1,13 @@
+canonical_CompanyID,companyenrich_id,company_name,website_url,linkedin_company_url,linkedin_page_type,linkedin_company_id,description,Column1
+master-alpha,ce-alpha,Alpha,https://alpha.example,https://www.linkedin.com/company/alpha,company,101,Original alpha,keep-alpha
+,ce-alpha,Alpha GmbH,https://alpha.example,https://www.linkedin.com/company/alpha,company,101,Richer alpha,match-existing
+,ce-new,NewCo,https://new.example,https://www.linkedin.com/company/newco,company,,New company,new
+,ce-new,NewCo,https://new.example,https://www.linkedin.com/company/newco,company,,New company,new
+, ,Domain Only,https://shared-host.example,,,,,domain-only
+,ce-linkedin,LinkCo,https://linkco.example,https://www.linkedin.com/company/linkco,company,202,LinkedIn anchor,linkedin
+master-conflict-a,ce-conflict,Conflict A,https://conflict-a.example,https://www.linkedin.com/company/conflict,company,700,Conflict A,conflict-a
+master-conflict-b,ce-conflict,Conflict B,https://conflict-b.example,https://www.linkedin.com/company/conflict,company,700,Conflict B,conflict-b
+,ce-conflict,Conflict Missing,https://conflict-missing.example,https://www.linkedin.com/company/conflict,company,700,Conflict missing,conflict-missing
+,ce-bad,Bad ID,https://bad.example,https://www.linkedin.com/company/bad,company,not-a-number,Bad identity,bad-id
+,ce-school,School,https://school.example,https://www.linkedin.com/school/school,school,999,School page,school
+,,,,,,,,no-name
