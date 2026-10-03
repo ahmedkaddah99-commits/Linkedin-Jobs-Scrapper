@@ -142,22 +142,30 @@ def validated(raw: dict, row: dict) -> dict:
     result["required_experience_years"] = years if type(years) in (int, float) and 0 <= years <= 40 and years in supported else None
     levels = raw.get("experience_level")
     valid_levels = {"intern", "entry", "mid", "senior", "lead", "director"}
-    result["experience_level"] = list(dict.fromkeys(value for value in levels if value in valid_levels)) if isinstance(levels, list) else []
-    if len(result["experience_level"]) > 1:
-        # Two levels require explicit alternative experience paths; otherwise use the highest.
-        order = ("intern", "entry", "mid", "senior", "lead", "director")
-        if not re.search(r"\b(?:or|oder)\b.{0,100}\b(?:years?|yrs?|jahre[n]?)\b", source, re.I):
-            result["experience_level"] = [max(result["experience_level"], key=order.index)]
-    if result["required_experience_years"] is not None and not result["experience_level"]:
+    title = row["title"].casefold()
+    title_levels = {"intern": r"intern|praktik|werkstudent", "entry": r"junior|entry|graduate|trainee",
+                    "mid": r"mid.level", "senior": r"senior|sr\.", "lead": r"\blead\b|teamleit|head of|\bleiter\b|staff engineer",
+                    "director": r"director|direktor|vice president|\bvp\b|chief "}
+    result["experience_level"] = [value for value in levels if value in valid_levels
+                                  and re.search(title_levels[value], title, re.I)] if isinstance(levels, list) else []
+    result["experience_level"] = list(dict.fromkeys(result["experience_level"]))
+    if result["required_experience_years"] is not None:
         years = result["required_experience_years"]
         result["experience_level"] = ["entry" if years < 3 else "mid" if years < 6 else "senior" if years < 10 else "lead"]
+    elif len(result["experience_level"]) > 1:
+        order = ("intern", "entry", "mid", "senior", "lead", "director")
+        result["experience_level"] = [max(result["experience_level"], key=order.index)]
     skills = raw.get("skills")
     result["skills"] = list(dict.fromkeys(skill.strip() for skill in skills if isinstance(skill, str)
                                                 and 2 <= len(skill.strip()) <= 60
                                                 and skill.strip().casefold() in source))[:8] if isinstance(skills, list) else []
-    manager_evidence = re.search(r"(?:manage|lead|supervis|führ|leit|verantwort).{0,45}(?:team|staff|people|mitarbeit|personal)", source, re.I)
+    manager_evidence = re.search(
+        r"\b(?:manage|managing|lead|leading|supervise|supervising|führst|führen|leitest|leiten)\b"
+        r"(?:\s+\w+){0,6}\s+(?:team|staff|employees|people|mitarbeitende|mitarbeiter|personal)\b"
+        r"|\b(?:fachliche|disziplinarische)\s+führung\b"
+        r"|\b(?:teamlead|teamleiter|teamleitung)\b", source, re.I)
     result["role_type"] = "manager" if raw.get("role_type") == "manager" and manager_evidence else (
-        "ic" if raw.get("role_type") == "ic" else None)
+        "ic" if raw.get("role_type") == "ic" and not manager_evidence else None)
     return result
 
 
@@ -208,7 +216,9 @@ def publish() -> None:
             raise RuntimeError("Publication changed; regenerate cohort before publishing")
         existing = connection.execute("SELECT * FROM job_filter_intelligence WHERE version_id IN ("
                                       + ",".join("?" for _ in ids) + ")", ids).fetchall()
-        (AUDIT / "rollback.json").write_text(json.dumps([dict(row) for row in existing], ensure_ascii=False, indent=2), encoding="utf-8")
+        rollback_file = AUDIT / "rollback.json"
+        if not rollback_file.exists():
+            rollback_file.write_text(json.dumps([dict(row) for row in existing], ensure_ascii=False, indent=2), encoding="utf-8")
         now = datetime.now(timezone.utc).isoformat()
         connection.executemany("INSERT INTO job_filter_intelligence "
                                "(version_id,canonical_job_id,content_hash,filters_json,model,prompt_version,generated_at) "
@@ -226,25 +236,42 @@ def verify() -> None:
     from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
     cohort = json.loads((AUDIT / "cohort.json").read_text(encoding="utf-8"))
     results = json.loads((AUDIT / "results.json").read_text(encoding="utf-8"))
+    with connect_database(DB) as connection:
+        rows = connection.execute(
+            "SELECT fi.canonical_job_id,fi.version_id,fi.content_hash,fi.filters_json "
+            "FROM job_filter_intelligence fi "
+            "JOIN canonical_jobs j ON j.canonical_job_id=fi.canonical_job_id AND j.current_version_id=fi.version_id "
+            "JOIN job_posting_versions v ON v.version_id=fi.version_id AND v.content_hash=fi.content_hash "
+            "JOIN acquisition_publication_head h ON h.head_id=1 "
+            "JOIN acquisition_publication_jobs pj ON pj.publication_id=h.publication_id "
+            "AND pj.canonical_job_id=fi.canonical_job_id "
+            "WHERE fi.prompt_version=?", (PROMPT_VERSION,)).fetchall()
+    readback = {row["canonical_job_id"]: row for row in rows}
+    if len(readback) != 100 or any(row["canonical_job_id"] not in readback or
+                                   json.loads(readback[row["canonical_job_id"]]["filters_json"]) !=
+                                   results[row["canonical_job_id"]]["filters"] for row in cohort):
+        raise RuntimeError(f"Only {len(readback)} current published filter records matched the 100-job cohort")
     store = SqlitePersonalizedJobsStore(DB, initialize=False)
-    examples = {}
-    for key in ("role", "employment_type", "work_arrangement", "experience_level", "skills_include", "role_type"):
+    examples = {"published_readback": len(readback)}
+    for key in ("role", "employment_type", "work_arrangement", "experience_level",
+                "required_experience_min", "skills_include", "role_type"):
         for row in cohort:
             fields = results[row["canonical_job_id"]]["filters"]
-            field = "skills" if key == "skills_include" else key
+            field = {"skills_include": "skills", "required_experience_min": "required_experience_years"}.get(key, key)
             value = fields.get(field)
             if isinstance(value, list):
                 value = value[0] if value else None
             if not value:
                 continue
-            response = store.query_published_jobs("filter-pilot-verification", filters={key: [value]}, limit=25)
+            response = store.query_published_jobs("filter-pilot-verification",
+                                                  filters={key: [value], "company": [row["company"]]}, limit=100)
             ids = {item["canonical_job_id"] for item in response["rows"]}
             if row["canonical_job_id"] in ids:
                 examples[key] = {"value": value, "total": response["total"],
                                  "runr_url": f"https://app.userunr.com/jobs/{row['canonical_job_id']}"}
                 break
         if key not in examples:
-            examples[key] = {"error": "No tagged cohort job returned on first page"}
+            examples[key] = {"error": "No tagged cohort job returned with this filter and its employer"}
     (AUDIT / "verification.json").write_text(json.dumps(examples, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(examples, ensure_ascii=False, indent=2))
 
@@ -267,9 +294,44 @@ def rollback() -> None:
     print(f"Removed this pilot's 100 filter records and restored {len(previous)} prior records")
 
 
+def report() -> None:
+    cohort = json.loads((AUDIT / "cohort.json").read_text(encoding="utf-8"))
+    results = json.loads((AUDIT / "results.json").read_text(encoding="utf-8"))
+    fields = ("role", "work_arrangement", "employment_type", "experience_level",
+              "required_experience_years", "skills", "role_type")
+    counts = {field: sum(bool(results[row["canonical_job_id"]]["filters"].get(field)) for row in cohort)
+              for field in fields}
+    lines = ["# Published white collar job filter pilot", "",
+             "100 current published jobs were classified with `mistralai/mistral-nemo`.",
+             "Model classifications are stored by posting version and content hash, separately from employer text.",
+             "Empty values mean the source did not support a safe selection or no taxonomy option fit.", "",
+             "Production check on 2026-10-04: all 100 filter records were read back from Turso with the current published posting version and matching content hash. Published-feed queries returned cohort jobs for role, work model, job type, experience level, required years, skill, and role type. The frontend sends these selections as API query parameters. A browser security policy prevented a signed-in visual check of the Runr page, so this report does not claim a visual UI verification.", "",
+             "This pilot fills only the seven fields in the table below. Location, country, salary, industry, and company stage continue to use scraped posting or company data. Coverage measures accepted values, not a manually measured accuracy rate. `results.json` contains each raw Nemo response and the validated value; the prompt and validators are in `scripts/pilot_published_job_filters.py`.", "",
+             "## Coverage", "",
+             "| Filter | Jobs with accepted value |", "|---|---:|"]
+    lines += [f"| {field} | {counts[field]}/100 |" for field in fields]
+    lines += ["", "## Jobs", "", "| # | Employer | Job | Runr | Role | Work model | Type | Level | Years | Skills | Role type |",
+              "|---:|---|---|---|---|---|---|---|---:|---:|---|"]
+    def safe(value):
+        return str("—" if value is None or value == "" else value).replace("|", "\\|").replace("\n", " ")
+    for index, row in enumerate(cohort, 1):
+        value = results[row["canonical_job_id"]]["filters"]
+        columns = [str(index), safe(row["company"]), safe(row["title"]),
+                   f"[Open](https://app.userunr.com/jobs/{row['canonical_job_id']})",
+                   safe(value["role"]), safe(value["work_arrangement"]), safe(value["employment_type"]),
+                   safe(", ".join(value["experience_level"])), safe(value["required_experience_years"]),
+                   safe(", ".join(value["skills"])), safe(value["role_type"])]
+        lines.append("| " + " | ".join(columns) + " |")
+    lines += ["", "`cohort.json` contains the exact source posting versions and descriptions; `results.json` contains",
+              "the raw Nemo responses and accepted filter values. `verification.json` records live filter checks.",
+              "Run `scripts/pilot_published_job_filters.py rollback` to remove this cohort's filter values.", ""]
+    (AUDIT / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
+    print(json.dumps(counts))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("sample", "run", "publish", "verify", "rollback"))
+    parser.add_argument("action", choices=("sample", "run", "publish", "verify", "rollback", "report"))
     args = parser.parse_args()
     setup()
     if args.action == "sample":
@@ -282,6 +344,8 @@ def main() -> None:
         publish()
     elif args.action == "rollback":
         rollback()
+    elif args.action == "report":
+        report()
     else:
         verify()
 

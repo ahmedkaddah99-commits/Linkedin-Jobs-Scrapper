@@ -1147,7 +1147,6 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "company_size": ["json_extract(catalog.company_profile_json, '$.fields.company_size.value')", "json_extract(catalog.version_payload_json, '$.company_size')", "json_extract(catalog.version_payload_json, '$.size')"],
             "funding_stage": ["json_extract(catalog.company_profile_json, '$.fields.funding_stage.value')", "json_extract(catalog.version_payload_json, '$.funding_stage')"],
             "country": ["json_extract(catalog.version_payload_json, '$.country')", "json_extract(catalog.version_payload_json, '$.country_code')", "catalog.location"],
-            "skills_include": ["json_extract(catalog.filter_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
             "role_type": ["json_extract(catalog.filter_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.management_role')"],
         }
         for field, requested in filters.items():
@@ -1157,6 +1156,16 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if field == "company":
                 predicates.append("LOWER(catalog.company) IN (" + ",".join("?" for _ in values) + ")")
                 params.extend(values)
+            elif field == "skills_include":
+                legacy = ["$.skills", "$.required_skills", "$.structured_description.skills"]
+                clauses = []
+                for value in values:
+                    clauses.append("(EXISTS(SELECT 1 FROM json_each(catalog.filter_json, '$.skills') skill "
+                                   "WHERE LOWER(skill.value) = ?) OR "
+                                   + " OR ".join("LOWER(COALESCE(json_extract(catalog.version_payload_json, '"
+                                                 + path + "'), '')) LIKE ?" for path in legacy) + ")")
+                    params.extend([value, *(f"%{value}%" for _ in legacy)])
+                predicates.append("(" + " OR ".join(clauses) + ")")
             elif field in field_exprs:
                 expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
                 predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
@@ -1165,9 +1174,13 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 expressions = {
                     "excluded_title": ["catalog.title"],
                     "excluded_industry": ["json_extract(catalog.company_profile_json, '$.fields.industry.value')", "json_extract(catalog.version_payload_json, '$.industry')"],
-                    "skills_exclude": ["json_extract(catalog.filter_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
+                    "skills_exclude": ["json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
                 }[field]
                 for value in values:
+                    if field == "skills_exclude":
+                        predicates.append("NOT EXISTS(SELECT 1 FROM json_each(catalog.filter_json, '$.skills') skill "
+                                          "WHERE LOWER(skill.value) = ?)")
+                        params.append(value)
                     for expr in expressions:
                         predicates.append(f"LOWER(COALESCE({expr}, '')) NOT LIKE ?")
                         params.append(f"%{value}%")

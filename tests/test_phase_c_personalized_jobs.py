@@ -139,6 +139,8 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
             page = app.get_personalized_jobs("user-a", filters=filters)
             self.assertEqual(page["total"], 1, filters)
             self.assertEqual(page["jobs"][0]["canonical_job_id"], "job-a")
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={"skills_include": ["SQ"]})["total"], 0)
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={"skills_exclude": ["SQL"]})["total"], 1)
         self.assertEqual(page["jobs"][0]["posting_id"], "job-a")
 
     def test_filters_cursor_and_user_state_are_server_side_and_isolated(self):
