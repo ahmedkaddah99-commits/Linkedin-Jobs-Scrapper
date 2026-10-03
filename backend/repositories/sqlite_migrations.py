@@ -3438,6 +3438,21 @@ def _remove_unusable_published_job_fts_migration(connection: DatabaseConnection)
     )
 
 
+def _apply_personalized_filter_sets_migration(connection: DatabaseConnection) -> None:
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS personalized_filter_sets (
+            filter_set_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_personalized_filter_sets_user
+            ON personalized_filter_sets(user_id, updated_at DESC);
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3797,6 +3812,11 @@ MIGRATIONS = (
         "066_remove_unusable_published_job_fts",
         "Remove FTS writes that stall on Turso after switching catalog search to bounded candidate IDs.",
         _remove_unusable_published_job_fts_migration,
+    ),
+    Migration.from_callable(
+        "067_personalized_filter_sets",
+        "Store multiple named personalized job filter sets per user.",
+        _apply_personalized_filter_sets_migration,
     ),
 )
 

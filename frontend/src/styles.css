@@ -1719,6 +1719,47 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 }
 
 /* Local Runr preview filter drawer ----------------------------------------- */
+.runr-all-filters { background: #fff; border-radius: 1.1rem 0 0 1.1rem; box-shadow: -18px 0 50px rgba(0,0,0,.16); display: flex; flex-direction: column; height: 100%; max-width: 880px; width: min(100%, 880px); }
+.runr-saved-filters { background: #fff; border-bottom: 1px solid #e9eef0; display: flex; flex-wrap: wrap; gap: .7rem; padding: .7rem 1rem; }
+.runr-saved-filters > div { display: flex; flex-wrap: wrap; gap: .4rem; }
+.runr-saved-filters input { border: 1px solid #dce5e6; border-radius: .45rem; padding: .45rem .6rem; }
+.runr-saved-filters button { background: #f3f7f7; border: 1px solid #dce5e6; border-radius: .45rem; cursor: pointer; padding: .45rem .6rem; }
+.runr-saved-filters span { display: inline-flex; gap: .15rem; }
+.runr-all-filters > header { align-items: center; border-bottom: 1px solid #e9eef0; display: flex; gap: .8rem; padding: 1rem 1.2rem; }
+.runr-all-filters > header h2 { color: #172d36; flex: 1; font-size: 1.1rem; font-weight: 800; margin: 0; }
+.runr-all-filters > header > button:first-child { background: #f6f8f8; border: 0; border-radius: .5rem; font-size: 1.5rem; height: 2rem; line-height: 1; width: 2rem; }
+.runr-filter-confirm { background: #06dba3; border: 0; border-radius: 999px; color: #071c1a; cursor: pointer; font-weight: 800; padding: .55rem 1.1rem; }
+.runr-filter-summary { border-bottom: 1px solid #e9eef0; display: flex; flex-wrap: wrap; gap: .35rem; min-height: 3.5rem; padding: .8rem 1.2rem; }
+.runr-filter-summary button { background: #f3f6f6; border: 0; border-radius: .35rem; color: #24383d; cursor: pointer; font-size: .72rem; padding: .3rem .5rem; }
+.runr-filter-layout { display: grid; flex: 1; grid-template-columns: 280px minmax(0,1fr); min-height: 0; }
+.runr-filter-layout nav { border-right: 1px solid #edf0f0; padding: 1rem; }
+.runr-filter-layout nav button { background: transparent; border: 0; border-radius: .65rem; color: #263a40; cursor: pointer; display: block; font-size: .76rem; font-weight: 700; margin-bottom: .3rem; padding: .9rem .7rem; text-align: left; width: 100%; }
+.runr-filter-layout nav button.is-active { background: #f1f4f4; }
+.runr-filter-content { background: #f7f8f8; overflow: auto; padding: 1rem; }
+.runr-filter-content section { margin-bottom: 1.7rem; scroll-margin-top: .5rem; }
+.runr-filter-content h3 { color: #13272d; font-size: 1.1rem; margin: 0 0 .55rem; }
+.runr-filter-card { background: #fff; border: 1px solid #edf0f0; border-radius: .8rem; margin-bottom: .5rem; padding: .8rem; }
+.runr-filter-card > strong { color: #233237; display: block; font-size: .76rem; margin-bottom: .55rem; }
+.runr-filter-card input:not([type=checkbox]):not([type=radio]), .runr-filter-card select { background: #f6f8f8; border: 1px solid #e6ebeb; border-radius: .45rem; color: #1b3035; font: inherit; font-size: .78rem; min-height: 2.35rem; padding: .5rem .65rem; width: 100%; }
+.runr-filter-grid { display: grid; gap: .5rem; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.runr-filter-grid label { color: #53676d; font-size: .7rem; }
+.runr-filter-options { display: grid; gap: .3rem; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.runr-filter-options label, .runr-filter-check { align-items: center; background: #f6f8f8; border-radius: .45rem; color: #20343a; display: flex; font-size: .76rem; gap: .45rem; min-height: 2.3rem; padding: .45rem .6rem; }
+.runr-filter-options input, .runr-filter-check input { accent-color: #06dba3; height: 1rem; width: 1rem; }
+.runr-filter-tags { display: flex; flex-wrap: wrap; gap: .3rem; }
+.runr-filter-tags button { background: #c4f7e8; border: 0; border-radius: .4rem; color: #17352e; cursor: pointer; font-size: .72rem; margin-bottom: .4rem; padding: .3rem .5rem; }
+.runr-filter-add { display: flex; gap: .3rem; }
+.runr-filter-add button { background: #f6f8f8; border: 1px solid #e6ebeb; border-radius: .45rem; cursor: pointer; padding: 0 .7rem; }
+.runr-filter-suggestions { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .4rem; }
+.runr-filter-suggestions button, .runr-function-picker button { background: #f3f5f5; border: 0; border-radius: .35rem; cursor: pointer; font-size: .7rem; padding: .35rem .5rem; }
+.runr-function-picker { border: 1px solid #edf0f0; border-radius: .5rem; display: grid; grid-template-columns: 42% 58%; max-height: 15rem; overflow: hidden; }
+.runr-function-picker > div { display: flex; flex-wrap: wrap; gap: .25rem; overflow: auto; padding: .4rem; }
+.runr-function-picker > div:first-child { border-right: 1px solid #edf0f0; display: block; }
+.runr-function-picker > div:first-child button { display: block; margin-bottom: .2rem; text-align: left; width: 100%; }
+.runr-function-picker button.is-active { background: #aff5df; }
+.runr-all-filters > footer { border-top: 1px solid #e9eef0; display: flex; justify-content: space-between; padding: .75rem 1rem; }
+.runr-all-filters > footer > button:first-child { background: transparent; border: 0; color: #43595f; cursor: pointer; }
+@media (max-width: 700px) { .runr-all-filters { border-radius: 0; } .runr-filter-layout { grid-template-columns: 1fr; } .runr-filter-layout nav { border-bottom: 1px solid #edf0f0; border-right: 0; display: flex; gap: .2rem; overflow: auto; padding: .4rem; } .runr-filter-layout nav button { flex: 0 0 auto; width: auto; } }
 .jobs-filter-drawer { max-width: 420px; width: min(100%, 420px); }
 .jobs-filter-drawer__header { padding: 1.1rem 1rem 0.9rem; }
 .jobs-filter-drawer__header > div > p:last-child { color: var(--jobs-muted); font-size: 0.7rem; margin: 0.35rem 0 0; }

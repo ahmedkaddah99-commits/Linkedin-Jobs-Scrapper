@@ -174,6 +174,42 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "updated_at": str(row["updated_at"] or ""),
         }
 
+    def list_filter_sets(self, user_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM personalized_filter_sets WHERE user_id = ? ORDER BY updated_at DESC",
+                (str(user_id),),
+            ).fetchall()
+        return [{"filter_set_id": str(row["filter_set_id"]), "name": str(row["name"]),
+                 "filters": _decode(row["payload_json"], {}), "updated_at": str(row["updated_at"])} for row in rows]
+
+    def save_filter_set(self, user_id: str, name: str, filters: Mapping[str, Any], filter_set_id: str = "") -> dict[str, Any]:
+        now = utc_now_iso()
+        identifier = filter_set_id or f"filter_set_{uuid4().hex}"
+        def write(connection):
+            existing = connection.execute(
+                "SELECT created_at FROM personalized_filter_sets WHERE filter_set_id = ? AND user_id = ?",
+                (identifier, user_id),
+            ).fetchone()
+            if filter_set_id and existing is None:
+                raise ValueError("filter set not found")
+            connection.execute(
+                "INSERT INTO personalized_filter_sets (filter_set_id, user_id, name, payload_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(filter_set_id) DO UPDATE SET "
+                "name=excluded.name, payload_json=excluded.payload_json, updated_at=excluded.updated_at",
+                (identifier, user_id, name, _json(dict(filters)), str(existing["created_at"]) if existing else now, now),
+            )
+            return {"filter_set_id": identifier, "name": name, "filters": dict(filters), "updated_at": now}
+        return self._run_transaction(write)
+
+    def delete_filter_set(self, user_id: str, filter_set_id: str) -> bool:
+        def write(connection):
+            return connection.execute(
+                "DELETE FROM personalized_filter_sets WHERE user_id = ? AND filter_set_id = ?",
+                (user_id, filter_set_id),
+            ).rowcount > 0
+        return self._run_transaction(write)
+
     def upsert_default_saved_search(
         self,
         user_id: str,
@@ -1110,6 +1146,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "industry": ["json_extract(catalog.company_profile_json, '$.fields.industry.value')", "json_extract(catalog.version_payload_json, '$.industry')", "json_extract(catalog.version_payload_json, '$.company_industry')"],
             "company_size": ["json_extract(catalog.company_profile_json, '$.fields.company_size.value')", "json_extract(catalog.version_payload_json, '$.company_size')", "json_extract(catalog.version_payload_json, '$.size')"],
             "funding_stage": ["json_extract(catalog.company_profile_json, '$.fields.funding_stage.value')", "json_extract(catalog.version_payload_json, '$.funding_stage')"],
+            "country": ["json_extract(catalog.version_payload_json, '$.country')", "json_extract(catalog.version_payload_json, '$.country_code')", "catalog.location"],
+            "skills_include": ["json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
+            "role_type": ["json_extract(catalog.version_payload_json, '$.role_type')", "json_extract(catalog.version_payload_json, '$.management_role')"],
         }
         for field, requested in filters.items():
             values = [str(item).strip().casefold() for item in (requested if isinstance(requested, (list, tuple, set)) else [requested]) if str(item).strip()]
@@ -1122,6 +1161,33 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
                 predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
                 params.extend(f"%{value.replace('-', ' ')}%" for value in values for _ in expressions)
+            elif field in {"excluded_title", "excluded_industry", "skills_exclude"}:
+                expressions = {
+                    "excluded_title": ["catalog.title"],
+                    "excluded_industry": ["json_extract(catalog.company_profile_json, '$.fields.industry.value')", "json_extract(catalog.version_payload_json, '$.industry')"],
+                    "skills_exclude": ["json_extract(catalog.version_payload_json, '$.skills')", "json_extract(catalog.version_payload_json, '$.required_skills')", "json_extract(catalog.version_payload_json, '$.structured_description.skills')"],
+                }[field]
+                for value in values:
+                    for expr in expressions:
+                        predicates.append(f"LOWER(COALESCE({expr}, '')) NOT LIKE ?")
+                        params.append(f"%{value}%")
+            elif field in {"required_experience_min", "required_experience_max"}:
+                paths = ("$.experience_years_min", "$.structured_description.experience_years_min.value")
+                amount = "COALESCE(" + ", ".join(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL)" for path in paths) + ")"
+                operator = ">=" if field.endswith("_min") else "<="
+                predicates.append(f"{amount} {operator} ?")
+                params.append(float(values[0]))
+            elif field in {"h1b_sponsorship", "exclude_security_clearance", "exclude_citizenship_required", "exclude_staffing_agency"}:
+                if values[0] not in {"true", "1", "yes", "on"}:
+                    continue
+                if field == "h1b_sponsorship":
+                    predicates.append("LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.h1b_sponsorship'), json_extract(catalog.version_payload_json, '$.visa_sponsorship'), '')) IN ('true', 'yes', 'available', '1')")
+                elif field == "exclude_security_clearance":
+                    predicates.append("LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.security_clearance'), json_extract(catalog.version_payload_json, '$.structured_description.security_clearance.value'), '')) NOT IN ('true', 'yes', 'required', 'secret', 'top_secret', 'ts_sci')")
+                elif field == "exclude_citizenship_required":
+                    predicates.append("LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.citizenship_required'), json_extract(catalog.version_payload_json, '$.structured_description.citizenship_required.value'), '')) NOT IN ('true', 'yes', 'required', '1')")
+                else:
+                    predicates.append("LOWER(COALESCE(json_extract(catalog.company_profile_json, '$.fields.company_type.value'), json_extract(catalog.version_payload_json, '$.company_type'), '')) NOT IN ('staffing_agency', 'staffing agency', 'recruiter', 'recruitment agency')")
             elif field in {"salary_min", "salary_max"}:
                 path = "$.salary.max" if field == "salary_min" else "$.salary.min"
                 operator = ">=" if field == "salary_min" else "<="

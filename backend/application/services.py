@@ -1201,6 +1201,15 @@ class BackendApplication:
     def save_personalized_saved_search(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._personalized_jobs_service.upsert_saved_search(user_id, payload)
 
+    def list_personalized_filter_sets(self, user_id: str) -> list[dict[str, Any]]:
+        return self._personalized_jobs_service.list_filter_sets(user_id)
+
+    def save_personalized_filter_set(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._personalized_jobs_service.save_filter_set(user_id, payload)
+
+    def delete_personalized_filter_set(self, user_id: str, filter_set_id: str) -> bool:
+        return self._personalized_jobs_service.delete_filter_set(user_id, filter_set_id)
+
     def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
         return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
 

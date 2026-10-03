@@ -12,7 +12,7 @@ export const INITIAL_PERSONALIZED_JOB_FILTERS = {
   workAuthorization: "",
   sponsorship: "",
   company: "",
-  industry: "",
+  industry: [],
   companySize: "",
   companyStage: "",
   fundingStage: "",
@@ -28,9 +28,12 @@ export const INITIAL_PERSONALIZED_JOB_FILTERS = {
   securityClearance: "",
   liftingRequirement: "",
   sort: "newest",
+  role: [], excludedTitle: [], country: "", excludedIndustry: [], skillsInclude: [], skillsExclude: [], roleType: "",
+  requiredExperienceMin: "", requiredExperienceMax: "", h1bSponsorship: false,
+  excludeSecurityClearance: false, excludeCitizenshipRequired: false, excludeStaffingAgency: false,
 };
 
-const DATE_POSTED_DAYS = { "24h": "1", "7d": "7", "30d": "30" };
+const DATE_POSTED_DAYS = { "24h": "1", "3d": "3", "7d": "7", "30d": "30" };
 const MORE_DATE_POSTED_DAYS = { past_24_hours: "1", past_7_days: "7", past_30_days: "30" };
 const MORE_SORT_MODES = { most_recent: "newest", most_suitable: "priority", least_competitive: "least_competitive", salary_high_to_low: "newest", salary_low_to_high: "newest", company_name: "newest" };
 
@@ -112,7 +115,12 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     security_clearance: filters.securityClearance,
     lifting_requirement: filters.liftingRequirement,
     sort: filters.sort === "best" ? "priority" : (filters.sort || MORE_SORT_MODES[filters.sort_by] || filters.sort_by),
-    posted_within_days: DATE_POSTED_DAYS[filters.datePosted] || MORE_DATE_POSTED_DAYS[filters.posting_age] || "",
+    posted_within_days: DATE_POSTED_DAYS[Array.isArray(filters.datePosted) ? filters.datePosted[0] : filters.datePosted] || MORE_DATE_POSTED_DAYS[filters.posting_age] || "",
+    role: filters.role, excluded_title: filters.excludedTitle, country: filters.country,
+    excluded_industry: filters.excludedIndustry, skills_include: filters.skillsInclude, skills_exclude: filters.skillsExclude,
+    role_type: filters.roleType, required_experience_min: filters.requiredExperienceMin, required_experience_max: filters.requiredExperienceMax,
+    h1b_sponsorship: filters.h1bSponsorship || "", exclude_security_clearance: filters.excludeSecurityClearance || "",
+    exclude_citizenship_required: filters.excludeCitizenshipRequired || "", exclude_staffing_agency: filters.excludeStaffingAgency || "",
     simple_application: filters.simple_application,
     exclude_applied: filters.exclude_applied,
     exclude_saved: filters.exclude_saved,
@@ -134,7 +142,6 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     certifications: filters.certifications,
     professional_license: filters.professional_license,
     visa_sponsorship: filters.visa_sponsorship,
-    h1b_sponsorship: filters.h1b_sponsorship,
     work_authorization_required: filters.work_authorization_required,
     citizenship_required: filters.citizenship_required,
     security_clearance_detail: filters.security_clearance,
@@ -144,8 +151,6 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     headquarters_location: filters.headquarters_location,
     keywords_include: filters.keywords_include,
     keywords_exclude: filters.keywords_exclude,
-    skills_include: filters.skills_include,
-    skills_exclude: filters.skills_exclude,
     years_experience_min: filters.years_experience_min,
     years_experience_max: filters.years_experience_max,
     management_role: filters.management_role,
@@ -158,7 +163,8 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
   };
   Object.entries(values).forEach(([key, value]) => {
     if (key === "sort" && omitSort) return;
-    if (text(value)) params.set(key, text(value));
+    if (Array.isArray(value)) value.forEach((item) => { if (text(item)) params.append(key, text(item)); });
+    else if (text(value)) params.set(key, text(value));
   });
   if (cursor) params.set("cursor", cursor);
   params.set("limit", String(Math.max(1, Math.min(100, Number(limit) || 25))));
@@ -198,7 +204,7 @@ export function countPersonalizedJobFilters(filters = {}) {
     ["liftingRequirement", filters.liftingRequirement],
   ];
   const knownKeys = new Set(known.map(([key]) => key));
-  const extra = Object.entries(filters).filter(([key, value]) => !knownKeys.has(key) && !["query", "sort"].includes(key) && text(value));
+  const extra = Object.entries(filters).filter(([key, value]) => !knownKeys.has(key) && !["query", "sort"].includes(key) && (Array.isArray(value) ? value.length : value === true || (value !== false && text(value))));
   return [...known.filter(([, value]) => text(value)), ...extra].length;
 }
 
@@ -216,7 +222,7 @@ export function toPersonalizedJobsFilterPayload(filters = {}) {
     language: filters.language,
     work_authorization: filters.workAuthorization,
     sponsorship: filters.sponsorship,
-    posted_within_days: DATE_POSTED_DAYS[filters.datePosted] || "",
+    posted_within_days: DATE_POSTED_DAYS[Array.isArray(filters.datePosted) ? filters.datePosted[0] : filters.datePosted] || "",
     company: filters.company,
     industry: filters.industry,
     company_size: filters.companySize,
@@ -233,9 +239,14 @@ export function toPersonalizedJobsFilterPayload(filters = {}) {
     preferred_major: filters.preferredMajor,
     security_clearance: filters.securityClearance,
     lifting_requirement: filters.liftingRequirement,
+    role: filters.role, excluded_title: filters.excludedTitle, country: filters.country,
+    excluded_industry: filters.excludedIndustry, skills_include: filters.skillsInclude, skills_exclude: filters.skillsExclude,
+    role_type: filters.roleType, required_experience_min: filters.requiredExperienceMin, required_experience_max: filters.requiredExperienceMax,
+    h1b_sponsorship: filters.h1bSponsorship, exclude_security_clearance: filters.excludeSecurityClearance,
+    exclude_citizenship_required: filters.excludeCitizenshipRequired, exclude_staffing_agency: filters.excludeStaffingAgency,
   };
   Object.entries(values).forEach(([key, value]) => {
-    if (text(value)) query[key] = text(value);
+    if (Array.isArray(value) ? value.length : value === true || (value !== false && text(value))) query[key] = value;
   });
   return query;
 }
@@ -439,19 +450,19 @@ export function filtersFromSavedSearch(payload = {}) {
     ...INITIAL_PERSONALIZED_JOB_FILTERS,
     query: firstValue(saved.q || saved.search || saved.search_text || saved.query),
     location: firstValue(saved.location),
-    workArrangement: firstValue(saved.work_arrangement) || "all",
-    employmentType: firstValue(saved.employment_type) || "all",
-    experienceLevel: firstValue(saved.experience_level || saved.experience) || "all",
+    workArrangement: saved.work_arrangement || "all",
+    employmentType: saved.employment_type || "all",
+    experienceLevel: saved.experience_level || saved.experience || "all",
     category: firstValue(saved.category),
     salaryMin: firstValue(saved.salary_min),
     salaryMax: firstValue(saved.salary_max),
     language: firstValue(saved.language || saved.languages),
     workAuthorization: firstValue(saved.work_authorization),
     sponsorship: firstValue(saved.sponsorship),
-    company: firstValue(saved.company),
-    industry: firstValue(saved.industry),
+    company: saved.company || "",
+    industry: saved.industry || [],
     companySize: firstValue(saved.company_size),
-    companyStage: firstValue(saved.company_stage),
+    companyStage: saved.company_stage || "",
     fundingStage: firstValue(saved.funding_stage),
     fundingMin: firstValue(saved.funding_min),
     fundingMax: firstValue(saved.funding_max),
@@ -459,11 +470,16 @@ export function filtersFromSavedSearch(payload = {}) {
     foundedYearMax: firstValue(saved.founded_year_max),
     fundingYearMin: firstValue(saved.funding_year_min),
     fundingYearMax: firstValue(saved.funding_year_max),
-    hiddenCompanies: firstValue(saved.hidden_companies),
+    hiddenCompanies: saved.hidden_companies || [],
     education: firstValue(saved.education),
     preferredMajor: firstValue(saved.preferred_major || saved.preferred_majors),
     securityClearance: firstValue(saved.security_clearance),
     liftingRequirement: firstValue(saved.lifting_requirement || saved.physical_requirement),
-    datePosted: "all",
+    datePosted: ({ 1: "24h", 3: "3d", 7: "7d", 30: "30d" })[saved.posted_within_days] || "all",
+    role: saved.role || [], excludedTitle: saved.excluded_title || [], country: firstValue(saved.country),
+    excludedIndustry: saved.excluded_industry || [], skillsInclude: saved.skills_include || [], skillsExclude: saved.skills_exclude || [],
+    roleType: firstValue(saved.role_type), requiredExperienceMin: firstValue(saved.required_experience_min), requiredExperienceMax: firstValue(saved.required_experience_max),
+    h1bSponsorship: Boolean(saved.h1b_sponsorship), excludeSecurityClearance: Boolean(saved.exclude_security_clearance),
+    excludeCitizenshipRequired: Boolean(saved.exclude_citizenship_required), excludeStaffingAgency: Boolean(saved.exclude_staffing_agency),
   };
 }

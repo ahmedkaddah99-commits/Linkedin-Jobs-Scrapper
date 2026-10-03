@@ -90,6 +90,31 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
         )
         return create_backend(Path(temporary_directory.name), storage_backend="sqlite", test_mode=True)
 
+    def test_named_filter_sets_are_isolated_and_preserve_multiselect_filters(self):
+        app = self._backend()
+        first = app.save_personalized_filter_set("user-a", {
+            "name": "Remote analyst",
+            "filters": {"role": ["Data Analyst", "Business Analyst"], "work_arrangement": ["remote", "hybrid"]},
+        })
+        second = app.save_personalized_filter_set("user-a", {
+            "name": "Finance", "filters": {"industry": ["Financial Services"]},
+        })
+        self.assertEqual(len(app.list_personalized_filter_sets("user-a")), 2)
+        self.assertEqual(app.list_personalized_filter_sets("user-b"), [])
+        self.assertEqual(first["filters"]["role"], ["Data Analyst", "Business Analyst"])
+        self.assertFalse(app.delete_personalized_filter_set("user-b", first["filter_set_id"]))
+        self.assertTrue(app.delete_personalized_filter_set("user-a", second["filter_set_id"]))
+        self.assertEqual([item["name"] for item in app.list_personalized_filter_sets("user-a")], ["Remote analyst"])
+
+    def test_extended_filters_apply_before_feed_pagination(self):
+        app = self._backend()
+        _seed_catalog(app)
+        filters = {"role": ["Finance Analyst", "Operations Analyst"], "excluded_title": ["Finance"],
+                   "work_arrangement": ["remote", "hybrid"]}
+        page = app.get_personalized_jobs("user-a", filters=filters, limit=1)
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["jobs"][0]["posting_id"], "job-a")
+
     def test_filters_cursor_and_user_state_are_server_side_and_isolated(self):
         app = self._backend()
         _seed_catalog(app)

@@ -14,6 +14,9 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.exact("GET", ("personalized-jobs", "saved-search"), _handle_saved_search, auth_required=True, name="personalized_jobs.saved_search.read")
     registry.exact("PUT", ("personalized-jobs", "saved-search"), _handle_saved_search, auth_required=True, name="personalized_jobs.saved_search.write")
     registry.exact("POST", ("personalized-jobs", "saved-search"), _handle_saved_search, auth_required=True, name="personalized_jobs.saved_search.post")
+    registry.exact("GET", ("personalized-jobs", "filter-sets"), _handle_filter_sets, auth_required=True, name="personalized_jobs.filter_sets.list")
+    registry.exact("POST", ("personalized-jobs", "filter-sets"), _handle_filter_sets, auth_required=True, name="personalized_jobs.filter_sets.create")
+    registry.prefix("DELETE", ("personalized-jobs", "filter-sets"), _handle_filter_set_delete, auth_required=True, name="personalized_jobs.filter_sets.delete")
     registry.exact("GET", ("personalized-jobs", "hidden"), _handle_hidden, auth_required=True, name="personalized_jobs.hidden.read")
     registry.exact("POST", ("personalized-jobs", "report"), _handle_report_without_job, auth_required=True, name="personalized_jobs.report")
     registry.prefix("GET", ("personalized-jobs", "companies", "{company_id}"), _handle_company, auth_required=True, name="personalized_jobs.company.read_prefix")
@@ -62,6 +65,26 @@ def _handle_saved_search(context: ApiRouteContext) -> bool | None:
         context.send_json(context.application.get_personalized_saved_search(user_id) or {"user_id": user_id, "name": "Default search", "filters": {}, "is_default": True})
         return True
     context.send_json(context.application.save_personalized_saved_search(user_id, _body(context)))
+    return True
+
+
+def _handle_filter_sets(context: ApiRouteContext) -> bool | None:
+    user_id = _identity_user_id(context)
+    if context.method == "GET":
+        context.send_json({"filter_sets": context.application.list_personalized_filter_sets(user_id)})
+        return True
+    try:
+        context.send_json(context.application.save_personalized_filter_set(user_id, _body(context)))
+    except ValueError as error:
+        return _error(context, 400, "invalid_filter_set", str(error))
+    return True
+
+
+def _handle_filter_set_delete(context: ApiRouteContext) -> bool | None:
+    if len(context.segments) != 3:
+        return None
+    deleted = context.application.delete_personalized_filter_set(_identity_user_id(context), context.segments[2])
+    context.send_json({"deleted": deleted})
     return True
 
 
@@ -202,6 +225,10 @@ def _filters_from_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
         "education", "preferred_major", "preferred_majors", "security_clearance",
         "lifting_requirement", "physical_requirement",
         "sort",
+        "excluded_title", "excluded_industry", "skills_include", "skills_exclude",
+        "role_type", "required_experience_min", "required_experience_max",
+        "h1b_sponsorship", "exclude_security_clearance", "exclude_citizenship_required",
+        "exclude_staffing_agency", "country",
     }
     result: dict[str, Any] = {}
     for key in recognized:

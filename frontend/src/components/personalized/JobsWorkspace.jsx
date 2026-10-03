@@ -19,6 +19,7 @@ import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
 import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "../../lib/jobReadingPresentation";
+import AllJobFilters from "./AllJobFilters";
 
 const NETWORK_ITEMS = [
   ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
@@ -42,11 +43,12 @@ function CompanyMark({ company, large = false, logoUrl = "", monogram = "" }) {
 }
 
 function FilterPill({ icon, label, onChange, options, value }) {
-  const active = value && value !== "all";
+  const selected = Array.isArray(value) ? value[0] || "all" : value || "all";
+  const active = selected !== "all";
   return <label className={["jobs-filter-pill", active ? "is-active" : ""].join(" ")}>
     <Icon>{icon}</Icon>
     <span>{label}{active ? " (1)" : ""}</span>
-    <select aria-label={label} onChange={(event) => onChange(event.target.value)} value={value || "all"}>
+    <select aria-label={label} onChange={(event) => onChange(event.target.value)} value={selected}>
       {options.map((option) => <option key={`${option.value}-${option.label}`} value={option.value}>{option.label}</option>)}
     </select>
     <Icon className="jobs-filter-pill__chevron">expand_more</Icon>
@@ -456,6 +458,10 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterSection, setFilterSection] = useState("Basic Job Criteria");
+  const [savedFilterSets, setSavedFilterSets] = useState([]);
+  const [filterSetName, setFilterSetName] = useState("");
+  const [showFilterSets, setShowFilterSets] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [improveOpen, setImproveOpen] = useState(false);
   const [improveResult, setImproveResult] = useState(null);
@@ -479,6 +485,15 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   useEffect(() => {
     markJobsPhase("route-mounted", { mode: "cold" });
   }, []);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    let active = true;
+    request("/personalized-jobs/filter-sets").then((result) => {
+      if (active) setSavedFilterSets(result.filter_sets || []);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [isConnected, request]);
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
@@ -744,10 +759,22 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   async function saveSearch() {
     try {
-      await request("/personalized-jobs/saved-search", { method: "PUT", body: { name: "Default search", filters: toPersonalizedJobsFilterPayload(filters) } });
-      setFeedback("Search saved.");
+      const name = filterSetName.trim() || `Filter ${savedFilterSets.length + 1}`;
+      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filters: toPersonalizedJobsFilterPayload(filters) } });
+      setSavedFilterSets((current) => [saved, ...current]);
+      setFilterSetName("");
+      setFeedback(`Saved ${name}.`);
     } catch (error) {
       setFeedback(error?.message || "Unable to save this search.");
+    }
+  }
+
+  async function deleteFilterSet(filterSetId) {
+    try {
+      await request(`/personalized-jobs/filter-sets/${encodeURIComponent(filterSetId)}`, { method: "DELETE" });
+      setSavedFilterSets((current) => current.filter((item) => item.filter_set_id !== filterSetId));
+    } catch (error) {
+      setFeedback(error?.message || "Unable to delete this filter.");
     }
   }
 
@@ -843,13 +870,19 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     <section className="jobs-search-bar" aria-label="Job search filters">
       <label className="jobs-search-input"><Icon>search</Icon><input aria-label="Search job title or company" onChange={(event) => updateFilter("query", event.target.value)} placeholder="Search job title or company" type="search" value={filters.query} /></label>
       <FilterPill icon="location_on" label="Location" onChange={(value) => updateFilter("location", value === "all" ? "" : value)} options={[{ label: "All locations", value: "all" }, { label: "Berlin", value: "Berlin" }, { label: "Germany", value: "Germany" }, { label: "Remote in Germany", value: "Remote in Germany" }]} value={filters.location || "all"} />
-      <FilterPill icon="work_outline" label="Job type" onChange={(value) => updateFilter("workArrangement", value)} options={[{ label: "Any workplace", value: "all" }, { label: "Remote", value: "remote" }, { label: "Hybrid", value: "hybrid" }, { label: "On-site", value: "onsite" }]} value={filters.workArrangement} />
+      <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>badge</Icon><span>Job Function{Array.isArray(filters.role) && filters.role.length ? ` (${filters.role.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>work_outline</Icon><span>Job Type{Array.isArray(filters.employmentType) && filters.employmentType.length ? ` (${filters.employmentType.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <FilterPill icon="home_work" label="Work Model" onChange={(value) => updateFilter("workArrangement", value)} options={[{ label: "Any workplace", value: "all" }, { label: "Remote", value: "remote" }, { label: "Hybrid", value: "hybrid" }, { label: "On-site", value: "onsite" }]} value={filters.workArrangement} />
       <FilterPill icon="stairs" label="Experience level" onChange={(value) => updateFilter("experienceLevel", value)} options={[{ label: "Any experience", value: "all" }, { label: "Entry", value: "entry" }, { label: "Mid-level", value: "mid" }, { label: "Senior", value: "senior" }, { label: "Lead", value: "lead" }]} value={filters.experienceLevel} />
       <FilterPill icon="category" label="Category" onChange={(value) => updateFilter("category", value === "all" ? "" : value)} options={[{ label: "All categories", value: "all" }, ...JOB_CATEGORY_OPTIONS.map(([value, label]) => ({ label, value }))]} value={filters.category || "all"} />
-      <button className={["jobs-filter-pill", activeFilterCount > 5 ? "is-active" : ""].join(" ")} onClick={() => setFiltersOpen(true)} type="button"><Icon>tune</Icon><span>More filters{activeFilterCount > 5 ? ` (${activeFilterCount - 5})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
-      <button className="jobs-search-link" onClick={saveSearch} type="button"><Icon>favorite</Icon>Save search</button>
+      <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>schedule</Icon><span>Date Posted</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button className="jobs-filter-pill" onClick={() => { setFilterSection("Areas of Interests"); setFiltersOpen(true); }} type="button"><Icon>apartment</Icon><span>Industry{Array.isArray(filters.industry) && filters.industry.length ? ` (${filters.industry.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>timeline</Icon><span>Years of Experience</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button className={["jobs-filter-pill", activeFilterCount ? "is-active" : ""].join(" ")} onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>tune</Icon><span>All Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>favorite</Icon>Saved filters</button>
       {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
     </section>
+    {showFilterSets ? <section aria-label="Saved filters" className="runr-saved-filters"><div><input aria-label="Filter name" maxLength={80} onChange={(event) => setFilterSetName(event.target.value)} placeholder="Name this filter" value={filterSetName} /><button onClick={saveSearch} type="button">Save current filters</button></div><div>{savedFilterSets.map((item) => <span key={item.filter_set_id}><button onClick={() => setFilters(filtersFromSavedSearch(item))} type="button">{item.name}</button><button aria-label={`Delete ${item.name}`} onClick={() => deleteFilterSet(item.filter_set_id)} type="button">Remove</button></span>)}</div></section> : null}
     <CatalogStateBanner error={feedError} feed={feed} loading={loading} />
     {feedError ? <div className="jobs-feedback" role={feed ? "status" : "alert"}><Icon>cloud_off</Icon><span>{feed ? "Could not refresh the shared jobs catalog. The results below are the last verified page." : "Jobs are temporarily unavailable. Runr could not read the published catalog."}</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
@@ -857,7 +890,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
       {!isMobile || !showMobileList ? <section className="jobs-detail-panel">{detailContent}</section> : null}
     </div>
-    {filtersOpen ? <FilterDrawer capabilities={feed?.filter_capabilities || {}} filters={filters} onApply={() => setFiltersOpen(false)} onChange={updateFilter} onClear={clearFilters} onClose={() => setFiltersOpen(false)} /> : null}
+    {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}
     {reportOpen ? <ReportDialog onClose={() => setReportOpen(false)} onSubmit={reportJob} /> : null}
   </div>;
 }

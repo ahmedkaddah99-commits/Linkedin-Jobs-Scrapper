@@ -250,14 +250,14 @@ def normalize_filters(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         key = _canonical_filter_key(str(raw_key))
         if raw_value in (None, "", [], {}):
             continue
-        if key in {"search_text", "role", "category", "location", "work_arrangement", "employment_type", "experience_level", "language", "work_authorization", "sponsorship", "company", "industry", "company_size", "company_stage", "funding_stage", "hidden_companies", "education", "preferred_major", "security_clearance", "lifting_requirement"}:
+        if key in {"search_text", "role", "category", "location", "work_arrangement", "employment_type", "experience_level", "language", "work_authorization", "sponsorship", "company", "industry", "company_size", "company_stage", "funding_stage", "hidden_companies", "education", "preferred_major", "security_clearance", "lifting_requirement", "excluded_title", "excluded_industry", "skills_include", "skills_exclude", "role_type", "country"}:
             normalized[key] = _unique_strings(raw_value)
-        elif key in {"salary_min", "salary_max", "funding_min", "funding_max", "founded_year_min", "founded_year_max", "funding_year_min", "funding_year_max", "posted_within_days"}:
+        elif key in {"salary_min", "salary_max", "funding_min", "funding_max", "founded_year_min", "founded_year_max", "funding_year_min", "funding_year_max", "posted_within_days", "required_experience_min", "required_experience_max"}:
             try:
                 normalized[key] = float(raw_value) if key in {"salary_min", "salary_max", "funding_min", "funding_max"} else int(raw_value)
             except (TypeError, ValueError):
                 continue
-        elif key in {"use_saved_search", "include_hidden"}:
+        elif key in {"use_saved_search", "include_hidden", "h1b_sponsorship", "exclude_security_clearance", "exclude_citizenship_required", "exclude_staffing_agency"}:
             normalized[key] = str(raw_value).casefold() in {"1", "true", "yes", "on"} if not isinstance(raw_value, bool) else raw_value
         elif key == "sort":
             normalized[key] = _text(raw_value).casefold() or "newest"
@@ -1286,6 +1286,19 @@ class PersonalizedJobsService:
 
     def get_saved_search(self, user_id: str) -> dict[str, Any] | None:
         return self.store.get_default_saved_search(user_id) if self.store is not None else None
+
+    def list_filter_sets(self, user_id: str) -> list[dict[str, Any]]:
+        return self.store.list_filter_sets(user_id) if self.store is not None else []
+
+    def save_filter_set(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        name = _text(payload.get("name"))[:80]
+        if not name:
+            raise ValueError("filter set name is required")
+        filters = normalize_filters(payload.get("filters") if isinstance(payload.get("filters"), Mapping) else {})
+        return self.store.save_filter_set(user_id, name, filters, _text(payload.get("filter_set_id")))
+
+    def delete_filter_set(self, user_id: str, filter_set_id: str) -> bool:
+        return self.store.delete_filter_set(user_id, filter_set_id) if self.store is not None else False
 
     def upsert_saved_search(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         raw_filters = payload.get("filters") if isinstance(payload.get("filters"), Mapping) else payload
