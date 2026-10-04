@@ -373,10 +373,22 @@ def _payload_for_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(nested, Mapping):
         payload = {**payload, **dict(nested)}
     intelligence = _parse_json(row.get("filter_json"))
-    for key in ("work_arrangement", "employment_type", "experience_level", "skills", "role_type"):
+    source_aliases = {"work_arrangement": ("work_arrangement", "workplace", "workplace_type", "remote_type"),
+                      "employment_type": ("employment_type", "job_type", "type"),
+                      "experience_level": ("experience_level", "seniority", "level"),
+                      "skills": ("skills", "required_skills"), "role_type": ("role_type", "management_role")}
+    for key, aliases in source_aliases.items():
+        source_value = next((payload.get(name) for name in aliases if payload.get(name) not in (None, "", [], "unknown", "Unknown")), None)
         value = intelligence.get(key)
-        if payload.get(key) in (None, "", [], "unknown", "Unknown") and value not in (None, "", []):
+        if source_value is not None:
+            payload[key] = source_value
+        elif value not in (None, "", []):
             payload[key] = value
+    source_structured = payload.get("structured_description") or {}
+    source_year_field = source_structured.get("experience_years_min") if isinstance(source_structured, dict) else None
+    source_years = source_year_field.get("value") if isinstance(source_year_field, dict) else source_year_field
+    if type(payload.get("experience_years_min")) not in (int, float) and type(source_years) in (int, float):
+        payload["experience_years_min"] = source_years
     if type(intelligence.get("required_experience_years")) in (int, float):
         if type(payload.get("experience_years_min")) not in (int, float):
             payload["experience_years_min"] = intelligence["required_experience_years"]
@@ -403,6 +415,18 @@ def _normalize_arrangement(value: Any) -> str | None:
     if normalized in {"onsite", "on site", "in person", "office", "vor ort", "vor_ort", "präsenz"}:
         return "onsite"
     return normalized.replace(" ", "_")
+
+
+def _experience_levels(value: Any) -> list[str]:
+    order = ("intern", "entry", "mid", "senior", "lead", "director")
+    aliases = {"junior": "entry", "entry level": "entry", "mid level": "mid", "senior level": "senior", "executive": "director"}
+    values = value if isinstance(value, list) else [value]
+    normalized_values = [_norm(item).replace('_',' ').replace('-',' ') for item in values]
+    levels = sorted({aliases.get(item,item) for item in normalized_values
+                     if aliases.get(item,item) in order}, key=order.index)
+    if len(levels) > 2 or (len(levels) == 2 and order.index(levels[1]) - order.index(levels[0]) != 1):
+        levels = [levels[-1]]
+    return levels
 
 
 def _salary(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -556,6 +580,7 @@ def _job_projection(
     arrangement = _normalize_arrangement(_value(payload, row, "work_arrangement", "workplace", "workplace_type", "remote_type"))
     employment = _value(payload, row, "employment_type", "job_type", "type")
     experience = _value(payload, row, "experience_level", "seniority", "level")
+    experience_levels = _experience_levels(experience)
     category = _value(payload, row, "category", "job_category", "role_category", "function")
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
     authorization = _value(payload, row, "work_authorization", "authorization", "work_permit", "visa_requirement")
@@ -580,8 +605,8 @@ def _job_projection(
         "location": location or None,
         "work_arrangement": arrangement,
         "employment_type": _text(employment) or None,
-        "experience_level": _text(experience[-1] if isinstance(experience, list) and experience else experience) or None,
-        "experience_levels": experience if isinstance(experience, list) else ([experience] if experience else []),
+        "experience_level": experience_levels[-1] if experience_levels else None,
+        "experience_levels": experience_levels,
         "required_experience_years": payload.get("experience_years_min"),
         "job_functions": payload.get("roles") or [],
         "category": _text(category) or None,
@@ -646,6 +671,7 @@ def _job_card_projection(
     arrangement = _normalize_arrangement(_value(payload, row, "work_arrangement", "workplace", "workplace_type", "remote_type"))
     employment = _value(payload, row, "employment_type", "job_type", "type")
     experience = _value(payload, row, "experience_level", "seniority", "level")
+    experience_levels = _experience_levels(experience)
     category = _value(payload, row, "category", "job_category", "role_category", "function")
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
     posted_at = _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None
@@ -665,7 +691,10 @@ def _job_card_projection(
         "location": location or None,
         "work_arrangement": arrangement,
         "employment_type": _text(employment) or None,
-        "experience_level": _text(experience) or None,
+        "experience_level": experience_levels[-1] if experience_levels else None,
+        "experience_levels": experience_levels,
+        "required_experience_years": payload.get("experience_years_min"),
+        "job_functions": payload.get("roles") or [],
         "category": _text(category) or None,
         "languages": languages,
         "posted_at": posted_at,

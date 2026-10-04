@@ -10,7 +10,7 @@ from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
 from backend.domain.models import utc_now_iso
 
 
-def _seed_catalog(app, *, valid_until: str = "") -> None:
+def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None:
     now = utc_now_iso()
     store = app.repositories.acquisition_store
 
@@ -37,6 +37,7 @@ def _seed_catalog(app, *, valid_until: str = "") -> None:
                 "salary": {"min": 50000, "max": 70000, "currency": "EUR"},
                 "languages": ["German"],
             }
+            payload.update((payload_overrides or {}).get(job_id, {}))
             connection.execute(
                 """
                 INSERT INTO canonical_jobs (
@@ -73,6 +74,19 @@ def _seed_catalog(app, *, valid_until: str = "") -> None:
 
 
 class PhaseCPersonalizedJobsTests(unittest.TestCase):
+    def test_scraped_filter_facts_win_over_ai_defaults(self):
+        app = self._backend()
+        _seed_catalog(app, payload_overrides={'job-a':{'employment_type':None,'job_type':'part_time','experience_years_min':7}})
+        store = app.repositories.personalized_jobs_store
+        with store._connect() as connection:
+            connection.execute("INSERT INTO job_filter_intelligence VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ('version-job-a','job-a','hash-job-a',json.dumps({'employment_type':'full_time','required_experience_years':2}), 'mistralai/mistral-nemo','v2',utc_now_iso()))
+        self.assertEqual(app.get_personalized_jobs('user-a',filters={'employment_type':['part_time']})['total'],1)
+        self.assertEqual(app.get_personalized_jobs('user-a',filters={'employment_type':['full_time']})['total'],1)
+        page=app.get_personalized_jobs('user-a',filters={'required_experience_min':5})
+        self.assertEqual(page['total'],1)
+        self.assertEqual(page['jobs'][0]['canonical_job_id'],'job-a')
+
     def test_multiple_functions_and_blue_collar_exclusion_match_current_versions(self):
         app = self._backend()
         _seed_catalog(app)

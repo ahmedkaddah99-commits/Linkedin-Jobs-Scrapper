@@ -107,6 +107,11 @@
     ],
     "Biomedical Engineering & Technology": [
       "Biomedical Engineer"
+    ],
+    "Clinical Practice": [
+      "Medical Professional",
+      "Nursing Professional",
+      "Therapist"
     ]
   },
   "Electrical Engineering": {
@@ -124,6 +129,9 @@
     ],
     "Electrical Vehicles": [
       "Battery Engineer"
+    ],
+    "General Engineering": [
+      "Engineering Specialist"
     ]
   },
   "Human Resource/Administrative/Legal": {
@@ -255,6 +263,10 @@
     ],
     "Educational Administration": [
       "Educational Administration"
+    ],
+    "Early Childhood and Care Education": [
+      "Early Childhood Educator",
+      "Education and Care Specialist"
     ]
   },
   "Accounting": {
@@ -309,17 +321,12 @@
       "IT Administrator",
       "IT Support Specialist",
       "Software Engineer",
-      "Research Scientist",
-      "Research Associate",
-      "Medical Professional",
-      "Therapist",
       "Social Worker",
       "Safety Specialist",
       "Technical Documentation Specialist",
       "Translator",
       "Journalist",
       "Librarian",
-      "Scientific Laboratory Specialist",
       "Hospitality Manager",
       "Facilities Manager",
       "Professional Services Specialist",
@@ -329,7 +336,14 @@
       "BIM Engineer",
       "Receptionist",
       "Sales Specialist",
-      "Nursing Professional"
+      "Franchise Manager"
+    ]
+  },
+  "Research and Science": {
+    "Scientific Research and Laboratories": [
+      "Research Scientist",
+      "Research Associate",
+      "Scientific Laboratory Specialist"
     ]
   }
 }

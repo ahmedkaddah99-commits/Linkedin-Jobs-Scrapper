@@ -327,7 +327,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const salaryAmounts = salary && typeof salary === "object" ? [salary.min, salary.max].filter((value) => typeof value === "number").map((value) => new Intl.NumberFormat("en-US").format(value)).join("–") : "";
   const salaryText = salaryAmounts && salary?.currency && salary?.period ? `${salaryAmounts} ${salary.currency}/${salary.period}` : null;
   const arrangementLabel = (value) => ({ onsite: "On-site", on_site: "On-site", in_person: "On-site", hybrid: "Hybrid", remote: "Remote" })[String(value || "").toLowerCase()] || null;
-  const seniorityLabel = (value) => ({ entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
+    const seniorityLabel = (value) => ({ intern: "Intern", entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
   const scrapedSalary = present(job.salaryLabel) && job.salary?.period ? `${job.salaryLabel}/${job.salary.period}` : null;
   const employment = employmentTypeLabel(present(job.employmentType), extracted("employment_type"), job.title);
     const extractedLevels = (job.experienceLevels || []).map(seniorityLabel).filter(Boolean).join(", ");

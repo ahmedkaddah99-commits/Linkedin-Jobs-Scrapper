@@ -1,0 +1,204 @@
+{
+  "canonical_job_11342eec53904eb984b0512347132aaa": {
+    "version_id": "posting_version_8233c0b0bd6a4ade8e8a70bb5d444e93",
+    "content_hash": "ce823276810f2265b1069573083436ce33d143abb21d63964e664f2e1d1598ab",
+    "collar": "white",
+    "roles": [
+      "Business Operations Specialist"
+    ],
+    "evidence": "Ausbildung als Industriekaufmann / - frau (m/w/d) ab 01.09.2027",
+    "review_note": "Commercial apprenticeship, not industrial design."
+  },
+  "canonical_job_3f3bfe98e15446e7ac38d9cc73050a2a": {
+    "version_id": "posting_version_b15330ed67d14de5bbd745f56a846a5f",
+    "content_hash": "a08357e68bcc6a25cfbc99bc878ab8d9580b241430263ae01b1f0b223d28f827",
+    "collar": "white",
+    "roles": [
+      "Construction Project Manager"
+    ],
+    "evidence": "Bauleiter (m/w/d) GebÃ¤udehÃ¼lle",
+    "review_note": "Coordinates subcontractors, quality/safety and financial project execution."
+  },
+  "canonical_job_4463847d683e4f599ec0fed1dcdf4abe": {
+    "version_id": "version_2ec773470ef241339494ced5648c07a7",
+    "content_hash": "69fca9ba6007ff62fd9a6f24a9d3d27a5a7c065ebf802d58554ce7364e3fcd2a",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Haushaltshilfe (m/w/d) (m/w/d) für Senior*Innen im Einzugsgebiet des Alten- und Service-Zentrums Milbertshofen",
+    "review_note": "Household assistance and domestic work."
+  },
+  "canonical_job_4b3a691e212c48ac8faab18620ca1ff3": {
+    "version_id": "posting_version_4fa9b608f8594e4cae582b5bcb29bc8c",
+    "content_hash": "feb12cbbc57fbb8a49fd1803711cd8e6fb38b483a08f49edec90ddf9da09703d",
+    "collar": "white",
+    "roles": [
+      "Banking Specialist"
+    ],
+    "evidence": "Ausbildung zur Bankkauffrau / zum Bankkaufmann (m/w/d)",
+    "review_note": "Source explicitly recruits banking apprentices."
+  },
+  "canonical_job_55b0e356898b48e88dfcf50fd0f3e453": {
+    "version_id": "version_1a057ca96fb84b1f9d931484b99913ac",
+    "content_hash": "d1e1fd3c901856bd0d20900c7fa863b263acb926a77ff2b9332ab707e3ecaa32",
+    "collar": "white",
+    "roles": [
+      "Accountant",
+      "Controller"
+    ],
+    "evidence": "Kämmerin / Kämmerer beim Gemeinde­freien Bezirk Osterheide (w/m/d)",
+    "review_note": "Municipal budgeting, accounts, treasury supervision and controlling."
+  },
+  "canonical_job_5bd7d534b8014aa7b32c5d166f20eab5": {
+    "version_id": "posting_version_7c2f073d1ef342f48d3bf57334aadb9c",
+    "content_hash": "7832ffd4ccf437de459fc7d6b9bbccbba1338364ff0c32f182d502dd889c765f",
+    "collar": "white",
+    "roles": [
+      "IT Consultant"
+    ],
+    "evidence": "Digitalisierung &#038; Kanzleientwicklung &#8211; DATEV / Steuerkanzleien (m/w/d)",
+    "review_note": "Title states DATEV digitalization and tax-practice development; body is truncated."
+  },
+  "canonical_job_60bd7475cd31490880ccf856bafce44b": {
+    "version_id": "posting_version_21dfc103464b4522bb2205dc0cdd2d72",
+    "content_hash": "cbc981aba9aea769b0a3f13767e3f534e1cb5b58ff627d5ea957de376347328d",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Elektroniker/- in für Energie- und Gebäudetechnik (m/w/d)",
+    "review_note": "Electrical manual trade, not electrical engineering."
+  },
+  "canonical_job_6a249d9e57254e3aadb0ff731b5a39ee": {
+    "version_id": "version_f35486f6f0b241199711fea4d49d531d",
+    "content_hash": "a2b68000073b8fe68c705abf14371323d992bda1d2f970e930723dded9037198",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Aus­bil­dung Anla­gen­me­cha­ni­ker für Rohr­sys­tem­tech­nik (m/w/d)",
+    "review_note": "Manual pipe-system mechanic apprenticeship."
+  },
+  "canonical_job_72ab3a12e7184eeb9d42c01337c48bdd": {
+    "version_id": "version_a1508eecb8d7410c9d38093044d90a19",
+    "content_hash": "7e48045305c6e35b320720378481142acda7c85a70da0cc55cf01d3b57f62f8e",
+    "collar": "white",
+    "roles": [
+      "Quality Assurance Specialist"
+    ],
+    "evidence": "Erstellen von Qualitätsrichtlinien",
+    "review_note": "Garment fit evaluation, production inspection and quality guidelines."
+  },
+  "canonical_job_73de3de70a4f49d18e35780732a03c74": {
+    "version_id": "posting_version_34c33e4061ec42b68d4dee576765eac5",
+    "content_hash": "16899c519bec7ef01253ecec4ef70e96bdcfd32ee03f453e96e7ded944fc1fec",
+    "collar": "white",
+    "roles": [
+      "Research Scientist"
+    ],
+    "evidence": "Summer 2027 Intern -Chemist",
+    "review_note": "Explicit chemist internship title; description absent, metadata must remain unsupported."
+  },
+  "canonical_job_79ffe94f974740cb95f25320754a3b01": {
+    "version_id": "posting_version_7d5223926e4a4143a03bdef2365071f2",
+    "content_hash": "fcd01fb3d43a9d766153d75688f3535bca92165c0dbb7575085eeeff63347886",
+    "collar": "white",
+    "roles": [
+      "Data Engineer",
+      "Data Consultant"
+    ],
+    "evidence": "Senior Data Architekt",
+    "review_note": "Data models, target architecture and governance consulting."
+  },
+  "canonical_job_7ed829135de2494ebf9d9f7e6511e8c9": {
+    "version_id": "version_5548ca1b06094bfdbcbd1f007b75c90c",
+    "content_hash": "2fa566ac12cc416286244923a3d589c9cf3093c4a37da9ff6c02e3a32c6ed19f",
+    "collar": "white",
+    "roles": [
+      "Research Scientist",
+      "Hardware Engineer"
+    ],
+    "evidence": "PhD Position (f/m/d) - Memory-Centric NPU Architectures and Emerging Memory Technologies for Edge AI",
+    "review_note": "PhD research in memory-centric accelerator hardware/software architecture."
+  },
+  "canonical_job_940055287e2647099d9e7b94d41b6f69": {
+    "version_id": "version_2bdcfc4047e24eef9c6548f99250485c",
+    "content_hash": "15267b79d3ed57c3afcb00c8479c1ffd0ad94a7b6a4d9feadd50d982d656fd71",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Dachdecker/Dachspengler Meister/in (m/w/d) | Schwabach - GroÃraum NÃ¼rnberg",
+    "review_note": "Master roofer; source does not establish primarily office/professional duties."
+  },
+  "canonical_job_9999ba6eb4ac4e0dabcd7de23412178e": {
+    "version_id": "posting_version_77955ccb04b249da828bd93e0ff63b31",
+    "content_hash": "d1940145e9709be2d909a5a157453b004ad8a4677bf1b5964ebc3a404109bcf9",
+    "collar": "white",
+    "roles": [
+      "Banking Specialist"
+    ],
+    "evidence": "Wertpapierabwickler Emittentenservice & Effketive Wertpapiere (m/w/d)",
+    "review_note": "Securities settlement and issuer services, not software development."
+  },
+  "canonical_job_af49b08f621b45b68f4d7088b66ac836": {
+    "version_id": "posting_version_24cafee7a32545798ebf563a439b938e",
+    "content_hash": "54c49e6cd0f18fa5915d3cd9850982a76973ab36653d296dda1ad8f0405bd116",
+    "collar": "white",
+    "roles": [
+      "Construction Project Manager"
+    ],
+    "evidence": "Bauleiter (m/w/d) â Betoninstandsetzung & Korrosionsschutz",
+    "review_note": "Explicit site/project leader title; body mainly employer introduction."
+  },
+  "canonical_job_d3de314d8de345f79ba131887ac8f81f": {
+    "version_id": "posting_version_d245fe4f99ae4eec8ec8c74a21dde5d7",
+    "content_hash": "54512d2d3a8c6dc5171f8c050e61915b0cc03ffca62baff89ee51590ee14b071",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Gärtner für Grünpflege (m/w/d)| Bremen",
+    "review_note": "Grounds maintenance with gardening machinery and winter service."
+  },
+  "canonical_job_dd25a24aee254a989ad0e8e86d0f63f2": {
+    "version_id": "version_15f9fd0dc6164d40bb498d75bb829156",
+    "content_hash": "816880b18c01cec934295559200c5c7b76158d13cfe6fc7e8ace8c389eb7838c",
+    "collar": "white",
+    "roles": [
+      "Customer Service Representative"
+    ],
+    "evidence": "Kundenberater / Disponent (m/w/d)",
+    "review_note": "Explicit customer advisory/disposition title, not manual plant operation."
+  },
+  "canonical_job_e1a2584f51b94834ba3cb057352545f6": {
+    "version_id": "posting_version_2417917d559749e1a129e87bd340fa94",
+    "content_hash": "35586ee951c8fee9ac88c94d9b867ce5104bd73b44d22ea8243d993d984ebc97",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Sef de productie",
+    "review_note": "Source explicitly primarily practical production-site work with active manual participation."
+  },
+  "canonical_job_e4be11fde50a4be2bfc2e4002129ee5c": {
+    "version_id": "version_b4c00b9406a94ef8b3622db9f7045087",
+    "content_hash": "e427e719f4dbd030846c5472cb35bf724f6c7b45aa8d50475d676061ca8d9afb",
+    "collar": "white",
+    "roles": [
+      "IT Administrator",
+      "IT Support Specialist"
+    ],
+    "evidence": "Expertin / Expert IT‑Produkt­betreuung mit dem Schwerpunkt ITSM (w/m/d)",
+    "review_note": "Matrix42 ITSM platform integration, operations and troubleshooting."
+  },
+  "canonical_job_ee04bf6b37c6498bb0f247f3fc53b8bf": {
+    "version_id": "version_d510d40dcab149daa96d7b1dd1a04b8e",
+    "content_hash": "9dd6ceb067dbf15e916d207cd2420f9c38cdead2f891758f4e323b83865d5119",
+    "collar": "white",
+    "roles": [
+      "Receptionist"
+    ],
+    "evidence": "Empfangsmitarbeiter und Servicemitarbeiter Hotel (m/w/d)",
+    "review_note": "Actual hotel check-in/out and reservations; mixed breakfast/bar tasks also present."
+  },
+  "canonical_job_ee0e48839d09417ab2f91c9da9f97f58": {
+    "version_id": "posting_version_36feddffb85645ba9880dd49a218a509",
+    "content_hash": "d3a49cba4346e6dcea0cf779ba2fa95490ca9dab33c4274ba9262a5eb2ae5528",
+    "collar": "white",
+    "roles": [
+      "Cyber Security Analyst"
+    ],
+    "evidence": "IDAM Architect, Lead",
+    "review_note": "IDAM architecture, identity lifecycle and access-management security."
+  }
+}

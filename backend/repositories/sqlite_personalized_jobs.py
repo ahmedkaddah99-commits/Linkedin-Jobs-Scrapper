@@ -1159,8 +1159,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             elif field == "role":
                 clauses = []
                 for value in values:
-                    clauses.append("(EXISTS(SELECT 1 FROM json_each(catalog.filter_json, '$.roles') role WHERE LOWER(role.value) = ?) OR (json_type(catalog.filter_json, '$.roles') IS NULL AND (LOWER(COALESCE(json_extract(catalog.filter_json, '$.role'), '')) = ? OR LOWER(catalog.title) LIKE ?)))")
-                    params.extend((value, value, f"%{value}%"))
+                    clauses.append("(EXISTS(SELECT 1 FROM json_each(catalog.filter_json, '$.roles') role WHERE LOWER(role.value) = ?) OR (json_type(catalog.filter_json, '$.roles') IS NULL AND (LOWER(COALESCE(json_extract(catalog.filter_json, '$.role'), '')) = ? OR LOWER(catalog.title) LIKE ? OR LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.role'), json_extract(catalog.version_payload_json, '$.function'), '')) = ? OR EXISTS(SELECT 1 FROM json_each(catalog.version_payload_json, '$.roles') legacy_role WHERE LOWER(legacy_role.value) = ?))))")
+                    params.extend((value, value, f"%{value}%", value, value))
                 predicates.append("(" + " OR ".join(clauses) + ")")
             elif field == "skills_include":
                 legacy = ["$.skills", "$.required_skills", "$.structured_description.skills"]
@@ -1172,6 +1172,19 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                                                  + path + "'), '')) LIKE ?" for path in legacy) + ")")
                     params.extend([value, *(f"%{value}%" for _ in legacy)])
                 predicates.append("(" + " OR ".join(clauses) + ")")
+            elif field in {"work_arrangement", "employment_type", "experience_level", "role_type"}:
+                source_fields = field_exprs[field][1:]
+                candidates = [f"NULLIF(NULLIF(LOWER(CAST({expr} AS TEXT)), 'unknown'), '')" for expr in source_fields]
+                candidates.append(field_exprs[field][0])
+                selected = "LOWER(REPLACE(REPLACE(COALESCE(" + ",".join(candidates) + ",''),'-','_'),' ','_'))"
+                synonyms = {"employment_type": {"vollzeit":"full_time", "teilzeit":"part_time", "praktikum":"internship", "werkstudent":"working_student"},
+                            "work_arrangement": {"vor_ort":"onsite", "on_site":"onsite", "in_person":"onsite", "präsenz":"onsite"},
+                            "experience_level": {"junior":"entry", "entry_level":"entry", "mid_level":"mid", "senior_level":"senior", "executive":"director"},
+                            "role_type": {"individual_contributor":"ic", "people_manager":"manager"}}
+                if field in synonyms:
+                    selected = "CASE " + selected + " " + " ".join(f"WHEN '{original}' THEN '{mapped}'" for original,mapped in synonyms[field].items()) + " ELSE " + selected + " END"
+                predicates.append("(" + " OR ".join(f"{selected} LIKE ?" for _ in values) + ")")
+                params.extend(f"%{value.replace('-', '_').replace(' ', '_')}%" for value in values)
             elif field in field_exprs:
                 expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
                 predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
@@ -1192,7 +1205,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                         params.append(f"%{value}%")
             elif field in {"required_experience_min", "required_experience_max"}:
                 paths = ("$.experience_years_min", "$.structured_description.experience_years_min.value")
-                amount = "COALESCE(CAST(json_extract(catalog.filter_json, '$.required_experience_years') AS REAL), " + ", ".join(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL)" for path in paths) + ")"
+                amount = "COALESCE(" + ", ".join(f"CASE WHEN json_type(catalog.version_payload_json, '{path}') IN ('integer','real') THEN CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL) END" for path in paths) + ", CASE WHEN json_type(catalog.filter_json, '$.required_experience_years') IN ('integer','real') THEN CAST(json_extract(catalog.filter_json, '$.required_experience_years') AS REAL) END)"
                 operator = ">=" if field.endswith("_min") else "<="
                 predicates.append(f"{amount} {operator} ?")
                 params.append(float(values[0]))

@@ -32,3 +32,112 @@ def test_collaboration_and_mentions_of_interns_do_not_change_contract_or_managem
         'role_type': 'manager', 'role_type_evidence': 'Team collaboration expected.'}, source)
     assert result['employment_type'] == 'full_time'
     assert result['role_type'] is None
+
+
+def test_scraped_aliases_take_precedence_over_model_defaults():
+    from backend.application.personalized_jobs_service import _payload_for_row, _job_card_projection
+    row = {'version_payload_json': {'job_type':'part_time','seniority':'senior','experience_years_min':7},
+           'filter_json': {'employment_type':'full_time','experience_level':['entry','mid'],'required_experience_years':2}}
+    payload = _payload_for_row(row)
+    assert payload['employment_type'] == 'part_time'
+    assert payload['experience_level'] == 'senior'
+    assert payload['experience_years_min'] == 7
+    row['version_payload_json'] = {}
+    card = _job_card_projection(row, None, evaluation_state='pending', evaluation_status='pending')
+    assert card['experience_level'] == 'mid'
+    assert card['experience_levels'] == ['entry','mid']
+
+
+def test_written_source_numbers_are_allowed_but_output_must_remain_numeric():
+    module = importlib.import_module('backend.application.catalog_job_filters')
+    source = 'Data Analyst. Minimum one year of professional experience required.'
+    raw = {'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst',
+           'required_experience_years':1,'experience_evidence':'Minimum one year of professional experience required.'}
+    assert module.validate_classification(raw,source)['required_experience_years'] == 1
+    raw['required_experience_years']='one'
+    assert module.validate_classification(raw,source)['required_experience_years'] is None
+
+
+def test_only_adjacent_seniority_levels_display_together():
+    from backend.application.personalized_jobs_service import _experience_levels
+    assert _experience_levels(['entry','mid']) == ['entry','mid']
+    assert _experience_levels(['intern','lead']) == ['lead']
+    assert _experience_levels(['mid','senior','lead']) == ['lead']
+
+
+def test_profession_rules_correct_nursing_and_retail_without_matching_employer_advertising():
+    from backend.application.catalog_job_filters import validate_classification
+    title = 'Gesundheits- und Krankenpfleger Onkologie'
+    raw = {'collar':'blue','roles':[], 'evidence':title}
+    assert validate_classification(raw,title+' Qualifizierte Patientenversorgung.',title)['roles'] == ['Nursing Professional']
+    title = 'Sales Associate Retail'
+    raw = {'collar':'blue','roles':[], 'evidence':title}
+    assert validate_classification(raw,title+' Advise customers and sell products.',title)['roles'] == ['Retail Sales']
+    title = 'Data Analyst'
+    raw = {'collar':'white','roles':['Healthcare Data Analyst'],'evidence':title}
+    assert validate_classification(raw,title+' Analyze healthcare data for nurses.',title)['roles'] == ['Healthcare Data Analyst']
+
+
+def test_restaurant_hosts_are_excluded_but_office_reception_is_retained():
+    from backend.application.catalog_job_filters import validate_classification
+    title = 'Host / Hostess'
+    source = title+' Restaurant: greet diners and seat guests at tables.'
+    assert validate_classification({'collar':'white','roles':['Receptionist'],'evidence':title},source,title)['collar'] == 'blue'
+    title = 'Receptionist'
+    source = title+' Office reception and scheduling appointments.'
+    assert validate_classification({'collar':'white','roles':['Receptionist'],'evidence':title},source,title)['collar'] == 'white'
+
+
+def test_taxonomy_copy_and_nonsoftware_engineering_labels_are_rejected():
+    from backend.application.catalog_job_filters import validate_classification, ROLES
+    title = 'Berechnungsingenieur EMV Antennen'
+    source = title+' CST and ANSYS electromagnetic simulation.'
+    assert validate_classification({'collar':'white','roles':list(ROLES),'evidence':title},source,title) is None
+    assert validate_classification({'collar':'white','roles':['Backend Engineer'],'evidence':title},source,title)['roles'] == ['Electrical Engineer']
+
+
+def test_months_are_not_accepted_as_years():
+    from backend.application.catalog_job_filters import validate_classification
+    source = 'Data Analyst. Minimum 6 months of professional experience.'
+    result = validate_classification({'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst',
+        'required_experience_years':6,'experience_evidence':'Minimum 6 months of professional experience.'},source)
+    assert result['required_experience_years'] is None
+
+
+def test_direct_clinical_titles_are_not_research_or_video_functions():
+    from backend.application.catalog_job_filters import validate_classification
+    for title, role in [('Physiotherapeut','Therapist'),('Tierarzt / Tierärztin','Medical Professional'),
+                        ('Hebamme','Medical Professional'),('Apotheker','Medical Professional'),
+                        ('Pflegehelfer mit 1 oder 2-jähriger Ausbildung','Nursing Professional'),
+                        ('Pflegefachkraft Gynäkologie & Geburtshilfe','Nursing Professional')]:
+        result = validate_classification({'collar':'white','roles':['Video Editor'],'evidence':title},title,title)
+        assert result['roles'] == [role]
+    title='Clinical Research Scientist'
+    result=validate_classification({'collar':'white','roles':[title],'evidence':title},title+' Research clinical interventions.',title)
+    assert result['roles'] == [title]
+
+
+def test_evidence_matches_decoded_html_and_short_occupational_titles():
+    from backend.application.catalog_job_filters import validate_classification
+    title = 'Learning &amp; Adoption Lead'
+    result = validate_classification({'collar':'white','roles':['Corporate Training and Development'],
+        'evidence':'Learning & Adoption Lead'},title,title)
+    assert result['roles'] == ['Corporate Training and Development']
+    assert validate_classification({'collar':'white','roles':['Nursing Professional'],'evidence':'LVN'},'LVN','LVN')['roles'] == ['Nursing Professional']
+
+
+def test_education_and_bookkeeping_have_appropriate_functions():
+    from backend.application.catalog_job_filters import validate_classification
+    for title,source,role in [('Erzieher','Kinderbildung in unserer Kita','Early Childhood Educator'),
+                              ('Nachhilfelehrer','Schulkinder unterstützen','K-12 Teaching'),
+                              ('Finanzbuchhalter','Jahresabschlüsse und Buchhaltung','Accountant')]:
+        result=validate_classification({'collar':'white','roles':['Translator'],'evidence':title},title+' '+source,title)
+        assert result['roles'] == [role]
+
+
+def test_indefinite_employment_is_not_fixed_term_contract():
+    from backend.application.catalog_job_filters import validate_classification
+    title='Data Analyst unbefristet'
+    raw={'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst',
+         'employment_type':'contract','employment_evidence':'unbefristet'}
+    assert validate_classification(raw,title,title)['employment_type'] == 'full_time'

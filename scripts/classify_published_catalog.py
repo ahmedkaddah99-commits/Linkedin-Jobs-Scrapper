@@ -20,20 +20,24 @@ from urllib.request import Request, urlopen
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 from dotenv import load_dotenv
-from backend.application.catalog_job_filters import PROMPT_VERSION, ROLES, classification_prompt, function_prompt, metadata_prompt, validate_classification
+from backend.application.catalog_job_filters import METADATA_FIELDS, PROMPT_VERSION, ROLES, classification_prompt, function_prompt, metadata_prompt, validate_classification
 from backend.database.connection import connect_database, database_target_info
 
 MODEL = 'mistralai/mistral-nemo'
 ROOT = PROJECT.parent.parent if PROJECT.parent.name == '.worktrees' else PROJECT
 DB = PROJECT / '.backend_data/backend.sqlite3'
 AUDIT = ROOT / 'data/audit/catalog_classification_2026-10-04'
+REVIEWS = {}
 
 
 def initialize():
+    global REVIEWS
     load_dotenv(ROOT / 'user_config/.env', override=False)
     if database_target_info(DB).get('target_backend') != 'libsql':
         raise RuntimeError('Production Turso configuration required')
     AUDIT.mkdir(parents=True, exist_ok=True)
+    review_path=AUDIT/'reviewed_classifications.json'
+    REVIEWS=json.loads(review_path.read_text(encoding='utf-8')) if review_path.exists() else {}
     local = sqlite3.connect(AUDIT / 'run.sqlite3', timeout=60)
     local.row_factory = sqlite3.Row
     local.execute('PRAGMA journal_mode=WAL')
@@ -43,6 +47,8 @@ def initialize():
     CREATE TABLE IF NOT EXISTS calls(id INTEGER PRIMARY KEY, cost REAL, usage TEXT, response TEXT);
     CREATE TABLE IF NOT EXISTS rollback(version_id TEXT PRIMARY KEY,previous_json TEXT);
     CREATE TABLE IF NOT EXISTS reservations(id INTEGER PRIMARY KEY,cost REAL,state TEXT);
+    CREATE TABLE IF NOT EXISTS written(version_id TEXT PRIMARY KEY,filters_json TEXT,content_hash TEXT,generated_at TEXT);
+    CREATE INDEX IF NOT EXISTS classification_progress ON jobs(id) WHERE result IS NOT NULL;
     ''')
     if not local.execute('SELECT 1 FROM metadata WHERE key="publication"').fetchone():
         with connect_database(DB) as remote:
@@ -71,6 +77,8 @@ def initialize():
 def generate(rows):
     inputs = [{'id':row['id'],'title':row['title'],'location':row['location'],'description':row['description']} for row in rows]
     prompt = function_prompt(inputs[0])
+    if rows[0].get('attempts',0):
+        prompt += '\nPrevious attempt was rejected. Copy the exact job title verbatim into evidence. A qualified nurse, doctor, office receptionist, engineer, office administrator or professional manager is white collar. Manual trades, drivers and assembly operators are blue collar.'
     body = {'model':MODEL,'messages':[{'role':'user','content':prompt}], 'temperature':0,
             'max_tokens':1400,'response_format':{'type':'json_schema','json_schema':{'name':'job_function','strict':True,'schema':{
                 'type':'object','properties':{'collar':{'type':'string','enum':['white','blue']},
@@ -85,12 +93,18 @@ def generate(rows):
     payload = call()
     originals=[payload]
     extracted=json.loads(payload['choices'][0]['message']['content'])
+    review=REVIEWS.get(inputs[0]['id'])
+    if review and review['version_id']==rows[0]['version_id'] and review['content_hash']==rows[0]['content_hash']:
+        extracted.update({key:review[key] for key in ('collar','roles','evidence')})
+    accepted=validate_classification(extracted, str(inputs[0]['title'])+' '+str(inputs[0]['description'] or ''),inputs[0]['title'])
+    if accepted and accepted['collar']=='white' and extracted.get('collar')=='blue':
+        extracted.update(collar='white',roles=accepted['roles'],evidence=accepted['evidence'])
     if extracted.get('collar')=='white':
         body['messages'][0]['content']=metadata_prompt(inputs[0])
         body['response_format']={'type':'json_object'}
         metadata=call()
         originals.append(metadata)
-        extracted.update(json.loads(metadata['choices'][0]['message']['content']))
+        extracted.update({key:value for key,value in json.loads(metadata['choices'][0]['message']['content']).items() if key in METADATA_FIELDS})
     extracted['id']=inputs[0]['id']
     usage={'prompt_tokens':sum((p.get('usage') or {}).get('prompt_tokens',0) for p in originals),
            'completion_tokens':sum((p.get('usage') or {}).get('completion_tokens',0) for p in originals)}
@@ -106,7 +120,7 @@ def run(local,args):
         local.execute('INSERT INTO calls(cost,usage,response) VALUES (?,?,?)',(abandoned,'{}','conservative charge for interrupted requests'))
         local.execute("UPDATE reservations SET state='interrupted' WHERE state='pending'")
         local.commit()
-    rows = [dict(row) for row in local.execute('SELECT * FROM jobs WHERE result IS NULL AND attempts<3 ORDER BY attempts,id')]
+    rows = [dict(row) for row in local.execute('SELECT * FROM jobs WHERE result IS NULL AND attempts<? ORDER BY attempts,id',(args.max_attempts,))]
     if args.limit:
         rows=rows[:args.limit]
     batches=[]
@@ -176,8 +190,11 @@ def publish(local):
                 local.execute('INSERT OR IGNORE INTO rollback VALUES (?,?)',(row['version_id'],json.dumps(previous[row['version_id']]) if row['version_id'] in previous else None))
             local.commit()  # Persist all rollback rows before the remote transaction.
             arguments=[]
+            generated_at=datetime.now(timezone.utc).isoformat()
             for row in batch:
-                arguments.extend((row['version_id'],row['id'],row['content_hash'],row['result'],MODEL,PROMPT_VERSION,datetime.now(timezone.utc).isoformat()))
+                arguments.extend((row['version_id'],row['id'],row['content_hash'],row['result'],MODEL,PROMPT_VERSION,generated_at))
+                local.execute('INSERT OR REPLACE INTO written VALUES (?,?,?,?)',(row['version_id'],row['result'],row['content_hash'],generated_at))
+            local.commit()
             saved=remote.execute('''WITH incoming(version_id,canonical_job_id,content_hash,filters_json,model,prompt_version,generated_at) AS (VALUES '''+','.join('(?,?,?,?,?,?,?)' for _ in batch)+''')
                 INSERT INTO job_filter_intelligence SELECT incoming.* FROM incoming
                 JOIN canonical_jobs j ON j.canonical_job_id=incoming.canonical_job_id AND j.current_version_id=incoming.version_id
@@ -202,6 +219,14 @@ def revalidate(local):
         try:
             payload=json.loads(call[0])
             parsed=json.loads(payload['choices'][0]['message']['content'])
+            originals=payload.get('provider_responses')
+            if originals:
+                classification=json.loads(originals[0]['choices'][0]['message']['content'])
+                if len(originals)>1:
+                    extracted_metadata=json.loads(originals[1]['choices'][0]['message']['content'])
+                    classification.update({key:value for key,value in extracted_metadata.items() if key in METADATA_FIELDS})
+                classification['id']=parsed['jobs'][0]['id']
+                parsed={'jobs':[classification]}
             for item in parsed.get('jobs',[]):
                 if item.get('id') in sources:
                     latest[item['id']]=item
@@ -209,27 +234,39 @@ def revalidate(local):
             continue
     for identity,raw in latest.items():
         row=sources[identity]
+        original_collar=raw.get('collar')
+        review=REVIEWS.get(identity)
+        if review and review['version_id']==row['version_id'] and review['content_hash']==row['content_hash']:
+            raw.update({key:review[key] for key in ('collar','roles','evidence')})
         result=validate_classification(raw,str(row['title'])+' '+str(row['description'] or ''),row['title'])
+        needs_metadata = bool(result and result['collar']=='white' and original_collar=='blue' and row['description']
+                              and not any(key in raw for key in METADATA_FIELDS))
+        if needs_metadata:
+            result=None
+            local.execute('UPDATE jobs SET attempts=MIN(attempts,2) WHERE id=?',(identity,))
         local.execute('UPDATE jobs SET result=?,error=? WHERE id=?',
-                      (json.dumps(result,ensure_ascii=False) if result else None,None if result else 'invalid classification/evidence',identity))
+                      (json.dumps(result,ensure_ascii=False) if result else None,None if result else 'metadata extraction needed' if needs_metadata else 'invalid classification/evidence',identity))
     local.commit()
 
 
 def rollback(local):
     restored=skipped=0
     for previous in local.execute('SELECT * FROM rollback'):
-        row=local.execute('SELECT * FROM jobs WHERE version_id=?',(previous['version_id'],)).fetchone()
+        row=local.execute('SELECT * FROM written WHERE version_id=?',(previous['version_id'],)).fetchone()
+        if not row:
+            skipped+=1;continue
         with connect_database(DB) as remote:
-            current=remote.execute('SELECT * FROM job_filter_intelligence WHERE version_id=?',(previous['version_id'],)).fetchone()
-            if not current or current['prompt_version']!=PROMPT_VERSION or current['model']!=MODEL or current['content_hash']!=row['content_hash'] or current['filters_json']!=row['result']:
-                skipped+=1;continue
+            ownership=(previous['version_id'],row['filters_json'],MODEL,PROMPT_VERSION,row['content_hash'],row['generated_at'])
+            guard='version_id=? AND filters_json=? AND model=? AND prompt_version=? AND content_hash=? AND generated_at=?'
             if previous['previous_json'] is None:
-                remote.execute('DELETE FROM job_filter_intelligence WHERE version_id=? AND filters_json=?',(previous['version_id'],row['result']))
+                restored_rows=remote.execute('DELETE FROM job_filter_intelligence WHERE '+guard+' RETURNING version_id',ownership).fetchall()
             else:
                 saved=json.loads(previous['previous_json'])
-                remote.execute('''UPDATE job_filter_intelligence SET canonical_job_id=?,content_hash=?,filters_json=?,model=?,prompt_version=?,generated_at=?
-                WHERE version_id=? AND filters_json=?''',tuple(saved[key] for key in ('canonical_job_id','content_hash','filters_json','model','prompt_version','generated_at'))+(previous['version_id'],row['result']))
+                restored_rows=remote.execute('''UPDATE job_filter_intelligence SET canonical_job_id=?,content_hash=?,filters_json=?,model=?,prompt_version=?,generated_at=?
+                WHERE '''+guard+' RETURNING version_id',tuple(saved[key] for key in ('canonical_job_id','content_hash','filters_json','model','prompt_version','generated_at'))+ownership).fetchall()
             remote.commit()
+        if not restored_rows:
+            skipped+=1;continue
         local.execute('UPDATE jobs SET published=0 WHERE version_id=?',(previous['version_id'],));local.commit();restored+=1
     print('rollback restored',restored,'skipped changed rows',skipped,flush=True)
 
@@ -247,9 +284,11 @@ def report(local):
         for key in coverage:
             if result.get(key) not in (None,[], ''):coverage[key]+=1
     cost=local.execute('SELECT COALESCE(SUM(cost),0) FROM calls').fetchone()[0]
+    api_cost=local.execute("SELECT COALESCE(SUM(cost),0) FROM calls WHERE usage!='{}'").fetchone()[0]
+    conservative=cost-api_cost
     published=local.execute('SELECT COUNT(*) FROM jobs WHERE published=1').fetchone()[0]
     changed=local.execute('SELECT COUNT(*) FROM jobs WHERE published=-1').fetchone()[0]
-    summary={'snapshot_jobs':total,'white_collar':white,'blue_collar':blue,'unresolved':total-white-blue,'published':published,'changed_versions_skipped':changed,'cost_usd':cost,'counts':counts,'coverage':coverage}
+    summary={'snapshot_jobs':total,'white_collar':white,'blue_collar':blue,'unresolved':total-white-blue,'published':published,'changed_versions_skipped':changed,'cost_usd':cost,'reported_api_cost_usd':api_cost,'conservative_charges_usd':conservative,'counts':counts,'coverage':coverage}
     (AUDIT/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     lines=['# Full catalog classification — 2026-10-04','',f'Generated snapshot results: {total} jobs; white collar: {white}; blue collar: {blue}; unresolved: {total-white-blue}.',f'Successfully saved to Turso: {published}. Changed versions skipped: {changed}. Counts below describe generated snapshot results, not live catalog counts.',f'API cost (includes conservative failed-call charges): ${cost:.5f}.','',
            'Multiple functions per job are allowed; function counts overlap. Blue collar classifications hide customer listings only after deployment. Original employer postings are retained. Unsupported numeric/model fields are hidden. Full source, outputs, API usage, and rollback data are saved in run.sqlite3.','',
@@ -297,6 +336,7 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--limit',type=int,default=0)
     parser.add_argument('--workers',type=int,default=12)
+    parser.add_argument('--max-attempts',type=int,default=3)
     parser.add_argument('--budget',type=float,default=5)
     parser.add_argument('--publish',action='store_true')
     parser.add_argument('--report-only',action='store_true')
