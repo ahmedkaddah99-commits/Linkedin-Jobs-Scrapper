@@ -30,3 +30,18 @@ def test_statement_error_is_not_reported_as_success(monkeypatch):
         b'{"results":[{"type":"error","error":{"code":"SQLITE_BUSY"}}]}'))
     with pytest.raises(RuntimeError, match='SQLITE_BUSY'):
         rollout.http_execute('SELECT 1')
+
+
+def test_timeout_retries_identical_atomic_request(monkeypatch):
+    monkeypatch.setenv('TURSO_DATABASE_URL', 'libsql://example.invalid')
+    monkeypatch.setenv('TURSO_AUTH_TOKEN', 'test-token')
+    sent = []
+    def request(req, timeout):
+        sent.append(req.data)
+        if len(sent) == 1:
+            raise TimeoutError('lost response')
+        return io.BytesIO(b'{"results":[{"type":"ok","response":{"result":{"cols":[],"rows":[]}}}]}')
+    monkeypatch.setattr(rollout, 'urlopen', request)
+    monkeypatch.setattr(rollout.time, 'sleep', lambda _: None)
+    assert rollout.http_execute('DELETE FROM t WHERE id=?', ('own-write',)) == []
+    assert len(sent) == 2 and sent[0] == sent[1]

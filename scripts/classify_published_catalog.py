@@ -12,10 +12,12 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
@@ -45,7 +47,14 @@ def http_execute(sql,arguments=()):
     body={'requests':[{'type':'execute','stmt':{'sql':sql,'args':[parameter(value) for value in arguments],'want_rows':True}}, {'type':'close'}]}
     target=os.environ['TURSO_DATABASE_URL'].replace('libsql://','https://').rstrip('/')+'/v2/pipeline'
     request=Request(target,data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['TURSO_AUTH_TOKEN'],'Content-Type':'application/json'})
-    with urlopen(request,timeout=60) as response:payload=json.load(response)
+    for attempt in range(3):
+        try:
+            with urlopen(request,timeout=60) as response:payload=json.load(response)
+            break
+        except (TimeoutError, URLError):
+            if attempt == 2:raise
+            print('Turso request interrupted; retrying the same atomic statement',flush=True)
+            time.sleep(1)
     result=payload['results'][0]
     if result['type']!='ok':raise RuntimeError('Turso statement error: '+str(result.get('error',{}).get('code','unknown')))
     value=result['response']['result'];names=[column['name'] for column in value['cols']]
