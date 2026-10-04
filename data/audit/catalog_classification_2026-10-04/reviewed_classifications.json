@@ -200,5 +200,84 @@
     ],
     "evidence": "IDAM Architect, Lead",
     "review_note": "IDAM architecture, identity lifecycle and access-management security."
+  },
+  "canonical_job_4a4554c1247d471da62e627f555f9cfd": {
+    "version_id": "posting_version_d2811f3e99ae4f859d6273ac5d0690b5",
+    "content_hash": "689aad5fad1c359b812e15cb392d2bc8525076ffa19169ad3737d690db85a1e8",
+    "collar": "white",
+    "roles": [
+      "Product Manager"
+    ],
+    "evidence": "Elektroniker für Geräte und Systeme m/w/d",
+    "review_note": "Actual duties product strategy, market analysis and product launches; title conflicts with body."
+  },
+  "canonical_job_00df7e6d6bd746699b21ad68726ec5be": {
+    "version_id": "posting_version_ef334e7d26be4b15bfb999e8f756872f",
+    "content_hash": "fcb64d5ebc66bf2a616e52d146def5a403c630bb869c58d485fa4c3b24405b6a",
+    "collar": "white",
+    "roles": [
+      "Safety Specialist"
+    ],
+    "evidence": "Elektriker / Elektromeister / Elektrotechniker (m/w/d) fÃ¼r Standort Montabaur",
+    "review_note": "Accountable electrical safety and statutory compliance; duties override trade title."
+  },
+  "canonical_job_93ff70c213304f4dad80e96d0aedeaff": {
+    "version_id": "posting_version_dfdab83c602340e699d278998e624cbc",
+    "content_hash": "50e6519fbbd8bcd6dab0553a7499b2adbd972574f1af8b94f0ef2554efc44474",
+    "collar": "white",
+    "roles": [
+      "Automotive Engineer"
+    ],
+    "evidence": "Kfz-Mechatroniker / Techniker | HiL Inbetriebnahme (m/w/d)",
+    "review_note": "HiL test-concept development and technical system responsibility."
+  },
+  "canonical_job_b6ef0f8698f34baf905cde5ae902aaf7": {
+    "version_id": "version_51a4e4d4090649aab5baa398faa5c3b2",
+    "content_hash": "86f8184416abf38052fac07756e690420a4ae0e285c773c302f25a6feb290ade",
+    "collar": "white",
+    "roles": [
+      "Medical Professional"
+    ],
+    "evidence": "Diätischer Koch / Diätassistenz w|m|d",
+    "review_note": "Qualified dietetics, medical nutrition plans and counseling alongside cooking."
+  },
+  "canonical_job_2a34a668c96a41f2b925dde6c9bc06e2": {
+    "version_id": "posting_version_60211f5e444741929ad814bb970c39e1",
+    "content_hash": "b2810533ed6cf444b44241c5d1c39c7dc3f8711c9029c4c82db2a259ffd50419",
+    "collar": "white",
+    "roles": [
+      "Operations Manager/Director"
+    ],
+    "evidence": "Koch / Betriebsleiter (m/w/d)",
+    "review_note": "Business operations and financial management; composite cook/site-leader title."
+  },
+  "canonical_job_4cc46652d2a043a6becda8261e4e68eb": {
+    "version_id": "posting_version_04e706e605f4424090b0a097fd64ac7f",
+    "content_hash": "4a43c550fd1aa110a0017f513ab0c8bb1853b5ff71a2f3422c1c5566082180fa",
+    "collar": "white",
+    "roles": [
+      "Operations Manager/Director"
+    ],
+    "evidence": "Koch / Betriebsleiter (m/w/d)",
+    "review_note": "Business operations and financial management; composite cook/site-leader title."
+  },
+  "canonical_job_e883fcd35ec448ecbe50b1ee0becff61": {
+    "version_id": "posting_version_75e74d96e78941d18433d90ec3662aab",
+    "content_hash": "47abfb2432b46f3791eb54e263cbf1ed9ab52e7b1547b8b57e33fda8042ddad4",
+    "collar": "white",
+    "roles": [
+      "Receptionist",
+      "Customer Service Representative"
+    ],
+    "evidence": "Servicekraft / GÃ¤stebetreuer / Adventure Guide (m/w/d)",
+    "review_note": "Booking, reception, customer enquiries and reservations; some auxiliary service tasks."
+  },
+  "canonical_job_ebbe4d3adf6b4fd59932bc065942d806": {
+    "version_id": "version_647f84bd3c8a4fcc83281e9be2f16b64",
+    "content_hash": "fee77673af1000b4372429286d5558aee8f5577b8a5802f068235fcbd34394dd",
+    "collar": "blue",
+    "roles": [],
+    "evidence": "Servicemitarbeiter / Servicekraft (m/w/d)",
+    "review_note": "Event-service helper, drinks/flyers/coats/ticket booth and VIP driving, not event management."
   }
 }

@@ -30,6 +30,11 @@ AUDIT = ROOT / 'data/audit/catalog_classification_2026-10-04'
 REVIEWS = {}
 
 
+def review_for_row(row):
+    review=REVIEWS.get(row['id'])
+    return review if review and review['version_id']==row['version_id'] and review['content_hash']==row['content_hash'] else None
+
+
 def initialize():
     global REVIEWS
     load_dotenv(ROOT / 'user_config/.env', override=False)
@@ -138,10 +143,10 @@ def generate(rows):
     payload = call()
     originals=[payload]
     extracted=json.loads(payload['choices'][0]['message']['content'])
-    review=REVIEWS.get(inputs[0]['id'])
-    if review and review['version_id']==rows[0]['version_id'] and review['content_hash']==rows[0]['content_hash']:
+    review=review_for_row(rows[0])
+    if review:
         extracted.update({key:review[key] for key in ('collar','roles','evidence')})
-    accepted=validate_classification(extracted, str(inputs[0]['title'])+' '+str(inputs[0]['description'] or ''),inputs[0]['title'])
+    accepted=validate_classification(extracted, str(inputs[0]['title'])+' '+str(inputs[0]['description'] or ''),inputs[0]['title'],reviewed=bool(review))
     if accepted and accepted['collar']=='white' and extracted.get('collar')=='blue':
         extracted.update(collar='white',roles=accepted['roles'],evidence=accepted['evidence'])
     if extracted.get('collar')=='white':
@@ -206,7 +211,7 @@ def run(local,args):
                 parsed=json.loads(content)
                 outputs={item['id']:item for item in parsed.get('jobs',[]) if isinstance(item,dict) and 'id' in item}
                 for row in batch:
-                    result=validate_classification(outputs.get(row['id']),str(row['title'])+' '+str(row['description'] or ''),row['title'])
+                    result=validate_classification(outputs.get(row['id']),str(row['title'])+' '+str(row['description'] or ''),row['title'],reviewed=bool(review_for_row(row)))
                     local.execute('UPDATE jobs SET result=?,attempts=attempts+1,error=? WHERE id=?',
                                   (json.dumps(result,ensure_ascii=False) if result else None,None if result else 'invalid classification/evidence',row['id']))
             except Exception as exc:
@@ -280,10 +285,10 @@ def revalidate(local):
     for identity,raw in latest.items():
         row=sources[identity]
         original_collar=raw.get('collar')
-        review=REVIEWS.get(identity)
-        if review and review['version_id']==row['version_id'] and review['content_hash']==row['content_hash']:
+        review=review_for_row(row)
+        if review:
             raw.update({key:review[key] for key in ('collar','roles','evidence')})
-        result=validate_classification(raw,str(row['title'])+' '+str(row['description'] or ''),row['title'])
+        result=validate_classification(raw,str(row['title'])+' '+str(row['description'] or ''),row['title'],reviewed=bool(review))
         needs_metadata = bool(result and result['collar']=='white' and original_collar=='blue' and row['description']
                               and not any(key in raw for key in METADATA_FIELDS))
         if needs_metadata:

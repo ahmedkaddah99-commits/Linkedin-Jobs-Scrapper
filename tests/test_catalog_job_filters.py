@@ -141,3 +141,27 @@ def test_indefinite_employment_is_not_fixed_term_contract():
     raw={'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst',
          'employment_type':'contract','employment_evidence':'unbefristet'}
     assert validate_classification(raw,title,title)['employment_type'] == 'full_time'
+
+
+def test_manual_driver_and_trade_titles_do_not_enter_engineering_filters():
+    from backend.application.catalog_job_filters import validate_classification
+    for title in ('Triebfahrzeugführer Velten','Elektroniker','Kommissionierer','Reinigungskraft'):
+        result=validate_classification({'collar':'white','roles':['Engineering Manager'],'evidence':title},title,title)
+        assert result['collar']=='blue'
+        assert result['roles']==[]
+    title='Elektroingenieur'
+    assert validate_classification({'collar':'white','roles':['Electrical Engineer'],'evidence':title},title,title)['collar']=='white'
+    title='Sachbearbeiterin Netzanschlüsse (Elektrofachkraft)'
+    assert validate_classification({'collar':'blue','roles':[],'evidence':title},title,title)['roles']==['Administrative Specialist']
+
+
+def test_reviewed_actual_duties_can_override_a_conflicting_trade_title():
+    from backend.application.catalog_job_filters import validate_classification
+    title='Elektroniker für Geräte und Systeme'
+    source=title+' Planning and executing product launches. Developing product strategies.'
+    raw={'collar':'white','roles':['Product Manager'],'evidence':'Planning and executing product launches'}
+    assert validate_classification(raw,source,title,reviewed=True)['roles']==['Product Manager']
+    raw['reviewed']=True  # Model output cannot enable the trusted review path itself.
+    assert validate_classification(raw,source,title)['collar']=='blue'
+    title='Maschinen- und Anlagenführer pharmazeutische Entwicklung'
+    assert validate_classification({'collar':'white','roles':['Medical Professional'],'evidence':title},title,title)['collar']=='blue'

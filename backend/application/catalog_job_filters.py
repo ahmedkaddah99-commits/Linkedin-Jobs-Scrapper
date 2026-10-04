@@ -36,8 +36,18 @@ def profession_override(title, source):
     """Only explicit occupational titles/duties override ambiguous model functions."""
     title = normalized(title)
     source = normalized(source)
+    manual_title = re.search(r'triebfahrzeugführer|lokführer|busfahrer|berufskraftfahrer|lkw.?fahrer|lieferfahrer|train driver|truck driver|delivery driver|'
+        r'elektriker|elektroniker|mechatroniker|mechaniker|monteur|schlosser|schweißer|dachdecker|zimmerer|tischler|maler|lackierer|'
+        r'anlagenbediener|maschinenbediener|maschinenführer|anlagenführer|produktionsmitarbeiter|lagerhelfer|lagerarbeiter|lagerist|'
+        r'kommissionierer|komisjoner|order picker|staplerfahrer|reinigungskraft|gebäudereiniger|gärtner|\bkoch\b|küchenhilfe|kellner|servicekraft|friseur|machine operator|fleischer|metzger',title)
+    culinary_chef = re.search(r'\bchef\b|sous.?chef|\bcook\b',title) and re.search(r'culinary|cooking|kitchen|küche|cuisine',source)
+    professional_context = re.search(r'ingenieur|engineer|leiter|leitung|manager|director|\bhead\b|planung|planer|recruit|disponent|sachbearbeiter|berater|software|informatik|it.support|technischer.{0,12}vertrieb|ausbilder|lehrer|dozent|pädagog|dual.{0,25}(?:studium|bachelor|b.eng)',title)
+    if (manual_title or culinary_chef) and not professional_context:
+        return 'blue',[]
     if re.search(r'buchhalt|bookkeep|accountant',title):
         return 'white',['Accountant']
+    if re.search(r'sachbearbeiter.{0,30}netzanschl',title):
+        return 'white',['Administrative Specialist']
     if re.search(r'steuerfach|steuerberater|tax specialist|tax advisor',title):
         return 'white',['Tax Specialist']
     if re.search(r'erzieher|pädagogische.{0,15}fachkraft',title) and not re.search(r'leiter|leitung|manager',title):
@@ -81,12 +91,12 @@ def profession_override(title, source):
     return None
 
 
-def validate_classification(raw, source, title=''):
+def validate_classification(raw, source, title='', *, reviewed=False):
     if not isinstance(raw, dict) or raw.get('collar') not in ('white', 'blue'):
         return None
     text = normalized(source)
     evidence = normalized(raw.get('evidence'))
-    override = profession_override(title,source)
+    override = None if reviewed else profession_override(title,source)
     if override and normalized(title) in text:
         evidence = normalized(title)
     if (len(evidence) < 8 and not (len(evidence)>=2 and evidence == normalized(title))) or evidence not in text:
