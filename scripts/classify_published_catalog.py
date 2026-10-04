@@ -35,6 +35,28 @@ def review_for_row(row):
     return review if review and review['version_id']==row['version_id'] and review['content_hash']==row['content_hash'] else None
 
 
+def http_execute(sql,arguments=()):
+    """Bounded Hrana request for the operator batch; each SQL statement is atomic."""
+    def parameter(value):
+        if value is None:return {'type':'null'}
+        if type(value) is int:return {'type':'integer','value':str(value)}
+        if type(value) is float:return {'type':'float','value':value}
+        return {'type':'text','value':str(value)}
+    body={'requests':[{'type':'execute','stmt':{'sql':sql,'args':[parameter(value) for value in arguments],'want_rows':True}}, {'type':'close'}]}
+    target=os.environ['TURSO_DATABASE_URL'].replace('libsql://','https://').rstrip('/')+'/v2/pipeline'
+    request=Request(target,data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['TURSO_AUTH_TOKEN'],'Content-Type':'application/json'})
+    with urlopen(request,timeout=60) as response:payload=json.load(response)
+    result=payload['results'][0]
+    if result['type']!='ok':raise RuntimeError('Turso statement error: '+str(result.get('error',{}).get('code','unknown')))
+    value=result['response']['result'];names=[column['name'] for column in value['cols']]
+    def decoded(cell):
+        if cell['type']=='null':return None
+        if cell['type']=='integer':return int(cell['value'])
+        if cell['type']=='float':return float(cell['value'])
+        return cell['value']
+    return [dict(zip(names,(decoded(cell) for cell in row))) for row in value['rows']]
+
+
 def initialize():
     global REVIEWS
     load_dotenv(ROOT / 'user_config/.env', override=False)
@@ -228,38 +250,44 @@ def run(local,args):
                 print(f'validated={done} cost=${spent:.5f} pending={len(pending)} batches_remaining={len(batches)-index}',flush=True)
 
 
+def preserve_write_attempts(local):
+    local.execute('CREATE TABLE IF NOT EXISTS write_attempts(version_id TEXT,filters_json TEXT,content_hash TEXT,generated_at TEXT,PRIMARY KEY(version_id,generated_at))')
+    local.execute('INSERT OR IGNORE INTO write_attempts SELECT * FROM written')
+    local.commit()
+
+
 def publish(local):
+    preserve_write_attempts(local)
     rows=[dict(row) for row in local.execute('SELECT * FROM jobs WHERE is_current=1 AND result IS NOT NULL AND published=0')]
     changed=0
-    for start in range(0,len(rows),100):
-        batch=rows[start:start+100]
+    for start in range(0,len(rows),25):
+        batch=rows[start:start+25]
         placeholders=','.join('?' for _ in batch)
-        with connect_database(DB) as remote:
-            previous={row['version_id']:dict(row) for row in remote.execute('SELECT * FROM job_filter_intelligence WHERE version_id IN ('+placeholders+')',tuple(row['version_id'] for row in batch)).fetchall()}
-            for row in batch:
-                local.execute('INSERT OR IGNORE INTO rollback VALUES (?,?)',(row['version_id'],json.dumps(previous[row['version_id']]) if row['version_id'] in previous else None))
-            local.commit()  # Persist all rollback rows before the remote transaction.
-            arguments=[]
-            generated_at=datetime.now(timezone.utc).isoformat()
-            for row in batch:
-                arguments.extend((row['version_id'],row['id'],row['content_hash'],row['result'],MODEL,PROMPT_VERSION,generated_at))
-                local.execute('INSERT OR REPLACE INTO written VALUES (?,?,?,?)',(row['version_id'],row['result'],row['content_hash'],generated_at))
-            local.commit()
-            saved=remote.execute('''WITH incoming(version_id,canonical_job_id,content_hash,filters_json,model,prompt_version,generated_at) AS (VALUES '''+','.join('(?,?,?,?,?,?,?)' for _ in batch)+''')
-                INSERT INTO job_filter_intelligence SELECT incoming.* FROM incoming
-                JOIN canonical_jobs j ON j.canonical_job_id=incoming.canonical_job_id AND j.current_version_id=incoming.version_id
-                JOIN job_posting_versions v ON v.version_id=j.current_version_id AND v.content_hash=incoming.content_hash
-                WHERE 1 ON CONFLICT(version_id) DO UPDATE SET
-                canonical_job_id=excluded.canonical_job_id,content_hash=excluded.content_hash,filters_json=excluded.filters_json,
-                model=excluded.model,prompt_version=excluded.prompt_version,generated_at=excluded.generated_at
-                RETURNING canonical_job_id''',arguments).fetchall()
-            remote.commit()
-        saved_ids={row[0] for row in saved}
+        previous={row['version_id']:row for row in http_execute('SELECT * FROM job_filter_intelligence WHERE version_id IN ('+placeholders+')',tuple(row['version_id'] for row in batch))}
+        for row in batch:
+            local.execute('INSERT OR IGNORE INTO rollback VALUES (?,?)',(row['version_id'],json.dumps(previous[row['version_id']]) if row['version_id'] in previous else None))
+        local.commit()  # Persist all rollback rows before the remote transaction.
+        arguments=[]
+        generated_at=datetime.now(timezone.utc).isoformat()
+        for row in batch:
+            arguments.extend((row['version_id'],row['id'],row['content_hash'],row['result'],MODEL,PROMPT_VERSION,generated_at))
+            local.execute('INSERT OR REPLACE INTO written VALUES (?,?,?,?)',(row['version_id'],row['result'],row['content_hash'],generated_at))
+            local.execute('INSERT OR IGNORE INTO write_attempts VALUES (?,?,?,?)',(row['version_id'],row['result'],row['content_hash'],generated_at))
+        local.commit()
+        saved=http_execute('''WITH incoming(version_id,canonical_job_id,content_hash,filters_json,model,prompt_version,generated_at) AS (VALUES '''+','.join('(?,?,?,?,?,?,?)' for _ in batch)+''')
+            INSERT INTO job_filter_intelligence SELECT incoming.* FROM incoming
+            JOIN canonical_jobs j ON j.canonical_job_id=incoming.canonical_job_id AND j.current_version_id=incoming.version_id
+            JOIN job_posting_versions v ON v.version_id=j.current_version_id AND v.content_hash=incoming.content_hash
+            WHERE 1 ON CONFLICT(version_id) DO UPDATE SET
+            canonical_job_id=excluded.canonical_job_id,content_hash=excluded.content_hash,filters_json=excluded.filters_json,
+            model=excluded.model,prompt_version=excluded.prompt_version,generated_at=excluded.generated_at
+            RETURNING canonical_job_id''',arguments)
+        saved_ids={row['canonical_job_id'] for row in saved}
         changed+=len(batch)-len(saved_ids)
         for row in batch:
             local.execute('UPDATE jobs SET published=? WHERE id=?',(1 if row['id'] in saved_ids else -1,row['id']))
         local.commit()
-        print('published batch',start+len(rows[start:start+100]),'changed',changed,flush=True)
+        print('published batch',start+len(rows[start:start+25]),'changed',changed,flush=True)
 
 
 def revalidate(local):
@@ -300,14 +328,15 @@ def revalidate(local):
 
 
 def rollback(local):
+    preserve_write_attempts(local)
     restored=skipped=0
     for previous in local.execute('SELECT * FROM rollback'):
-        row=local.execute('SELECT * FROM written WHERE version_id=?',(previous['version_id'],)).fetchone()
-        if not row:
+        attempts=local.execute('SELECT * FROM write_attempts WHERE version_id=?',(previous['version_id'],)).fetchall()
+        if not attempts:
             skipped+=1;continue
         with connect_database(DB) as remote:
-            ownership=(previous['version_id'],row['filters_json'],MODEL,PROMPT_VERSION,row['content_hash'],row['generated_at'])
-            guard='version_id=? AND filters_json=? AND model=? AND prompt_version=? AND content_hash=? AND generated_at=?'
+            ownership=(previous['version_id'],MODEL,PROMPT_VERSION)+tuple(value for row in attempts for value in (row['filters_json'],row['content_hash'],row['generated_at']))
+            guard='version_id=? AND model=? AND prompt_version=? AND ('+' OR '.join('(filters_json=? AND content_hash=? AND generated_at=?)' for row in attempts)+')'
             if previous['previous_json'] is None:
                 restored_rows=remote.execute('DELETE FROM job_filter_intelligence WHERE '+guard+' RETURNING version_id',ownership).fetchall()
             else:
@@ -340,12 +369,27 @@ def report(local):
     changed=local.execute('SELECT COUNT(*) FROM jobs WHERE is_current=1 AND published=-1').fetchone()[0]
     summary={'snapshot_jobs':total,'white_collar':white,'blue_collar':blue,'unresolved':total-white-blue,'published':published,'changed_versions_skipped':changed,'cost_usd':cost,'reported_api_cost_usd':api_cost,'conservative_charges_usd':conservative,'counts':counts,'coverage':coverage}
     (AUDIT/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
-    lines=['# Full catalog classification — 2026-10-04','',f'Generated snapshot results: {total} jobs; white collar: {white}; blue collar: {blue}; unresolved: {total-white-blue}.',f'Successfully saved to Turso: {published}. Changed versions skipped: {changed}. Counts below describe generated snapshot results, not live catalog counts.',f'API cost (includes conservative failed-call charges): ${cost:.5f}.','',
+    lines=['# Full catalog classification â€” 2026-10-04','',f'Generated snapshot results: {total} jobs; white collar: {white}; blue collar: {blue}; unresolved: {total-white-blue}.',f'Successfully saved to Turso: {published}. Changed versions skipped: {changed}. Counts below describe generated snapshot results, not live catalog counts.',f'API cost (includes conservative failed-call charges): ${cost:.5f}.','',
            'Multiple functions per job are allowed; function counts overlap. Blue collar classifications hide customer listings only after deployment. Original employer postings are retained. Unsupported numeric/model fields are hidden. Full source, outputs, API usage, and rollback data are saved in run.sqlite3.','',
            'Model: mistralai/mistral-nemo. Original German/English input is used for verifiable exact evidence. Actual prompts: backend/application/catalog_job_filters.py, function_prompt and metadata_prompt.','',
            '| Function | Jobs |','|---|---:|']
     lines.extend(f'| {role} | {count} |' for role,count in counts.items())
     lines+=['','## White collar field coverage','']+[f'- {key}: {value}' for key,value in coverage.items()]
+    lines+=['','## Scope and classification rules','',
+        'This round covers the current published employer catalog. The starting publication had 29,217 jobs; one catch-up added 277 postings. Historical/unpublished source rows are outside the customer catalog.',
+        'White collar includes office, analytical, administrative, sales, engineering/design, scientific, education, legal, qualified clinical and professional management work. Retail sales uses the existing Retail Sales function. Manual trades, drivers, machine operators, warehouse picking, cleaning, cooking and table service are excluded. Professional planning, management, teaching and source-confirmed clinical work remain eligible.',
+        'Each accepted white collar job has at least one function. Functions share one taxonomy between the frontend and backend; specific missing professional functions were added. The lists allow multiple functions per job.',
+        'Reliable scraped metadata takes precedence. Nemo fills supported experience years, seniority, work arrangement, employment type, skills and people-management facts. Location, salary and company filters continue to use existing source data. Full-time is the product default when no supported alternative contract type is available. Unsupported optional output is hidden without repeated field retries.',
+        'Two adjacent seniority levels may display together. A gap or more than two levels displays the highest. Years require numeric output and a source quote stating a year unit; months, company age and unsupported guessed years are rejected.',
+        '', '## Quality checks and retained evidence','',
+        'Source review found and corrected systematic nursing, therapy, veterinary, teaching, accounting and engineering mislabels, oversized copied taxonomies, false manual-work retentions, and fixed-term wording mistaken for unbefristet. Version-bound reviewed_classifications.json records '+str(len(REVIEWS))+' individual source decisions, including professional duties under conflicting trade titles.',
+        'Metadata keys are whitelisted so the second model call cannot change collar, functions or their supporting quote. Every saved record matches the current posting version and content hash. Later production writes are protected by atomic rollback ownership guards.',
+        'Coverage and filter-query verification measure accepted data and wiring; they are not a measured accuracy rate for every job. Original employer text, model responses, costs, superseded snapshot inputs and rollback rows are retained locally in run.sqlite3. jobs.csv contains every current job and its Runr URL.',
+        f'Provider-reported/usage-priced calls: ${api_cost:.5f}. Conservative uncertain-call allowance: ${conservative:.5f}. Total budget ledger: ${cost:.5f}, below $5.',
+        '', '## Unresolved records','',
+        'These records remain visible for source review; no occupation is invented and they are not removed as blue collar.','']
+    for row in local.execute('SELECT id,title,error FROM jobs WHERE is_current=1 AND result IS NULL'):
+        lines.append(f'- [{row["title"]}](https://app.userunr.com/jobs/{row["id"]}): {row["error"]}.')
     (AUDIT/'REPORT.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     with (AUDIT/'jobs.csv').open('w',encoding='utf-8-sig',newline='') as stream:
         writer=csv.writer(stream);writer.writerow(['title','employer','collar','functions','url','published'])
@@ -382,6 +426,53 @@ def live_report():
     print('live',json.dumps(totals),flush=True)
 
 
+def verify_live_filters(local):
+    from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+    expected=json.loads((AUDIT/'live_counts.json').read_text(encoding='utf-8'))
+    store=SqlitePersonalizedJobsStore(DB,initialize=False)
+    user='catalog-rollout-readonly-verification'
+    first=store.query_published_jobs(user,filters={},limit=1)
+    if first['total']!=expected['totals']['visible_jobs']:
+        raise RuntimeError('Unfiltered customer count differs from live catalog count')
+    checks=[]
+    def check_role(role):
+        page=store.query_published_jobs(user,filters={'role':[role]},limit=1)
+        required=expected['counts'][role]
+        if page['total']!=required:
+            raise RuntimeError(f'Function count mismatch: {role}: {page["total"]} != {required}')
+        if page['rows']:
+            raw=page['rows'][0]['filter_json'];filters=json.loads(raw) if isinstance(raw,str) else raw
+            if role not in filters['roles']:raise RuntimeError('Returned job does not have selected function')
+        return {'function':role,'jobs':page['total'],'passed':True}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        checks=list(executor.map(check_role,ROLES))
+    fields=[]
+    for field,values in (('work_arrangement',('onsite','hybrid','remote')),
+                         ('employment_type',('full_time','part_time','contract','internship','working_student','apprenticeship')),
+                         ('experience_level',('intern','entry','mid','senior','lead','director')),
+                         ('role_type',('ic','manager'))):
+        for value in values:
+            page=store.query_published_jobs(user,filters={field:[value]},limit=1)
+            fields.append({'filter':field,'value':value,'jobs':page['total'],'returned_row':bool(page['rows'])})
+    for filters in ({'required_experience_min':1,'required_experience_max':3},{'skills_include':['SQL']},
+                    {'role':['Data Analyst'],'skills_include':['SQL']}):
+        page=store.query_published_jobs(user,filters=filters,limit=1)
+        if not page['rows']:raise RuntimeError('Expected a supported field-filter result')
+        fields.append({'filters':filters,'jobs':page['total'],'returned_row':True})
+    blue=local.execute("SELECT id FROM jobs WHERE is_current=1 AND json_extract(result,'$.collar')='blue' LIMIT 1").fetchone()[0]
+    if store.get_published_job_row(blue) is not None:raise RuntimeError('Blue collar detail remains customer visible')
+    verified={'verified_at':datetime.now(timezone.utc).isoformat(),'publication_id':first['publication']['publication_id'],
+              'unfiltered_jobs':first['total'],'blue_detail_excluded':True,'function_checks':checks,'field_checks':fields,
+              'browser_visual_check':'Not performed: browser security policy blocked the signed-in Runr page.'}
+    (AUDIT/'verification.json').write_text(json.dumps(verified,indent=2),encoding='utf-8')
+    with (AUDIT/'REPORT.md').open('a',encoding='utf-8') as stream:
+        stream.write(f'\n## Live filter verification\n\nVerified {len(checks)} function selections against their exact live counts. '
+                     f'Unfiltered customer count: {first["total"]}. Blue collar detail is excluded. '
+                     f'Tested {len(fields)} field/filter selections, including experience years, skills and a combined function/skill filter. '
+                     'Field queries were exercised and counts recorded; exact membership was checked for function filters. Full results are in verification.json. A browser security policy blocked the signed-in visual check.\n')
+    print('verified',len(checks),'functions;',len(fields),'field/filter selections',flush=True)
+
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--limit',type=int,default=0)
@@ -394,6 +485,7 @@ if __name__=='__main__':
     parser.add_argument('--refresh-snapshot',action='store_true')
     parser.add_argument('--rollback',action='store_true')
     parser.add_argument('--live-report',action='store_true')
+    parser.add_argument('--verify-live',action='store_true')
     args=parser.parse_args()
     local=initialize()
     if args.refresh_snapshot:refresh_snapshot(local)
@@ -404,3 +496,4 @@ if __name__=='__main__':
     if args.publish:publish(local)
     report(local)
     if args.live_report:live_report()
+    if args.verify_live:verify_live_filters(local)

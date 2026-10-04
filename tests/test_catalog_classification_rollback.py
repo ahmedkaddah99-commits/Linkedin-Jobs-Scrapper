@@ -26,6 +26,9 @@ def test_rollback_restores_own_write_and_preserves_newer_same_json(tmp_path, mon
             ('v2','j2','h2','{}',rollout.MODEL,rollout.PROMPT_VERSION,'later-write')])
     local.executemany('INSERT INTO jobs VALUES (?,1,?)',[('v1','{"revalidated":true}'),('v2','{}')])
     local.executemany('INSERT INTO written VALUES (?,?,?,?)',[('v1','{}','h1','own-write'),('v2','{}','h2','own-write')])
+    rollout.preserve_write_attempts(local)
+    # A retry stores a new identity but never reaches the remote database.
+    local.execute("UPDATE written SET generated_at='failed-retry' WHERE version_id='v1'")
     local.executemany('INSERT INTO rollback VALUES (?,?)',[('v1',json.dumps(previous)),('v2',None)])
     local.commit()
     rollout.rollback(local)

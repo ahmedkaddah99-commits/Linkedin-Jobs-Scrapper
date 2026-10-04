@@ -127,6 +127,8 @@ subsystems:
       - backend/repositories/sqlite_personalized_jobs.py
       - backend/repositories/assisted_apply_preparation.py
       - backend/repositories/document_payloads.py
+      - scripts/classify_published_catalog.py
+      - backend/domain/job_function_taxonomy.json
     exclusions:
       - backend/application/{acquisition_scheduler,company_*,source_eligibility_manifest,expansion_wave_manifest,duplicate_decisions}.py  # WS-3
     entry_points:
