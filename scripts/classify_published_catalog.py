@@ -49,7 +49,11 @@ def initialize():
     CREATE TABLE IF NOT EXISTS reservations(id INTEGER PRIMARY KEY,cost REAL,state TEXT);
     CREATE TABLE IF NOT EXISTS written(version_id TEXT PRIMARY KEY,filters_json TEXT,content_hash TEXT,generated_at TEXT);
     CREATE INDEX IF NOT EXISTS classification_progress ON jobs(id) WHERE result IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS snapshot_history(version_id TEXT PRIMARY KEY,row_json TEXT);
     ''')
+    columns={row['name'] for row in local.execute('PRAGMA table_info(jobs)')}
+    for name,definition in (('is_current','INTEGER DEFAULT 1'),('start_call_id','INTEGER DEFAULT 0')):
+        if name not in columns:local.execute('ALTER TABLE jobs ADD COLUMN '+name+' '+definition)
     if not local.execute('SELECT 1 FROM metadata WHERE key="publication"').fetchone():
         with connect_database(DB) as remote:
             publication = remote.execute('SELECT publication_id FROM acquisition_publication_head WHERE head_id=1').fetchone()[0]
@@ -72,6 +76,47 @@ def initialize():
         local.execute('INSERT INTO metadata VALUES (?,?)',('started_at',datetime.now(timezone.utc).isoformat()))
         local.commit()
     return local
+
+
+def refresh_snapshot(local):
+    """Catch up once to the current publication; keep superseded input/outputs for audit."""
+    existing={row['id']:dict(row) for row in local.execute('SELECT * FROM jobs')}
+    first_call=local.execute('SELECT COALESCE(MAX(id),0)+1 FROM calls').fetchone()[0]
+    local.execute('UPDATE jobs SET is_current=0');local.commit()
+    added=changed=current=0
+    with connect_database(DB) as remote:
+        publication=remote.execute('SELECT publication_id FROM acquisition_publication_head WHERE head_id=1').fetchone()[0]
+        cursor=''
+        while True:
+            rows=remote.execute('''SELECT j.canonical_job_id AS id,j.current_version_id AS version_id,v.content_hash,j.title,
+            co.canonical_name AS company,j.location FROM acquisition_publication_jobs pj
+            JOIN canonical_jobs j ON j.canonical_job_id=pj.canonical_job_id
+            JOIN canonical_companies co ON co.company_id=j.company_id JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            WHERE pj.publication_id=? AND co.entity_kind='employer' AND j.canonical_job_id>? ORDER BY j.canonical_job_id LIMIT 1000''',(publication,cursor)).fetchall()
+            if not rows:break
+            replacements=[row for row in rows if row['id'] not in existing or existing[row['id']]['version_id']!=row['version_id'] or existing[row['id']]['content_hash']!=row['content_hash']]
+            descriptions={}
+            for start in range(0,len(replacements),100):
+                ids=[row['version_id'] for row in replacements[start:start+100]]
+                for value in remote.execute('SELECT version_id,description FROM job_posting_versions WHERE version_id IN ('+','.join('?' for _ in ids)+')',ids).fetchall():
+                    descriptions[value['version_id']]=value['description']
+            replacement_ids={row['id'] for row in replacements}
+            for row in rows:
+                if row['id'] not in replacement_ids:
+                    local.execute('UPDATE jobs SET is_current=1 WHERE id=?',(row['id'],));continue
+                old=existing.get(row['id'])
+                if old:
+                    local.execute('INSERT OR IGNORE INTO snapshot_history VALUES (?,?)',(old['version_id'],json.dumps(old,ensure_ascii=False)));changed+=1
+                else:added+=1
+                local.execute('''INSERT INTO jobs(id,version_id,content_hash,title,company,description,location,is_current,start_call_id)
+                VALUES (?,?,?,?,?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET version_id=excluded.version_id,content_hash=excluded.content_hash,
+                title=excluded.title,company=excluded.company,description=excluded.description,location=excluded.location,
+                result=NULL,attempts=0,error=NULL,published=0,is_current=1,start_call_id=excluded.start_call_id''',
+                (row['id'],row['version_id'],row['content_hash'],row['title'],row['company'],descriptions[row['version_id']],row['location'],first_call))
+            local.commit();current+=len(rows);cursor=rows[-1]['id']
+    for key,value in (('current_publication',publication),('refresh_added',str(added)),('refresh_changed',str(changed))):
+        local.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(key,value))
+    local.commit();print('refreshed',current,'added',added,'changed',changed,flush=True)
 
 
 def generate(rows):
@@ -120,7 +165,7 @@ def run(local,args):
         local.execute('INSERT INTO calls(cost,usage,response) VALUES (?,?,?)',(abandoned,'{}','conservative charge for interrupted requests'))
         local.execute("UPDATE reservations SET state='interrupted' WHERE state='pending'")
         local.commit()
-    rows = [dict(row) for row in local.execute('SELECT * FROM jobs WHERE result IS NULL AND attempts<? ORDER BY attempts,id',(args.max_attempts,))]
+    rows = [dict(row) for row in local.execute('SELECT * FROM jobs WHERE is_current=1 AND result IS NULL AND attempts<? ORDER BY attempts,id',(args.max_attempts,))]
     if args.limit:
         rows=rows[:args.limit]
     batches=[]
@@ -179,7 +224,7 @@ def run(local,args):
 
 
 def publish(local):
-    rows=[dict(row) for row in local.execute('SELECT * FROM jobs WHERE result IS NOT NULL AND published=0')]
+    rows=[dict(row) for row in local.execute('SELECT * FROM jobs WHERE is_current=1 AND result IS NOT NULL AND published=0')]
     changed=0
     for start in range(0,len(rows),100):
         batch=rows[start:start+100]
@@ -213,11 +258,11 @@ def publish(local):
 
 
 def revalidate(local):
-    sources={row['id']:dict(row) for row in local.execute('SELECT * FROM jobs')}
+    sources={row['id']:dict(row) for row in local.execute('SELECT * FROM jobs') if dict(row).get('is_current',1)}
     latest={}
-    for call in local.execute('SELECT response FROM calls ORDER BY id'):
+    for call in local.execute('SELECT id,response FROM calls ORDER BY id'):
         try:
-            payload=json.loads(call[0])
+            payload=json.loads(call['response'])
             parsed=json.loads(payload['choices'][0]['message']['content'])
             originals=payload.get('provider_responses')
             if originals:
@@ -228,7 +273,7 @@ def revalidate(local):
                 classification['id']=parsed['jobs'][0]['id']
                 parsed={'jobs':[classification]}
             for item in parsed.get('jobs',[]):
-                if item.get('id') in sources:
+                if item.get('id') in sources and call['id']>=sources[item['id']].get('start_call_id',0):
                     latest[item['id']]=item
         except (ValueError,KeyError,TypeError):
             continue
@@ -272,11 +317,11 @@ def rollback(local):
 
 
 def report(local):
-    total=local.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]
+    total=local.execute('SELECT COUNT(*) FROM jobs WHERE is_current=1').fetchone()[0]
     counts={role:0 for role in ROLES}
     blue=white=0
     coverage={key:0 for key in ('required_experience_years','experience_level','work_arrangement','employment_type','skills','role_type')}
-    for row in local.execute('SELECT result FROM jobs WHERE result IS NOT NULL'):
+    for row in local.execute('SELECT result FROM jobs WHERE is_current=1 AND result IS NOT NULL'):
         result=json.loads(row[0])
         if result['collar']=='blue':blue+=1;continue
         white+=1
@@ -286,8 +331,8 @@ def report(local):
     cost=local.execute('SELECT COALESCE(SUM(cost),0) FROM calls').fetchone()[0]
     api_cost=local.execute("SELECT COALESCE(SUM(cost),0) FROM calls WHERE usage!='{}'").fetchone()[0]
     conservative=cost-api_cost
-    published=local.execute('SELECT COUNT(*) FROM jobs WHERE published=1').fetchone()[0]
-    changed=local.execute('SELECT COUNT(*) FROM jobs WHERE published=-1').fetchone()[0]
+    published=local.execute('SELECT COUNT(*) FROM jobs WHERE is_current=1 AND published=1').fetchone()[0]
+    changed=local.execute('SELECT COUNT(*) FROM jobs WHERE is_current=1 AND published=-1').fetchone()[0]
     summary={'snapshot_jobs':total,'white_collar':white,'blue_collar':blue,'unresolved':total-white-blue,'published':published,'changed_versions_skipped':changed,'cost_usd':cost,'reported_api_cost_usd':api_cost,'conservative_charges_usd':conservative,'counts':counts,'coverage':coverage}
     (AUDIT/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     lines=['# Full catalog classification — 2026-10-04','',f'Generated snapshot results: {total} jobs; white collar: {white}; blue collar: {blue}; unresolved: {total-white-blue}.',f'Successfully saved to Turso: {published}. Changed versions skipped: {changed}. Counts below describe generated snapshot results, not live catalog counts.',f'API cost (includes conservative failed-call charges): ${cost:.5f}.','',
@@ -299,7 +344,7 @@ def report(local):
     (AUDIT/'REPORT.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     with (AUDIT/'jobs.csv').open('w',encoding='utf-8-sig',newline='') as stream:
         writer=csv.writer(stream);writer.writerow(['title','employer','collar','functions','url','published'])
-        for row in local.execute('SELECT * FROM jobs ORDER BY company,title'):
+        for row in local.execute('SELECT * FROM jobs WHERE is_current=1 ORDER BY company,title'):
             result=json.loads(row['result']) if row['result'] else {}
             writer.writerow([row['title'],row['company'],result.get('collar','unresolved'),'; '.join(result.get('roles',[])),
                              'https://app.userunr.com/jobs/'+row['id'],row['published']])
@@ -341,10 +386,12 @@ if __name__=='__main__':
     parser.add_argument('--publish',action='store_true')
     parser.add_argument('--report-only',action='store_true')
     parser.add_argument('--revalidate',action='store_true')
+    parser.add_argument('--refresh-snapshot',action='store_true')
     parser.add_argument('--rollback',action='store_true')
     parser.add_argument('--live-report',action='store_true')
     args=parser.parse_args()
     local=initialize()
+    if args.refresh_snapshot:refresh_snapshot(local)
     if args.rollback:
         rollback(local);report(local);sys.exit(0)
     if args.revalidate:revalidate(local)

@@ -53,3 +53,15 @@ def test_revalidation_keeps_function_decision_when_metadata_tries_to_overwrite_i
     assert result['collar']=='white'
     assert result['roles']==['Data Analyst']
     assert result['skills']==['SQL']
+
+
+def test_old_calls_cannot_classify_a_refreshed_posting_version(monkeypatch):
+    local=sqlite3.connect(':memory:');local.row_factory=sqlite3.Row
+    local.executescript('''CREATE TABLE jobs(id TEXT,title TEXT,description TEXT,result TEXT,error TEXT,attempts INTEGER,start_call_id INTEGER,is_current INTEGER);
+    CREATE TABLE calls(id INTEGER PRIMARY KEY,response TEXT);''')
+    local.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)',('j1','Data Analyst','Current source',None,None,0,2,1))
+    old={'choices':[{'message':{'content':json.dumps({'jobs':[{'id':'j1','collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}]})}}]}
+    local.execute('INSERT INTO calls VALUES (?,?)',(1,json.dumps(old)))
+    monkeypatch.setattr(rollout,'REVIEWS',{})
+    rollout.revalidate(local)
+    assert local.execute('SELECT result FROM jobs').fetchone()[0] is None
