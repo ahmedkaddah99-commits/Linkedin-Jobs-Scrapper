@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
+from backend.domain.job_filter_source_cache import use_cached_source
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -1242,7 +1243,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         for company in filters.get("hidden_companies") or []:
             predicates.append("LOWER(catalog.company) NOT LIKE ?")
             params.append(f"%{str(company).casefold()}%")
-        return predicates, params
+        return [use_cached_source(predicate) for predicate in predicates], params
 
     def _feed_scope_sql(self) -> str:
         return f"""

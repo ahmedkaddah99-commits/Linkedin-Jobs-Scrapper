@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT))
 from dotenv import load_dotenv
 from backend.application.catalog_job_filters import METADATA_FIELDS, PROMPT_VERSION, ROLES, classification_prompt, function_prompt, metadata_prompt, validate_classification
 from backend.database.connection import connect_database, database_target_info
+from backend.domain.job_filter_source_cache import SOURCE_PATHS, SOURCE_SCHEMA
 
 MODEL = 'mistralai/mistral-nemo'
 ROOT = PROJECT.parent.parent if PROJECT.parent.name == '.worktrees' else PROJECT
@@ -265,6 +266,31 @@ def preserve_write_attempts(local):
     local.commit()
 
 
+def cache_source_metadata(local):
+    rows=[dict(row) for row in local.execute('SELECT * FROM jobs WHERE is_current=1 AND result IS NOT NULL')
+          if json.loads(row['result']).get('source_metadata_schema')!=SOURCE_SCHEMA]
+    objects=['json_object('+','.join("'"+path+"',json_extract(v.payload_json,'"+path+"')" for path in SOURCE_PATHS[start:start+30])+')'
+             for start in range(0,len(SOURCE_PATHS),30)]
+    projection=objects[0]
+    for value in objects[1:]:projection='json_patch('+projection+','+value+')'
+    def fetch(batch):
+        values=http_execute('SELECT v.version_id,v.content_hash,'+projection+' AS source_metadata FROM job_posting_versions v WHERE v.version_id IN ('+','.join('?' for row in batch)+')',tuple(row['version_id'] for row in batch))
+        return batch,{value['version_id']:value for value in values}
+    completed=0
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for batch,values in executor.map(fetch,[rows[start:start+100] for start in range(0,len(rows),100)]):
+            for row in batch:
+                source=values.get(row['version_id'])
+                if not source or source['content_hash']!=row['content_hash']:
+                    raise RuntimeError('Source-cache version/hash mismatch')
+                result=json.loads(row['result'])
+                result['source_metadata']=json.loads(source['source_metadata'])
+                result['source_metadata_schema']=SOURCE_SCHEMA
+                local.execute('UPDATE jobs SET result=?,published=0 WHERE id=?',(json.dumps(result,ensure_ascii=False),row['id']))
+            local.commit();completed+=len(batch)
+            print('cached source metadata',completed,'of',len(rows),flush=True)
+
+
 def publish(local):
     preserve_write_attempts(local)
     rows=[dict(row) for row in local.execute('SELECT * FROM jobs WHERE is_current=1 AND result IS NOT NULL AND published=0')]
@@ -437,12 +463,28 @@ def live_report():
 
 def verify_live_filters(local):
     from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+    class ReadRows:
+        def __init__(self,rows):self.rows=rows
+        def fetchone(self):return self.rows[0] if self.rows else None
+        def fetchall(self):return self.rows
+    class ReadConnection:
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def execute(self,sql,args=()):
+            if not sql.lstrip().startswith(('SELECT','WITH','/*')):
+                raise RuntimeError('Verification connection permits read queries only')
+            return ReadRows(http_execute(sql,args))
     expected=json.loads((AUDIT/'live_counts.json').read_text(encoding='utf-8'))
     store=SqlitePersonalizedJobsStore(DB,initialize=False)
+    # Execute the actual customer repository queries against Turso with bounded
+    # operator transport, without changing application connection behavior.
+    store._connect=lambda:ReadConnection()
     user='catalog-rollout-readonly-verification'
     first=store.query_published_jobs(user,filters={},limit=1)
     if first['total']!=expected['totals']['visible_jobs']:
         raise RuntimeError('Unfiltered customer count differs from live catalog count')
+    progress_path=AUDIT/'verification_progress.json'
+    progress=json.loads(progress_path.read_text(encoding='utf-8')) if progress_path.exists() else {}
     checks=[]
     def check_role(role):
         page=store.query_published_jobs(user,filters={'role':[role]},limit=1)
@@ -452,25 +494,34 @@ def verify_live_filters(local):
         if page['rows']:
             raw=page['rows'][0]['filter_json'];filters=json.loads(raw) if isinstance(raw,str) else raw
             if role not in filters['roles']:raise RuntimeError('Returned job does not have selected function')
+        print('verified function',role,'jobs',page['total'],flush=True)
         return {'function':role,'jobs':page['total'],'passed':True}
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        checks=list(executor.map(check_role,ROLES))
+    if progress.get('counts')==expected['counts'] and progress.get('publication_id')==first['publication']['publication_id']:
+        checks=progress['function_checks']
+    else:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            checks=list(executor.map(check_role,ROLES))
+    progress={'counts':expected['counts'],'publication_id':first['publication']['publication_id'],'function_checks':checks}
+    progress_path.write_text(json.dumps(progress,indent=2),encoding='utf-8')
     fields=[]
     for field,values in (('work_arrangement',('onsite','hybrid','remote')),
                          ('employment_type',('full_time','part_time','contract','internship','working_student','apprenticeship')),
                          ('experience_level',('intern','entry','mid','senior','lead','director')),
                          ('role_type',('ic','manager'))):
         for value in values:
+            print('checking field',field,value,flush=True)
             page=store.query_published_jobs(user,filters={field:[value]},limit=1)
             fields.append({'filter':field,'value':value,'jobs':page['total'],'returned_row':bool(page['rows'])})
     for filters in ({'required_experience_min':1,'required_experience_max':3},{'skills_include':['SQL']},
                     {'role':['Data Analyst'],'skills_include':['SQL']}):
+        print('checking field combination',json.dumps(filters),flush=True)
         page=store.query_published_jobs(user,filters=filters,limit=1)
         if not page['rows']:raise RuntimeError('Expected a supported field-filter result')
         fields.append({'filters':filters,'jobs':page['total'],'returned_row':True})
     blue=local.execute("SELECT id FROM jobs WHERE is_current=1 AND json_extract(result,'$.collar')='blue' LIMIT 1").fetchone()[0]
     if store.get_published_job_row(blue) is not None:raise RuntimeError('Blue collar detail remains customer visible')
     verified={'verified_at':datetime.now(timezone.utc).isoformat(),'publication_id':first['publication']['publication_id'],
+              'transport':'Bounded Hrana HTTP executing unchanged customer repository SQL',
               'unfiltered_jobs':first['total'],'blue_detail_excluded':True,'function_checks':checks,'field_checks':fields,
               'browser_visual_check':'Not performed: browser security policy blocked the signed-in Runr page.'}
     (AUDIT/'verification.json').write_text(json.dumps(verified,indent=2),encoding='utf-8')
@@ -495,6 +546,7 @@ if __name__=='__main__':
     parser.add_argument('--rollback',action='store_true')
     parser.add_argument('--live-report',action='store_true')
     parser.add_argument('--verify-live',action='store_true')
+    parser.add_argument('--cache-source',action='store_true')
     args=parser.parse_args()
     local=initialize()
     if args.refresh_snapshot:refresh_snapshot(local)
@@ -502,6 +554,7 @@ if __name__=='__main__':
         rollback(local);report(local);sys.exit(0)
     if args.revalidate:revalidate(local)
     if not args.report_only:run(local,args)
+    if args.cache_source:cache_source_metadata(local)
     if args.publish:publish(local)
     report(local)
     if args.live_report:live_report()
