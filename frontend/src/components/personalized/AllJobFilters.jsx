@@ -1,79 +1,11 @@
+import JOB_FUNCTIONS from "../../../../backend/domain/job_function_taxonomy.json";
 import { useEffect, useState } from "react";
 
 const SECTIONS = ["Basic Job Criteria", "Compensation & Sponsorship", "Areas of Interests", "Company Insights"];
-const FUNCTIONS = {
-  "Software/Internet/AI": {
-    "Backend Engineering": ["Backend Engineer", "Full Stack Engineer"],
-    "Data & Analytics": ["Data Analyst", "Data Scientist", "Data Engineer", "Business/BI Analyst"],
-    "Machine Learning & AI": ["Machine Learning Engineer", "AI Engineer"],
-    "Frontend/Mobile/Game": ["Frontend Software Engineer"],
-    "System Reliability & Security": ["DevOps", "Cyber Security Analyst"],
-    Testing: ["Software Testing/Quality Assurance Engineer"],
-    "Project Management": ["Project/Program Manager"],
-    "Technical Leadership": ["Engineering Manager"],
-  },
-  Consulting: {
-    "IT Consulting": ["Business Analyst", "Data Consultant", "IT Consultant"],
-    "Business Strategy & Management Consulting": ["Business Strategy Consultant", "Market Research Analyst", "Operations Consultant"],
-    "Financial Advisory": ["Financial Consultant"],
-  },
-  Marketing: {
-    "SEO and Content Marketing": ["Content Marketing/Strategy", "Social Media Management", "SEO", "Copywriter"],
-    "Brand and Communications Marketing": ["Brand Manager"],
-    "Growth Marketing": ["Growth Marketing", "Performance Marketing"],
-    "Product Marketing": ["Product Marketing"],
-  },
-  Finance: {
-    "Investment/Financing": ["Financial Analyst", "Risk Analyst", "Quantitative Analyst/Researcher", "Portfolio Manager"],
-    Banking: ["Investment Banker", "Credit Analyst"],
-    "Corporate Finance": ["Corporate Finance Analyst"],
-    Insurance: ["Underwriter", "Actuary"],
-  },
-  Product: { "Product Management": ["Product Manager", "Product Analyst", "Technical Product Manager", "AI Product Manager", "Game Designer"] },
-  Healthcare: {
-    "Healthcare IT": ["Healthcare Data Analyst"],
-    "Health Product & Operations Management": ["Health Product Manager"],
-    "Clinical & Regulatory": ["Clinical Research Associate", "Clinical Research Scientist", "Biostatistician", "Medical Writer"],
-    "Biomedical Engineering & Technology": ["Biomedical Engineer"],
-  },
-  "Electrical Engineering": {
-    "Electronics & Hardware": ["Embedded Software Engineer", "Electronics Engineer", "Hardware Engineer"],
-    "Electrical & Automation": ["Electrical Engineer", "Robotics Engineer"],
-    Telecommunications: ["Network Engineer"],
-    "Electrical Vehicles": ["Battery Engineer"],
-  },
-  "Human Resource/Administrative/Legal": {
-    "Executive and Administrative": ["Administrative Assistant", "Executive Assistant", "Office Manager"],
-    "Human Resource": ["Human Resource Specialist", "Recruiter/Sourcer"],
-    Legal: ["Paralegal", "Corporate Counsel"],
-  },
-  Sales: {
-    "Business Development": ["Business Development"],
-    "Inside Sales": ["Sales Development Representative", "Account Executive"],
-    "Sales Management": ["Sales Manager"],
-    "Outside Sales": ["Enterprise Sales"],
-    "Retail Sales": ["Retail Sales"],
-    "Medical Sales": ["Medical Sales"],
-  },
-  "Production/Manufacturing": {
-    "Mechanical Design & Manufacturing": ["Mechanical Engineer", "Manufacturing Engineer", "Process Engineer"],
-    "Operations & Safety": ["Operations Manager/Director"],
-    "Quality Management": ["Quality Assurance Specialist"],
-    "Automotive R&D & Manufacturing": ["Automotive Engineer"],
-  },
-  "Customer Service": { "Customer Service": ["Customer Service Representative", "Customer Service Manager"], "Customer Support": ["Customer Support"], "Customer Success": ["Customer Success"] },
-  "Creative & Design": { "UI/UX Design": ["UX Designer", "UI Designer", "Graphic Designer", "UX Researcher"], "Art/3D/Animation": ["Video Editor", "Illustrator", "3D Designer"], "Industrial Design": ["Industrial Designer"] },
-  "Logistics/Supply Chain": { "Supply Chain Management": ["Supply Chain Manager", "Inventory Manager"], "Logistics Operations": ["Logistics Manager", "Warehouse Manager"], "Procurement and Facilities": ["Procurement Manager"] },
-  "Public Sector and Government": { "Non-profit": ["Program Manager"], "Policy and Planning": ["Policy Analyst"], "Public Administration": ["Government Relations Manager"] },
-  "Legal Services": { "Compliance & Risk Management": ["Compliance Specialist"], "Paralegals & Legal Support": ["Legal Assistant", "Paralegal"], "Legal Operations & Administration": ["Legal Operations Manager"], "Legal Practice": ["Lawyer"] },
-  "Education and Training": { "Academic Teaching": ["Higher Education Teaching", "K-12 Teaching"], "Corporate Training and Development": ["Corporate Training and Development"], "Educational Administration": ["Educational Administration"] },
-  Accounting: { Accounting: ["Accountant", "Controller"], "Tax and Audit": ["Auditor", "Tax Specialist"] },
-  "Real Estate/Architecture": { Construction: ["Construction Project Manager", "Civil Engineer"], "Real Estate": ["Property Manager"], Architecture: ["Architect", "Urban Planner"] },
-  "Energy/Environmental": { "Energy Engineering": ["Renewable Energy Engineer", "Energy Engineer"], "Environmental Engineering": ["Environmental Scientist", "Environmental Engineer"] },
-};
+const FUNCTIONS = JOB_FUNCTIONS;
 
 const CHOICES = {
-  employmentType: [["full_time", "Full-time"], ["contract", "Contract"], ["part_time", "Part-time"], ["internship", "Internship"]],
+  employmentType: [["full_time", "Full-time"], ["contract", "Contract"], ["part_time", "Part-time"], ["internship", "Internship"], ["working_student", "Working student"], ["apprenticeship", "Apprenticeship"]],
   workArrangement: [["onsite", "Onsite"], ["hybrid", "Hybrid"], ["remote", "Remote"]],
   experienceLevel: [["intern", "Intern/New Grad"], ["entry", "Entry Level"], ["mid", "Mid Level"], ["senior", "Senior Level"], ["lead", "Lead/Staff"], ["director", "Director/Executive"]],
   datePosted: [["24h", "Past 24 hours"], ["3d", "Past 3 days"], ["7d", "Past week"], ["30d", "Past month"]],

@@ -73,6 +73,24 @@ def _seed_catalog(app, *, valid_until: str = "") -> None:
 
 
 class PhaseCPersonalizedJobsTests(unittest.TestCase):
+    def test_multiple_functions_and_blue_collar_exclusion_match_current_versions(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        with store._connect() as connection:
+            connection.executemany("INSERT INTO job_filter_intelligence VALUES (?, ?, ?, ?, ?, ?, ?)", [
+                ("version-job-a", "job-a", "hash-job-a", json.dumps({"collar": "white", "roles": ["Data Analyst", "Business Analyst"]}), "mistralai/mistral-nemo", "v2", utc_now_iso()),
+                ("version-job-b", "job-b", "hash-job-b", json.dumps({"collar": "blue", "roles": []}), "mistralai/mistral-nemo", "v2", utc_now_iso()),
+            ])
+        for filters in ({}, {"role": ["Data Analyst"]}, {"role": ["Business Analyst"]}, {"sort": "priority"}):
+            page = app.get_personalized_jobs("user-a", filters=filters)
+            self.assertEqual(page["total"], 1, filters)
+            self.assertEqual(page["jobs"][0]["canonical_job_id"], "job-a")
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={"role": ["Data"]})["total"], 0)
+        with store._connect() as connection:
+            connection.execute("UPDATE job_filter_intelligence SET content_hash='stale' WHERE version_id='version-job-b'")
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={})["total"], 2)
+
     def _backend(self):
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)

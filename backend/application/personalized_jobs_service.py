@@ -372,6 +372,16 @@ def _payload_for_row(row: Mapping[str, Any]) -> dict[str, Any]:
     nested = payload.get("job")
     if isinstance(nested, Mapping):
         payload = {**payload, **dict(nested)}
+    intelligence = _parse_json(row.get("filter_json"))
+    for key in ("work_arrangement", "employment_type", "experience_level", "skills", "role_type"):
+        value = intelligence.get(key)
+        if payload.get(key) in (None, "", [], "unknown", "Unknown") and value not in (None, "", []):
+            payload[key] = value
+    if type(intelligence.get("required_experience_years")) in (int, float):
+        if type(payload.get("experience_years_min")) not in (int, float):
+            payload["experience_years_min"] = intelligence["required_experience_years"]
+    if intelligence.get("roles"):
+        payload["roles"] = intelligence["roles"]
     return payload
 
 
@@ -390,7 +400,7 @@ def _normalize_arrangement(value: Any) -> str | None:
         return "remote"
     if normalized in {"hybrid", "flexible hybrid"}:
         return "hybrid"
-    if normalized in {"onsite", "on site", "in person", "office"}:
+    if normalized in {"onsite", "on site", "in person", "office", "vor ort", "vor_ort", "präsenz"}:
         return "onsite"
     return normalized.replace(" ", "_")
 
@@ -570,7 +580,10 @@ def _job_projection(
         "location": location or None,
         "work_arrangement": arrangement,
         "employment_type": _text(employment) or None,
-        "experience_level": _text(experience) or None,
+        "experience_level": _text(experience[-1] if isinstance(experience, list) and experience else experience) or None,
+        "experience_levels": experience if isinstance(experience, list) else ([experience] if experience else []),
+        "required_experience_years": payload.get("experience_years_min"),
+        "job_functions": payload.get("roles") or [],
         "category": _text(category) or None,
         "description": _text(row.get("description") or payload.get("description")) or None,
         "salary": salary,

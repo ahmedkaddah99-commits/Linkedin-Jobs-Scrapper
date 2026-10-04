@@ -1156,6 +1156,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if field == "company":
                 predicates.append("LOWER(catalog.company) IN (" + ",".join("?" for _ in values) + ")")
                 params.extend(values)
+            elif field == "role":
+                clauses = []
+                for value in values:
+                    clauses.append("(EXISTS(SELECT 1 FROM json_each(catalog.filter_json, '$.roles') role WHERE LOWER(role.value) = ?) OR (json_type(catalog.filter_json, '$.roles') IS NULL AND (LOWER(COALESCE(json_extract(catalog.filter_json, '$.role'), '')) = ? OR LOWER(catalog.title) LIKE ?)))")
+                    params.extend((value, value, f"%{value}%"))
+                predicates.append("(" + " OR ".join(clauses) + ")")
             elif field == "skills_include":
                 legacy = ["$.skills", "$.required_skills", "$.structured_description.skills"]
                 clauses = []
@@ -1256,6 +1262,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+              AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
 
     @staticmethod
@@ -1268,9 +1275,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             FROM acquisition_publication_jobs pj
             JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN canonical_companies c ON c.company_id = j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN job_filter_intelligence fi ON fi.version_id = v.version_id
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+              AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
 
     @staticmethod
@@ -1284,8 +1294,10 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN canonical_companies c ON c.company_id = j.company_id
             LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
+            LEFT JOIN job_filter_intelligence fi ON fi.version_id = v.version_id
             LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
+              AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
 
     def _hydrate_feed_page(
@@ -1755,6 +1767,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
               )
             WHERE pj.publication_id = ?
               AND c.entity_kind = 'employer'
+              AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
 
     def enqueue_customer_task(

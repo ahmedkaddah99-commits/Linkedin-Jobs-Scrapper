@@ -382,6 +382,8 @@ export function toPersonalizedJobView(job = {}) {
     title: unknown(safeJob.title, "Untitled job"),
     location: unknown(safeJob.location),
     experienceLevel,
+      experienceLevels: Array.isArray(safeJob.experience_levels) ? safeJob.experience_levels : [],
+      requiredExperienceYears: typeof safeJob.required_experience_years === "number" ? safeJob.required_experience_years : null,
     workArrangement,
     employmentType: unknown(safeJob.employment_type),
     category: unknown(safeJob.category),

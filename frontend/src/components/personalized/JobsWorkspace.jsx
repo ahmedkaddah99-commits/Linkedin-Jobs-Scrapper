@@ -320,7 +320,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const structured = job.structuredDescription || {};
   const extracted = (name) => structured[name]?.value;
   const present = (value) => value && String(value).toLowerCase() !== "unknown" ? value : null;
-  const yearsMin = extracted("experience_years_min");
+    const yearsMin = extracted("experience_years_min") ?? job.requiredExperienceYears;
   const yearsMax = extracted("experience_years_max");
   const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}–${yearsMax} years experience` : `${yearsMin}+ years experience`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years experience` : null);
   const salary = extracted("salary");
@@ -330,15 +330,16 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const seniorityLabel = (value) => ({ entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
   const scrapedSalary = present(job.salaryLabel) && job.salary?.period ? `${job.salaryLabel}/${job.salary.period}` : null;
   const employment = employmentTypeLabel(present(job.employmentType), extracted("employment_type"), job.title);
-  const seniority = seniorityFromYears(yearsMin) || alternativeSeniority(summary.required_qualifications, structured.source_passages) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
-  const facts = pilot ? [
+    const extractedLevels = (job.experienceLevels || []).map(seniorityLabel).filter(Boolean).join(", ");
+    const seniority = extractedLevels || seniorityFromYears(yearsMin) || alternativeSeniority(summary.required_qualifications, structured.source_passages) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
+    const facts = [
     ["location_on", present(job.location) || extracted("location")],
     ["home_work", arrangementLabel(present(job.workArrangement)) || arrangementLabel(extracted("work_arrangement"))],
     ["alarm", employment, "jobs-reading__fact--stacked"],
     ["crown", seniority, "jobs-reading__fact--stacked"],
     ["calendar_month", years],
     ["payments", scrapedSalary || salaryText],
-  ] : [["location_on", job.location], ["home_work", job.workArrangement], ["schedule", job.employmentType], ["payments", job.salaryLabel]];
+    ];
   const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
   const available = (job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview)
     || (pilot && ["responsibilities", "required_qualifications", "preferred_qualifications", "benefits"].some((key) => summary[key]?.length));

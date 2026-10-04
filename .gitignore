@@ -95,3 +95,20 @@ data/audit/publication_reuse_*/
 # Legacy local folders
 bc_automation
 
+# Isolated checkouts and reproducible model-run evidence (retain human reports).
+.worktrees/
+data/audit/catalog_classification_2026-10-04/*
+!data/audit/catalog_classification_2026-10-04/REPORT.md
+!data/audit/catalog_classification_2026-10-04/summary.json
+!data/audit/catalog_classification_2026-10-04/live_counts.json
+data/audit/corporate_description_followup_2026-10-02/*
+!data/audit/corporate_description_followup_2026-10-02/REPORT.md
+data/audit/corporate_description_pilot_2026-10-02/*
+!data/audit/corporate_description_pilot_2026-10-02/REPORT.md
+data/audit/german_corporate_description_pilot_2026-10-02/*
+!data/audit/german_corporate_description_pilot_2026-10-02/REPORT.md
+data/audit/job_description_model_comparison_2026-10-01/*
+!data/audit/job_description_model_comparison_2026-10-01/REPORT.md
+!data/audit/job_description_model_comparison_2026-10-01/REPORT_full_capture.md
+data/audit/white_collar_filter_pilot_2026-10-04/cohort.json
+
