@@ -1335,15 +1335,15 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                       AND e.evaluator_version = 'phase_e_v2'
                     ORDER BY e.updated_at DESC LIMIT 1) AS evaluation_payload,
                    0.0 AS priority_score, 2147483647 AS competition_score
-            FROM ({self._published_jobs_sql()}
+            FROM ({self._published_jobs_sql(compact_payload=True)}
                   AND j.canonical_job_id IN ({placeholders})) AS hydrated
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = hydrated.canonical_job_id AND d.user_id = ?
         """
-        rows = connection.execute(
+        rows = connection.fetch_read_rows(
             sql,
             (str(user_id), str(publication_id), *canonical_job_ids, str(user_id)),
-        ).fetchall()
+        )
         order = {job_id: index for index, job_id in enumerate(canonical_job_ids)}
         return sorted(rows, key=lambda row: order[str(row["canonical_job_id"])])
 
@@ -1458,7 +1458,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     if cursor else ""
                 )
                 match_sort = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
-                page_result = connection.execute(
+                page_result = connection.fetch_read_rows(
                     f"""
                     /* feed_page_ids */
                     WITH matches AS MATERIALIZED (
@@ -1474,7 +1474,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     FROM totals LEFT JOIN page_ids ON 1=1
                     """,
                     (*candidate_params, *cursor_params, limit + 1),
-                ).fetchall()
+                )
                 total = int(page_result[0]["total"] or 0)
                 rows = self._hydrate_feed_page(
                     connection,
@@ -1594,10 +1594,15 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "hidden_companies": "COALESCE(catalog.company, '') != ''",
         }
         with self._connect() as connection:
-            publication_id = self._head_publication_id(connection)
-            if not publication_id:
+            head = connection.execute(
+                "SELECT h.publication_id, h.updated_at FROM acquisition_publication_head h "
+                "JOIN acquisition_publications p ON p.publication_id=h.publication_id "
+                "WHERE h.head_id=1 AND p.status='valid'"
+            ).fetchone()
+            if head is None:
                 return {key: False for key in capability_exprs}
-            cache_key = str(publication_id)
+            publication_id = str(head["publication_id"])
+            cache_key = f"{publication_id}:{head['updated_at']}"
             cached = self._filter_capabilities_cache.get(cache_key)
             if cached is not None:
                 return dict(cached)
@@ -1684,8 +1689,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         return str(row["publication_id"] or "") if row is not None else ""
 
     @staticmethod
-    def _published_jobs_sql() -> str:
-        return """
+    def _published_jobs_sql(*, compact_payload: bool = False) -> str:
+        sql = """
             SELECT
                 j.canonical_job_id, j.company_id, c.canonical_name AS company,
                 c.entity_kind AS company_entity_kind, c.provenance_url AS company_provenance_url,
@@ -1783,6 +1788,16 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
               AND c.entity_kind = 'employer'
               AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
+        if compact_payload:
+            # Acquisition audit data stays in the immutable posting version.
+            # Feed projections consume public job fields, not this history.
+            sql = sql.replace(
+                "v.payload_json AS version_payload_json",
+                "json_remove(v.payload_json, '$.source_raw_payload', '$.unified_mapping', "
+                "'$.field_provenance', '$.normalized_source_metadata', '$.content_fingerprint') "
+                "AS version_payload_json",
+            )
+        return sql
 
     def enqueue_customer_task(
         self,

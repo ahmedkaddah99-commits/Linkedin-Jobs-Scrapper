@@ -29,6 +29,40 @@ class UnrelatedBaseException(BaseException):
 
 
 class DatabaseConnectionTests(unittest.TestCase):
+    def test_remote_page_read_fetches_typed_rows_in_one_http_request(self):
+        import io
+        import json
+
+        payload = {"results": [{"type": "ok", "response": {"result": {
+            "cols": [{"name": "id"}, {"name": "name"}, {"name": "score"}, {"name": "optional"}],
+            "rows": [[{"type": "integer", "value": "7"}, {"type": "text", "value": "job"},
+                      {"type": "float", "value": 1.5}, {"type": "null"}]],
+        }}}]}
+        raw = Mock()
+        connection = DatabaseConnection(raw, backend="libsql")
+        with patch.dict(os.environ, {"TURSO_DATABASE_URL": "libsql://example.turso.io", "TURSO_AUTH_TOKEN": "test-token"}), patch(
+            "backend.database.connection.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())
+        ) as request:
+            rows = connection.fetch_read_rows("/* feed_page_hydration */ SELECT ?, ?, ?, ?", (7, "job", 1.5, None))
+        self.assertEqual(dict(rows[0]), {"id": 7, "name": "job", "score": 1.5, "optional": None})
+        body = json.loads(request.call_args.args[0].data)
+        self.assertEqual(body["requests"][0]["stmt"]["args"][0], {"type": "integer", "value": "7"})
+        self.assertEqual(body["requests"][-1], {"type": "close"})
+        self.assertEqual(request.call_args.kwargs["timeout"], 15)
+        raw.execute.assert_not_called()
+
+    def test_http_page_reads_reject_writes_and_preserve_transaction_connection(self):
+        connection = DatabaseConnection(Mock(), backend="libsql")
+        with self.assertRaises(ValueError):
+            connection.fetch_read_rows("UPDATE jobs SET title='changed'")
+        with self.assertRaises(ValueError):
+            connection.fetch_read_rows("WITH selected AS (SELECT 1) DELETE FROM jobs")
+        connection._transaction_depth = 1
+        with patch.object(connection, "execute") as execute:
+            execute.return_value.fetchall.return_value = ["transaction row"]
+            self.assertEqual(connection.fetch_read_rows("SELECT title FROM jobs"), ["transaction row"])
+            execute.assert_called_once_with("SELECT title FROM jobs", ())
+
     def _db_path(self, name: str) -> Path:
         path = Path.cwd() / ".backend_test_tmp" / name / "backend.sqlite3"
         if path.parent.exists():

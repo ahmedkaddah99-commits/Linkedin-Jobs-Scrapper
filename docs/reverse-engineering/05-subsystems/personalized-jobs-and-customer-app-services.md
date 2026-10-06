@@ -269,6 +269,26 @@ From `git log --oneline 58a96674 -- <WS-4 application files, sqlite_personalized
 **(c) Gap/ticket candidates**: WS4-G1 (ScrapeOps policy naming and writer), WS4-G2 (dead rollout service), WS4-G3 (worker→API import inversion), WS4-G4 (stale specs), WS4-G5 (quota/customer-task tests), WS4-G6 (env_schema coverage). No new Linear tickets created.
 # Job filter contract (2026-10-03)
 
+## Jobs feed read performance (2026-10-06)
+
+The newest feed fetches page IDs and page hydration through bounded Turso Hrana
+HTTP SELECT requests. SQLite and managed transaction reads retain their existing
+connection. The HTTP path binds parameters, closes its remote stream, applies a
+15-second request timeout and the existing bounded retry policy, and returns the
+same typed database rows. Feed hydration removes only acquisition audit envelopes
+(`source_raw_payload`, `unified_mapping`, `field_provenance`,
+`normalized_source_metadata`, `content_fingerprint`); detail hydration still reads
+the full immutable posting payload. Public job fields, filtering and version/hash
+classification checks are preserved. Filter capability cache keys include the
+head timestamp because incremental publication can change a publication in place.
+
+A read-only comparison against the live catalog returned the same 25,342-job count
+and 26 first-page rows. Compact job payload bytes fell from 2,803,702 to 424,803.
+Two local calls against live Turso through the changed repository took 3.11 and
+3.17 seconds. These are repository measurements, not browser or deployed API
+timings. Regression coverage is in `tests/test_jobs_feed_performance.py` and
+`tests/test_database_connection.py`.
+
 The Jobs workspace now sends multi-select filters as repeated query parameters and saves named filter sets through `GET/POST /personalized-jobs/filter-sets` and `DELETE /personalized-jobs/filter-sets/{id}`. Migration `067_personalized_filter_sets` stores these separately from the legacy single default saved search. The service normalizes the request, and `SQLitePersonalizedJobsRepository._feed_filter_sql` applies predicates before pagination.
 
 The drawer exposes job function, excluded title, job type, work model, country/location, experience level and years, posting age, minimum salary, sponsorship, clearance/citizenship exclusions, industry/skill inclusion and exclusion, role type, company/stage, and staffing agency exclusion. Filters derived from job or company metadata only match records with those fields populated. The source catalog does not yet supply dependable coordinates for a distance radius, so radius filtering is not offered. The Jobright role list is represented as a starter taxonomy and also accepts custom terms.

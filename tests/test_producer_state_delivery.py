@@ -19,6 +19,7 @@ from scripts.publish_producer_states import (
     _current_employer_jobs,
     _latest_employer_statuses,
     _source_group_from_rows,
+    _source_state_target_ids,
     _delivery_transaction_batches,
     _enrich_source_groups,
     _publisher_transaction_limits,
@@ -33,6 +34,21 @@ import json
 import sqlite3
 import pytest
 from datetime import datetime, timezone
+
+
+def test_source_state_lookup_is_scoped_to_current_targets(tmp_path):
+    store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
+    target = _target({"canonical_company_id": "company-scope", "canonical_company_name": "Company"}, SOURCE_EMPLOYER)
+    store.ensure_targets([target])
+    store.ingest_snapshots_bulk([{
+        "cycle_id": "scope-cycle", "task_id": "scope-task", "target_id": target["target_id"],
+        "observed_at": "2026-10-06T01:00:00+00:00",
+        "jobs": [{"job_id": "job", "title": "Engineer", "url": "https://company.example/job"}],
+        "complete_snapshot": True, "valid_snapshot": True, "closure_safe": False,
+    }])
+    assert _source_state_target_ids(store, target_ids=["unrelated"]) == set()
+    assert _source_state_target_ids(store, target_ids=[target["target_id"]]) == {target["target_id"]}
+    assert _source_state_target_ids(store, target_ids=[]) == set()
 
 
 def test_incremental_publication_updates_only_affected_task_counts():
@@ -475,6 +491,41 @@ def test_bulk_projection_remote_call_count_is_constant_per_batch(tmp_path, monke
     assert twenty_jobs == one_job
     assert twenty_jobs["executemany"] == 5
     assert twenty_jobs["execute"] < 40
+
+
+def test_bulk_projection_updates_search_batch_ids_instead_of_scanning_catalog(tmp_path, monkeypatch):
+    from backend.database.connection import DatabaseConnection
+
+    store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
+    target = _target(
+        {"canonical_company_id": "company-plan", "canonical_company_name": "Company"},
+        SOURCE_EMPLOYER,
+    )
+    store.ensure_targets([target])
+    original_execute = DatabaseConnection.execute
+    plans = []
+
+    def checked_execute(connection, sql, parameters=()):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("UPDATE ") and any(
+            normalized.startswith("UPDATE " + table + " AS ")
+            for table in ("canonical_jobs", "job_source_states", "canonical_job_external_ids", "acquisition_tasks")
+        ):
+            plan = original_execute(connection, "EXPLAIN QUERY PLAN " + sql, parameters).fetchall()
+            plans.append((normalized, [row["detail"] for row in plan]))
+        return original_execute(connection, sql, parameters)
+
+    monkeypatch.setattr(DatabaseConnection, "execute", checked_execute)
+    store.ingest_snapshots_bulk([{
+        "cycle_id": "cycle-plan", "task_id": "task-plan", "target_id": target["target_id"],
+        "observed_at": "2026-10-06T01:00:00+00:00",
+        "jobs": [{"job_id": "job-plan", "title": "Engineer", "url": "https://company.example/jobs/plan"}],
+        "complete_snapshot": True, "valid_snapshot": True, "closure_safe": True,
+    }])
+    assert len(plans) >= 8
+    for sql, plan in plans:
+        alias = sql.split()[3]
+        assert not any(detail == f"SCAN {alias}" for detail in plan), (sql, plan)
 
 
 def test_bulk_projection_failure_rolls_back_staging_and_projection(tmp_path, monkeypatch):

@@ -1081,10 +1081,21 @@ def _terminal_cycle_task_statuses(
     }
 
 
-def _source_state_target_ids(store: SqliteAcquisitionStore) -> set[str]:
+def _source_state_target_ids(store: SqliteAcquisitionStore, *, target_ids: Iterable[str]) -> set[str]:
+    ids = sorted({str(value) for value in target_ids if str(value)})
+    found: set[str] = set()
+    if not ids:
+        return found
     with store._connect() as connection:
-        rows = connection.execute("SELECT DISTINCT target_id FROM job_source_states").fetchall()
-    return {_text(row["target_id"]) for row in rows if _text(row["target_id"])}
+        for offset in range(0, len(ids), 400):
+            batch = ids[offset:offset + 400]
+            placeholders = ",".join("?" for _ in batch)
+            rows = connection.fetch_read_rows(
+                f"SELECT DISTINCT target_id FROM job_source_states WHERE target_id IN ({placeholders})",
+                batch,
+            )
+            found.update(_text(row["target_id"]) for row in rows if _text(row["target_id"]))
+    return found
 
 
 def _bulk_complete_empty_tasks(
@@ -2020,7 +2031,7 @@ def run_delivery(
         publish_targets(resumed_target_ids)
         delivery_items: list[tuple[str, str]] = []
         bulk_empty_items: list[tuple[str, str, str, bool, bool, str]] = []
-        source_state_target_ids = _source_state_target_ids(store)
+        source_state_target_ids = _source_state_target_ids(store, target_ids=(target["target_id"] for target in targets))
         for source, changed_ids in changed_by_source.items():
             source_metrics[source]["companies_pending_source_state"] = 0
             source_metrics[source]["jobs_delivered"] = 0

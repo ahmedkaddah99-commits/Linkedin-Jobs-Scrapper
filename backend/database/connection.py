@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, TypeVar
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 DatabaseParameters = Sequence[Any] | Mapping[str, Any]
 ResultT = TypeVar("ResultT")
@@ -490,6 +494,64 @@ class DatabaseConnection:
         if pending.strip():
             last_cursor = self.execute(pending.strip())
         return last_cursor
+
+    def fetch_read_rows(self, sql: str, parameters: Sequence[Any] = ()) -> list[DatabaseRow]:
+        """Fetch a bounded SELECT in one response instead of streaming driver rows."""
+        statement = sql.lstrip()
+        while statement.startswith("/*"):
+            statement = statement.split("*/", 1)[-1].lstrip()
+        tokens = re.sub(r"'(?:''|[^'])*'|/\*.*?\*/|--[^\n]*", " ", statement, flags=re.DOTALL)
+        if not statement.upper().startswith(("SELECT ", "WITH ")) or re.search(
+            r"\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|ATTACH|DETACH|PRAGMA)\b", tokens, re.IGNORECASE
+        ):
+            raise ValueError("Page reads require a SELECT statement.")
+        if self.backend != "libsql" or self._transaction_depth:
+            return self.execute(sql, parameters).fetchall()
+        target = _remote_database_url().replace("libsql://", "https://").rstrip("/")
+        token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+        if not target or not token:
+            raise DatabaseConfigurationError("Turso page reads require database URL and auth token.")
+
+        def parameter(value):
+            if value is None:
+                return {"type": "null"}
+            if isinstance(value, int):
+                return {"type": "integer", "value": str(value)}
+            if isinstance(value, float):
+                return {"type": "float", "value": value}
+            return {"type": "text", "value": str(value)}
+
+        body = {"requests": [
+            {"type": "execute", "stmt": {"sql": sql, "args": [parameter(value) for value in parameters], "want_rows": True}},
+            {"type": "close"},
+        ]}
+        request = Request(target + "/v2/pipeline", data=json.dumps(body).encode(), headers={
+            "Authorization": "Bearer " + token, "Content-Type": "application/json",
+        })
+
+        def fetch():
+            try:
+                with urlopen(request, timeout=15) as response:
+                    payload = json.load(response)
+            except HTTPError as exc:
+                raise RuntimeError(f"Turso page read HTTP {exc.code}") from None
+            result = payload["results"][0]
+            if result["type"] != "ok":
+                code = str(result.get("error", {}).get("code", "unknown"))
+                raise RuntimeError(f"Turso page read statement error: {code}")
+            result = result["response"]["result"]
+            columns = [column["name"] for column in result["cols"]]
+
+            def decode(cell):
+                if cell["type"] == "null":
+                    return None
+                if cell["type"] == "integer":
+                    return int(cell["value"])
+                return cell["value"]
+
+            return [DatabaseRow(columns, [decode(cell) for cell in row]) for row in result["rows"]]
+
+        return _retry_libsql_operation("page_read", fetch)
 
     def commit(self) -> None:
         try:

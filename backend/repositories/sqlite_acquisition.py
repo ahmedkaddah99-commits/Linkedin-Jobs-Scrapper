@@ -2084,9 +2084,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 updated_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
                             WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
                               AND s.projection_action IN ('update','unchanged'))
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
-                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
-                            AND s.projection_action IN ('update','unchanged'))
+            WHERE j.canonical_job_id IN (SELECT s.resolved_canonical_job_id FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.projection_action IN ('update','unchanged'))
             """,
             (batch_id,) * 8,
         )
@@ -2133,7 +2132,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 last_cycle_id=(SELECT b.cycle_id FROM acquisition_ingest_batches b WHERE b.batch_id=?),
                 updated_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
                             WHERE target.batch_id=? AND target.target_id=state.target_id)
-            WHERE EXISTS (
+            WHERE state.target_id IN (SELECT target_id FROM acquisition_ingest_targets WHERE batch_id=?)
+              AND EXISTS (
                 SELECT 1 FROM acquisition_ingest_targets target
                 WHERE target.batch_id=? AND target.target_id=state.target_id
                   AND target.complete_snapshot=1 AND target.valid_snapshot=1
@@ -2147,7 +2147,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                   )
             )
             """,
-            (batch_id,) * 4,
+            (batch_id,) * 5,
         )
         connection.execute(
             """
@@ -2158,13 +2158,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                 last_cycle_id=(SELECT b.cycle_id FROM acquisition_ingest_batches b WHERE b.batch_id=?),
                 updated_at=(SELECT target.observed_at FROM acquisition_ingest_targets target
                             WHERE target.batch_id=? AND target.target_id=state.target_id)
-            WHERE state.lifecycle_state IN ('active','stale') AND EXISTS (
+            WHERE state.target_id IN (SELECT target_id FROM acquisition_ingest_targets WHERE batch_id=?)
+              AND state.lifecycle_state IN ('active','stale') AND EXISTS (
                 SELECT 1 FROM acquisition_ingest_targets target
                 WHERE target.batch_id=? AND target.target_id=state.target_id
                   AND target.valid_snapshot=0 AND state.last_checked_at<target.observed_at
             )
             """,
-            (batch_id,) * 4,
+            (batch_id,) * 5,
         )
         connection.execute(
             """
@@ -2196,10 +2197,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                                    WHERE target.batch_id=?
                                      AND s.canonical_job_id=job.canonical_job_id), updated_at)
                 END
-            WHERE EXISTS (
-                SELECT 1 FROM job_source_states state
-                JOIN acquisition_ingest_targets target ON target.target_id=state.target_id
-                WHERE target.batch_id=? AND state.canonical_job_id=job.canonical_job_id
+            WHERE job.canonical_job_id IN (
+                SELECT state.canonical_job_id FROM acquisition_ingest_targets target
+                JOIN job_source_states state ON state.target_id=target.target_id
+                WHERE target.batch_id=?
             )
             """,
             (batch_id,) * 3,
@@ -2223,12 +2224,14 @@ class SqliteAcquisitionStore(_SqliteStore):
             SET last_seen_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
                               WHERE s.batch_id=? AND s.target_id=e.source_id
                                 AND s.external_job_id=e.external_job_id)
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+            WHERE (e.source_id, e.external_job_id) IN (
+                SELECT target_id, external_job_id FROM acquisition_ingest_staging WHERE batch_id=?
+            ) AND EXISTS (SELECT 1 FROM acquisition_ingest_staging s
                           WHERE s.batch_id=? AND s.target_id=e.source_id
                             AND s.external_job_id=e.external_job_id
                             AND s.observed_at>e.last_seen_at)
             """,
-            (batch_id, batch_id),
+            (batch_id,) * 3,
         )
         connection.execute(
             """
@@ -2292,13 +2295,15 @@ class SqliteAcquisitionStore(_SqliteStore):
                 updated_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
                             WHERE s.batch_id=? AND s.target_id=state.target_id
                               AND s.external_job_id=state.external_job_id)
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
+            WHERE (state.target_id, state.external_job_id) IN (
+                SELECT target_id, external_job_id FROM acquisition_ingest_staging WHERE batch_id=?
+            ) AND EXISTS (SELECT 1 FROM acquisition_ingest_staging s
                           WHERE s.batch_id=? AND s.target_id=state.target_id
                             AND s.external_job_id=state.external_job_id
                             AND s.projection_action!='replay'
                             AND s.observed_at>state.last_checked_at)
             """,
-            (batch_id,) * 7,
+            (batch_id,) * 8,
         )
         # Source-state upserts above may reactivate a canonical job. Recompute
         # after both absence processing and present-row projection so a late
@@ -2333,10 +2338,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                                    WHERE target.batch_id=?
                                      AND s.canonical_job_id=job.canonical_job_id), updated_at)
                 END
-            WHERE EXISTS (
-                SELECT 1 FROM job_source_states state
-                JOIN acquisition_ingest_targets target ON target.target_id=state.target_id
-                WHERE target.batch_id=? AND state.canonical_job_id=job.canonical_job_id
+            WHERE job.canonical_job_id IN (
+                SELECT state.canonical_job_id FROM acquisition_ingest_targets target
+                JOIN job_source_states state ON state.target_id=target.target_id
+                WHERE target.batch_id=?
             )
             """,
             (batch_id,) * 3,
@@ -2386,9 +2391,8 @@ class SqliteAcquisitionStore(_SqliteStore):
             SET current_version_id=(SELECT v.version_id FROM job_posting_versions v
                                     WHERE v.canonical_job_id=j.canonical_job_id
                                     ORDER BY v.version_number DESC LIMIT 1)
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
-                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=j.canonical_job_id
-                            AND s.projection_action IN ('new','update'))
+            WHERE j.canonical_job_id IN (SELECT s.resolved_canonical_job_id FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.projection_action IN ('new','update'))
             """,
             (batch_id,),
         )
@@ -2530,9 +2534,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                                            ORDER BY s.observed_at DESC LIMIT 1),''),closed_at),
                 last_reprocessed_at=(SELECT MAX(s.observed_at) FROM acquisition_ingest_staging s
                                      WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id)
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_staging s
-                          WHERE s.batch_id=? AND s.resolved_canonical_job_id=job.canonical_job_id
-                            AND s.projection_action IN ('new','update','unchanged'))
+            WHERE job.canonical_job_id IN (SELECT s.resolved_canonical_job_id FROM acquisition_ingest_staging s
+                          WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged'))
             """,
             (batch_id,) * 5,
         )
@@ -2589,8 +2592,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 lease_owner='', lease_token='', lease_expires_at='',
                 updated_at=(SELECT t.observed_at FROM acquisition_ingest_targets t
                             WHERE t.batch_id=? AND t.task_id=task.task_id)
-            WHERE EXISTS (SELECT 1 FROM acquisition_ingest_targets t
-                          WHERE t.batch_id=? AND t.task_id=task.task_id)
+            WHERE task.task_id IN (SELECT t.task_id FROM acquisition_ingest_targets t
+                          WHERE t.batch_id=?)
             """,
             (batch_id,) * 15,
         )

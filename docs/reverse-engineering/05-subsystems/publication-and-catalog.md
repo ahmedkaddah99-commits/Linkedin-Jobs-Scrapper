@@ -86,6 +86,15 @@ Per-target published counts are recomputed only for the delivered targets and an
 other targets in the cycle sharing changed jobs. Pending and unrelated tasks retain
 their existing counts and timestamps, rather than being rewritten on every batch.
 
+The bulk projector now drives mutable job, source-state, external-ID, and task
+updates from the current batch's IDs. Correlated lifecycle and timestamp checks
+still apply, but their outer UPDATE no longer scans the complete durable table.
+The publisher's source-state lookup also scopes IDs to current targets, in groups
+of at most 400, and retrieves its read-only result through the bounded HTTP read
+path. It no longer streams every historical target through the native driver
+before beginning delivery. `tests/test_producer_state_delivery.py` checks query
+plans, target scoping, replay, closure, atomic rollback, and version history.
+
 Ordinary small-company snapshots no longer execute the legacy dependent query series once per job. `run_delivery` packs at most 50 companies and 100 total source rows by default, normalizes them before remote projection, and calls `SqliteAcquisitionStore.ingest_snapshots_bulk`. Migration `062_acquisition_bulk_ingest_staging` supplies batch-scoped staging tables loaded through bounded `executemany` calls. Set-based projection preserves canonical company and job identity, append-only observations, immutable version history, source-state and closure rules, lifecycle recomputation, normalization provenance, completeness reports, and task evidence in one transaction.
 
 Same-cycle rows are replay no-ops. A newer observation with an existing stable content hash appends observation evidence and refreshes lifecycle timestamps without creating another version. A failed projection rolls back only its bounded batch. Companies above the shared row cap are deferred until ordinary batches finish, then isolated and projected in at-most-20-row set-based chunks; intermediate chunks cannot authorize absence closure, the final chunk supplies the full external-ID inventory, and committed intermediate chunks skip projection on retry. Empty status-only companies retain the bulk completion path. Publication creation and checkpoint advancement are unchanged: the previous head remains active until `publish_valid_snapshot` commits, and checkpoints advance only afterward.

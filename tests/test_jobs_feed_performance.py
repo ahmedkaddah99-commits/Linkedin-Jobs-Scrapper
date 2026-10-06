@@ -8,6 +8,21 @@ from backend.bootstrap import create_backend
 from tests.test_phase_c_personalized_jobs import _seed_catalog
 
 
+def _append_test_payload(connection, payload_json):
+    connection.execute(
+        """INSERT INTO job_posting_versions (
+            version_id, canonical_job_id, version_number, content_hash, title,
+            description, location, apply_url, source_observation_id, payload_json, created_at
+        ) SELECT 'version-performance', canonical_job_id, version_number+1,
+                 content_hash, title, description, location, apply_url,
+                 source_observation_id, ?, created_at
+          FROM job_posting_versions WHERE version_id=(
+              SELECT current_version_id FROM canonical_jobs WHERE canonical_job_id='job-a')""",
+        (payload_json,),
+    )
+    connection.execute("UPDATE canonical_jobs SET current_version_id='version-performance' WHERE canonical_job_id='job-a'")
+
+
 def _promote_new_publication(app, publication_id: str, job_ids: list[str]) -> None:
     """Insert a new valid publication and move the head pointer to it."""
     from backend.domain.models import utc_now_iso
@@ -34,6 +49,37 @@ def _promote_new_publication(app, publication_id: str, job_ids: list[str]) -> No
 
 
 class JobsFeedPerformanceTests(unittest.TestCase):
+    def test_feed_omits_acquisition_audit_payloads_but_preserves_public_fields(self):
+        import json
+
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        full_payload = {"employment_type": "full-time", "salary": {"min": 60000},
+                        "job": {"skills": ["Python"]}, "description": "Public description"}
+        internal_fields = ("source_raw_payload", "unified_mapping", "field_provenance",
+                           "normalized_source_metadata", "content_fingerprint")
+        full_payload.update({key: {"audit": "x" * 10000} for key in internal_fields})
+        app.repositories.acquisition_store._run_transaction(lambda connection: _append_test_payload(connection, json.dumps(full_payload)))
+        page = store.query_published_jobs("user-a", limit=25)
+        row = next(row for row in page["rows"] if row["canonical_job_id"] == "job-a")
+        compact = json.loads(row["version_payload_json"])
+        self.assertEqual(compact, {key: value for key, value in full_payload.items() if key not in internal_fields})
+        detail = store.get_published_job_row("job-a")
+        self.assertEqual(json.loads(detail["version_payload_json"]), full_payload)
+
+    def test_capabilities_refresh_when_same_publication_is_updated(self):
+        app = self._backend()
+        _seed_catalog(app)
+        store = app.repositories.personalized_jobs_store
+        before = store.get_published_filter_capabilities()
+        app.repositories.acquisition_store._run_transaction(lambda connection: (
+            _append_test_payload(connection, '{"lifting_requirement":"20 kg"}'),
+            connection.execute("UPDATE acquisition_publication_head SET updated_at='later' WHERE head_id=1"),
+        ))
+        self.assertFalse(before["lifting_requirement"])
+        self.assertTrue(store.get_published_filter_capabilities()["lifting_requirement"])
+
     def _backend(self):
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
@@ -69,7 +115,7 @@ class JobsFeedPerformanceTests(unittest.TestCase):
         first = store.get_published_filter_capabilities()
         second = store.get_published_filter_capabilities()
         self.assertEqual(first, second)
-        self.assertEqual(set(store._filter_capabilities_cache), {"publication-c"})
+        self.assertEqual({key.split(":", 1)[0] for key in store._filter_capabilities_cache}, {"publication-c"})
 
         # A new publication head is a different, immutable catalog: the cache
         # must recompute instead of serving the previous publication's result.
@@ -116,7 +162,8 @@ class JobsFeedPerformanceTests(unittest.TestCase):
         self.assertIn("LIMIT 2", page_sql)
         self.assertNotIn("job_applicant_snapshots", page_sql)
         self.assertNotIn("personalized_job_evaluations", page_sql)
-        self.assertNotIn("job_posting_versions", page_sql)
+        # Current-version classification must exclude reviewed blue collar jobs.
+        self.assertIn("job_posting_versions", page_sql)
         hydration_sql = next(sql for sql in statements if "feed_page_hydration" in sql)
         self.assertIn("j.canonical_job_id IN", hydration_sql)
         self.assertNotIn("ROW_NUMBER() OVER", hydration_sql)
