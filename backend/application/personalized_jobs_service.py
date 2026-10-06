@@ -967,7 +967,7 @@ class PersonalizedJobsService:
         shared = (shared_entries.get(version_id) if shared_entries is not None else
                   self.store.get_description_intelligence(version_id)) if self.store is not None else None
         if (shared is not None and _text(shared.get("content_hash")) == _text(row.get("content_hash"))
-                and _text(shared.get("prompt_version")) in {"runr_description_v1", "runr_description_nemo_v2"}):
+                and _text(shared.get("prompt_version")) in {"runr_description_v1", "runr_description_nemo_v2", "runr_description_nemo_v3"}):
             return _public_clean({**shared, "state": "available", "original_posting": original})
         if cached is not None and _text(cached.get("state")) == "available":
             result = dict(cached.get("payload") or {})

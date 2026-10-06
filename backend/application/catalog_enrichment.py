@@ -30,7 +30,9 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
             raise ValueError("filter_validation_failed")
         result["filters"] = filters
     if not row.get("description_ready"):
-        description = build_pilot_description(row, generate)
+        if len(source) < 80:
+            raise ValueError("source_incomplete")
+        description = build_pilot_description(row, generate, require_source_quotes=True)
         if not any(description["summary"].get(section) for section in
                    ("responsibilities", "required_qualifications", "preferred_qualifications", "benefits", "application_details")):
             raise ValueError("description_has_no_supported_facts")

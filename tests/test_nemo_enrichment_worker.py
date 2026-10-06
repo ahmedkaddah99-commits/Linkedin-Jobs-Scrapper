@@ -8,13 +8,19 @@ from scripts import process_catalog_enrichment as worker
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
  _backend=fixtures.RoleScopedFeedTests._backend
+ def classified(self):
+  original=fixtures._seed_catalog
+  description='Analyze operations. Build accurate monthly reports and coordinate requirements with business stakeholders.'
+  def seed(app):original(app,payload_overrides={job:{'description':description} for job in ('job-a','job-b')})
+  with patch.object(fixtures,'_seed_catalog',seed):
+   return fixtures.RoleScopedFeedTests.classified(self)
  def test_claim_save_and_reuse_after_description_failure(self):
-  app=fixtures.RoleScopedFeedTests.classified(self);store=app.repositories.personalized_jobs_store
+  app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     token,rows=worker.claim(2);self.assertEqual(len(rows),2)
-    def generate(_):return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1']}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
+    def generate(_):return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1'],'source_quote':'Analyze operations.'}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
     # Seeded filters are not Nemo, so exercise the filter stage too.
     def both(prompt):
      if 'Classify each' in prompt:
@@ -29,7 +35,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     self.assertEqual(worker.claim(2)[1],[])
 
  def test_save_cannot_overwrite_a_superseded_version(self):
-  app=fixtures.RoleScopedFeedTests.classified(self);store=app.repositories.personalized_jobs_store
+  app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
@@ -40,7 +46,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     self.assertEqual(actual['model'],'test')
 
  def test_description_failure_preserves_filters_and_retry_only_generates_description(self):
-  app=fixtures.RoleScopedFeedTests.classified(self);store=app.repositories.personalized_jobs_store
+  app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
@@ -60,7 +66,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     prompts=[]
     def description(prompt):
      prompts.append(prompt)
-     return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1']}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
+     return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1'],'source_quote':'Analyze operations.'}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
     self.assertEqual(worker.process(rows[0],token,description),'completed')
     self.assertEqual(len(prompts),1)
     self.assertNotIn('Classify each',prompts[0])

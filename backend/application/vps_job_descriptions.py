@@ -17,6 +17,7 @@ from backend.application.personalized_jobs_intelligence import build_preserved_o
 
 PROMPT_VERSION = "runr_description_v1"
 PILOT_PROMPT_VERSION = "runr_description_nemo_v2"
+GROUNDED_PROMPT_VERSION = "runr_description_nemo_v3"
 NEMO_MODEL = "mistralai/mistral-nemo"
 OUTPUT_LANGUAGE = "en"
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -262,6 +263,7 @@ def _pilot_salary(value: Any) -> bool:
 
 def build_pilot_description(
     row: Mapping[str, Any], generate: Callable[[str], Mapping[str, Any]],
+    *, require_source_quotes: bool = False,
 ) -> dict[str, Any]:
     """Extract one posting; reject bad fields without retrying the whole job."""
     original = build_preserved_original_posting(row)
@@ -295,6 +297,12 @@ def build_pilot_description(
         "If salary currency or period is unstated, return null. Use null for unsupported facts. "
         "Posting: " + json.dumps({"title": str(row.get("title") or ""), "passages": passages}, ensure_ascii=False)
     )
+    if require_source_quotes:
+        prompt = prompt.replace("Posting: ",
+            "Every item and every non-null header candidate MUST include source_quote: an exact nonempty quotation "
+            "from its cited original passage. Translate only the stated meaning. A source ID alone is insufficient evidence. "
+            "Do not derive duties or requirements from the title, company name or knowledge of an occupation. "
+            "If the text only names the employer or contains no actual job facts, return items=[] and null headers. Posting: ")
     response = generate(prompt)
     if not isinstance(response, Mapping) or not isinstance(response.get("items"), list):
         raise ValueError("model response missing items array")
@@ -310,7 +318,15 @@ def build_pilot_description(
         if section not in SECTIONS or not ids or not isinstance(wording, str) or not wording.strip():
             rejected.append("invalid_item")
             continue
-        summary[section].append({"text": wording.strip(), "source_ids": ids})
+        quote = item.get("source_quote")
+        if require_source_quotes and (not isinstance(quote, str) or not quote.strip()
+                or not any(" ".join(quote.split()) in " ".join(lookup[i].split()) for i in ids)):
+            rejected.append("invalid_source_quote")
+            continue
+        fact = {"text": wording.strip(), "source_ids": ids}
+        if require_source_quotes:
+            fact["source_quote"] = quote.strip()
+        summary[section].append(fact)
     candidates = response.get("header_candidates")
     if not isinstance(candidates, Mapping):
         candidates = {}
@@ -324,6 +340,13 @@ def build_pilot_description(
         if not isinstance(raw, Mapping) or not _pilot_ids(raw.get("source_ids"), lookup):
             rejected.append(f"{field}:missing_source")
             continue
+        if require_source_quotes:
+            quote = raw.get("source_quote")
+            ids = _pilot_ids(raw.get("source_ids"), lookup)
+            if not isinstance(quote, str) or not quote.strip() or not any(
+                    " ".join(quote.split()) in " ".join(lookup[i].split()) for i in ids):
+                rejected.append(f"{field}:invalid_source_quote")
+                continue
         value = raw.get("value")
         if field == "location":
             valid = isinstance(value, str) and bool(value.strip()) and value.strip().lower() not in {"remote", "hybrid", "onsite", "on-site"}
@@ -350,7 +373,7 @@ def build_pilot_description(
         "original_posting": original,
         "provider": "openrouter",
         "model": str(response.get("_runr_model") or NEMO_MODEL),
-        "prompt_version": PILOT_PROMPT_VERSION,
+        "prompt_version": GROUNDED_PROMPT_VERSION if require_source_quotes else PILOT_PROMPT_VERSION,
     }
     return supplement_explicit_sections(result)
 

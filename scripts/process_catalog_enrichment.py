@@ -20,7 +20,7 @@ sys.path.insert(0, str(PROJECT))
 
 from backend.application.catalog_enrichment import attach_source_metadata, enrich_version
 from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
-from backend.application.vps_job_descriptions import NEMO_MODEL, PILOT_PROMPT_VERSION
+from backend.application.vps_job_descriptions import NEMO_MODEL, GROUNDED_PROMPT_VERSION
 from backend.config import load_project_dotenv
 from backend.database.connection import validate_release_provenance
 
@@ -124,13 +124,13 @@ def claim(limit: int) -> tuple[str, list[dict]]:
         v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
         CASE WHEN f.content_hash=v.content_hash AND f.model=? AND f.prompt_version=? THEN 1 ELSE 0 END AS filters_ready,
         CASE WHEN d.content_hash=v.content_hash AND d.provider='openrouter' AND d.model=?
-            AND d.prompt_version IN ('runr_description_v1',?) THEN 1 ELSE 0 END AS description_ready
+            AND d.prompt_version=? THEN 1 ELSE 0 END AS description_ready
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
         LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id
         WHERE v.version_id IN (""" + ",".join("?" for _ in ids) + ")",
-        (NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, PILOT_PROMPT_VERSION, *ids))
+        (NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, GROUNDED_PROMPT_VERSION, *ids))
     return token, candidates
 
 
@@ -183,11 +183,11 @@ def process(row: dict, token: str, generate) -> str:
                 AND f.content_hash=job_enrichment_queue.content_hash AND f.model=? AND f.prompt_version=?)
             AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
                 AND d.content_hash=job_enrichment_queue.content_hash AND d.model=? AND d.provider='openrouter'
-                AND d.prompt_version IN ('runr_description_v1',?))
-            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, PILOT_PROMPT_VERSION))
+                AND d.prompt_version=?)
+            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, GROUNDED_PROMPT_VERSION))
         return "completed" if saved else "superseded"
     except Exception as exc:
-        code = "source_missing" if str(exc) == "source_missing" else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
+        code = str(exc) if str(exc) in {"source_missing", "source_incomplete"} else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
         if isinstance(exc, HTTPError):
             code = "provider_http_" + str(exc.code)
         elif isinstance(exc, ValueError) and str(exc) in {
@@ -196,7 +196,7 @@ def process(row: dict, token: str, generate) -> str:
             code = str(exc)
         retry = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         execute("UPDATE job_enrichment_queue SET state=?,next_attempt_at=?,error_code=?,lease_token='',lease_expires_at='',updated_at=? "
-                "WHERE version_id=? AND lease_token=?", ("source_missing" if code == "source_missing" else "pending", retry, code, now(), row["current_version_id"], token))
+                "WHERE version_id=? AND lease_token=?", (code if code in {"source_missing", "source_incomplete"} else "pending", retry, code, now(), row["current_version_id"], token))
         return code
 
 
