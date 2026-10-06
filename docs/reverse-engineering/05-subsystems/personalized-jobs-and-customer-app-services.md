@@ -311,3 +311,6 @@ Local source, model responses, API usage, all job links and rollback evidence ar
 
 Remote feed reads use an HTTP read session with a shared 15-second request and retry budget. This is a request budget, not a strict wall-clock deadline. Reads inside an existing transaction retain that connection so uncommitted changes remain visible. The default count checks posting hashes only for blue-collar candidates. A proposed covering-index migration was withdrawn before being recorded because Turso returned SQLITE_IOERR during index creation; the deployed migration head remains 069. Membership publication remains one catalog per acquisition cycle with incremental membership changes.
 
+
+Render migration deployment first verifies every registered remote migration timestamp and checksum through HTTP. When all match, it skips opening a redundant schema write transaction. Missing or unverified migrations retain normal initialization; checksum mismatches fail deployment.
+
