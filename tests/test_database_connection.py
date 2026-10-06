@@ -29,6 +29,12 @@ class UnrelatedBaseException(BaseException):
 
 
 class DatabaseConnectionTests(unittest.TestCase):
+    def test_page_read_allows_sqlite_replace_text_function(self):
+        connection = DatabaseConnection(sqlite3.connect(":memory:"), backend="sqlite")
+        self.addCleanup(connection.close)
+        rows = connection.fetch_read_rows("SELECT replace('update', 'u', 'U') AS text")
+        self.assertEqual(rows[0]["text"], "Update")
+
     def test_remote_page_read_fetches_typed_rows_in_one_http_request(self):
         import io
         import json

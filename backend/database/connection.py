@@ -502,7 +502,8 @@ class DatabaseConnection:
             statement = statement.split("*/", 1)[-1].lstrip()
         tokens = re.sub(r"'(?:''|[^'])*'|/\*.*?\*/|--[^\n]*", " ", statement, flags=re.DOTALL)
         if not statement.upper().startswith(("SELECT ", "WITH ")) or re.search(
-            r"\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|ATTACH|DETACH|PRAGMA)\b", tokens, re.IGNORECASE
+            r"\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|ATTACH|DETACH|PRAGMA)\b|\bREPLACE\s+INTO\b",
+            tokens, re.IGNORECASE,
         ):
             raise ValueError("Page reads require a SELECT statement.")
         if self.backend != "libsql" or self._transaction_depth:
