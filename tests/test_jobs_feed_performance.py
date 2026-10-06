@@ -49,6 +49,57 @@ def _promote_new_publication(app, publication_id: str, job_ids: list[str]) -> No
 
 
 class JobsFeedPerformanceTests(unittest.TestCase):
+    def test_default_count_reads_posting_hash_only_for_blue_candidates(self):
+        import sqlite3
+        from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        hash_reads = []
+        connection.create_function("read_posting_hash", 1, lambda value: (hash_reads.append(value), value)[1])
+        connection.executescript("""
+            CREATE TABLE acquisition_publication_jobs(publication_id TEXT, canonical_job_id TEXT);
+            CREATE TABLE canonical_jobs(canonical_job_id TEXT PRIMARY KEY, company_id TEXT,
+                current_version_id TEXT, first_seen_at TEXT, last_verified_at TEXT);
+            CREATE TABLE canonical_companies(company_id TEXT PRIMARY KEY, entity_kind TEXT);
+            CREATE TABLE version_data(version_id TEXT PRIMARY KEY, content_hash TEXT);
+            CREATE VIEW job_posting_versions AS SELECT version_id,
+                read_posting_hash(content_hash) AS content_hash FROM version_data;
+            CREATE TABLE job_filter_intelligence(version_id TEXT PRIMARY KEY, content_hash TEXT, filters_json TEXT);
+            CREATE TABLE personalized_job_dispositions(user_id TEXT, canonical_job_id TEXT, state TEXT);
+            CREATE INDEX idx_canonical_jobs_feed_metadata ON canonical_jobs(
+                canonical_job_id, company_id, current_version_id, last_verified_at, first_seen_at);
+            CREATE INDEX idx_job_filter_feed_metadata ON job_filter_intelligence(
+                version_id, content_hash, json_extract(filters_json, '$.collar'));
+            INSERT INTO canonical_companies VALUES ('company','employer');
+        """)
+        for index in range(100):
+            job, version = f"job-{index}", f"version-{index}"
+            connection.execute("INSERT INTO canonical_jobs VALUES (?,'company',?,'','')", (job, version))
+            connection.execute("INSERT INTO acquisition_publication_jobs VALUES ('publication',?)", (job,))
+            connection.execute("INSERT INTO version_data VALUES (?,'current')", (version,))
+            connection.execute("INSERT INTO job_filter_intelligence VALUES (?,?,?)", (
+                version, "stale" if index == 9 else "current",
+                '{"collar":"blue"}' if index < 10 else '{"collar":"white"}',
+            ))
+        total = connection.execute("SELECT COUNT(*) FROM (" + SqlitePersonalizedJobsStore._feed_index_sql() + ")",
+                                   ("user", "publication")).fetchone()[0]
+        self.assertEqual(total, 91)  # Nine current blue records are excluded; the stale one is visible.
+        self.assertLessEqual(len(hash_reads), 10)
+
+    def test_page_hydration_reads_uncommitted_rows_from_ambient_connection(self):
+        from unittest.mock import Mock
+
+        app = self._backend()
+        store = app.repositories.personalized_jobs_store
+        connection = Mock()
+        connection.execute.return_value.fetchall.return_value = [{"canonical_job_id": "job", "value": "uncommitted"}]
+        connection.fetch_read_rows.return_value = [{"canonical_job_id": "job", "value": "committed"}]
+        store._active_transaction_connection = connection
+        rows = store._hydrate_feed_page(connection, publication_id="publication", user_id="user", canonical_job_ids=["job"])
+        self.assertEqual(rows[0]["value"], "uncommitted")
+        connection.fetch_read_rows.assert_not_called()
+
     def test_feed_omits_acquisition_audit_payloads_but_preserves_public_fields(self):
         import json
 

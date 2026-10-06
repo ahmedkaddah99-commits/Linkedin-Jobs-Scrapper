@@ -3480,6 +3480,20 @@ def _apply_acquisition_identity_lookup_indexes_migration(connection: DatabaseCon
     """)
 
 
+def _apply_catalog_feed_covering_indexes_migration(connection: DatabaseConnection) -> None:
+    """Read eligibility and sort metadata without fetching large posting rows."""
+    connection.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_feed_metadata
+            ON canonical_jobs(canonical_job_id, company_id, current_version_id,
+                              last_verified_at, first_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_job_filter_feed_metadata
+            ON job_filter_intelligence(version_id, content_hash,
+                                       json_extract(filters_json, '$.collar'));
+        CREATE INDEX IF NOT EXISTS idx_job_posting_version_hash
+            ON job_posting_versions(version_id, content_hash);
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3854,6 +3868,11 @@ MIGRATIONS = (
         "069_acquisition_identity_lookup_indexes",
         "Index exact job URL and company name fallback identity lookups.",
         _apply_acquisition_identity_lookup_indexes_migration,
+    ),
+    Migration.from_callable(
+        "070_catalog_feed_covering_indexes",
+        "Cover current-version catalog eligibility and sort metadata reads.",
+        _apply_catalog_feed_covering_indexes_migration,
     ),
 )
 

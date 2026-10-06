@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.domain.job_filter_source_cache import use_cached_source
+from backend.database.connection import database_read_session, database_target_info
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -1287,14 +1288,19 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             SELECT j.canonical_job_id, j.first_seen_at, j.last_verified_at,
                    COALESCE(d.state, 'none') AS user_state
             FROM acquisition_publication_jobs pj
-            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
+            JOIN canonical_jobs j INDEXED BY idx_canonical_jobs_feed_metadata ON j.canonical_job_id = pj.canonical_job_id
             JOIN canonical_companies c ON c.company_id = j.company_id
-            LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
-            LEFT JOIN job_filter_intelligence fi ON fi.version_id = v.version_id
+            LEFT JOIN job_filter_intelligence fi INDEXED BY idx_job_filter_feed_metadata ON fi.version_id = j.current_version_id
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
-              AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
+              AND (
+                  COALESCE(json_extract(fi.filters_json, '$.collar'), '') != 'blue'
+                  OR NOT EXISTS (
+                      SELECT 1 FROM job_posting_versions v
+                      WHERE v.version_id=j.current_version_id AND v.content_hash=fi.content_hash
+                  )
+              )
         """
 
     @staticmethod
@@ -1340,7 +1346,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = hydrated.canonical_job_id AND d.user_id = ?
         """
-        rows = connection.fetch_read_rows(
+        rows = self._fetch_read_rows(
+            connection,
             sql,
             (str(user_id), str(publication_id), *canonical_job_ids, str(user_id)),
         )
@@ -1383,7 +1390,15 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         hidden_only: bool = False,
     ) -> dict[str, Any]:
         limit = max(1, min(100, int(limit)))
-        with self._connect() as connection:
+        # Keep ambient transactions on their original connection; ordinary
+        # remote feeds use only bounded HTTP reads and share one time budget.
+        read_context = (
+            database_read_session(self.db_path)
+            if self._active_transaction_connection is None
+            and database_target_info(self.db_path)["target_backend"] == "libsql"
+            else self._connect()
+        )
+        with read_context as connection:
             publication = connection.execute(
                 """
                 SELECT p.publication_id, p.cycle_id, p.status, p.published_at, p.valid_until
@@ -1458,7 +1473,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     if cursor else ""
                 )
                 match_sort = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
-                page_result = connection.fetch_read_rows(
+                page_result = self._fetch_read_rows(
+                    connection,
                     f"""
                     /* feed_page_ids */
                     WITH matches AS MATERIALIZED (

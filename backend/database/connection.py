@@ -495,7 +495,9 @@ class DatabaseConnection:
             last_cursor = self.execute(pending.strip())
         return last_cursor
 
-    def fetch_read_rows(self, sql: str, parameters: Sequence[Any] = ()) -> list[DatabaseRow]:
+    def fetch_read_rows(
+        self, sql: str, parameters: Sequence[Any] = (), *, deadline: float | None = None,
+    ) -> list[DatabaseRow]:
         """Fetch a bounded SELECT in one response instead of streaming driver rows."""
         statement = sql.lstrip()
         while statement.startswith("/*"):
@@ -531,8 +533,14 @@ class DatabaseConnection:
         })
 
         def fetch():
+            timeout = 15.0
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Turso read deadline exceeded")
+                timeout = min(8.0, remaining)
             try:
-                with urlopen(request, timeout=15) as response:
+                with urlopen(request, timeout=timeout) as response:
                     payload = json.load(response)
             except HTTPError as exc:
                 raise RuntimeError(f"Turso page read HTTP {exc.code}") from None
@@ -552,7 +560,11 @@ class DatabaseConnection:
 
             return [DatabaseRow(columns, [decode(cell) for cell in row]) for row in result["rows"]]
 
-        return _retry_libsql_operation("page_read", fetch)
+        def check_deadline(_category):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Turso read deadline exceeded")
+
+        return _retry_libsql_operation("page_read", fetch, before_retry=check_deadline)
 
     def commit(self) -> None:
         try:
@@ -718,3 +730,40 @@ def database_session(local_path: str | Path) -> Iterator[DatabaseConnection]:
                 cleanup_error,
                 primary_error=original_error,
             )
+
+
+class _BufferedReadCursor:
+    def __init__(self, rows: list[DatabaseRow]):
+        self._rows = iter(rows)
+
+    def fetchone(self) -> DatabaseRow | None:
+        return next(self._rows, None)
+
+    def fetchall(self) -> list[DatabaseRow]:
+        return list(self._rows)
+
+
+class _HttpReadSession:
+    """Independent SELECT requests; each request closes its server stream."""
+
+    def __init__(self, deadline: float):
+        self._reader = DatabaseConnection(None, backend="libsql")
+        self._deadline = deadline
+
+    def fetch_read_rows(self, sql: str, parameters: Sequence[Any] = ()) -> list[DatabaseRow]:
+        return self._reader.fetch_read_rows(sql, parameters, deadline=self._deadline)
+
+    def execute(self, sql: str, parameters: Sequence[Any] = ()) -> _BufferedReadCursor:
+        return _BufferedReadCursor(self.fetch_read_rows(sql, parameters))
+
+
+@contextmanager
+def database_read_session(
+    local_path: str | Path, *, deadline: float | None = None,
+) -> Iterator[DatabaseConnection | _HttpReadSession]:
+    validate_release_provenance()
+    if _remote_database_url() or _remote_database_required():
+        yield _HttpReadSession(deadline if deadline is not None else time.monotonic() + 15.0)
+    else:
+        with database_session(local_path) as connection:
+            yield connection

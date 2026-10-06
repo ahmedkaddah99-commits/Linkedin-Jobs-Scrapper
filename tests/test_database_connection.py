@@ -29,6 +29,57 @@ class UnrelatedBaseException(BaseException):
 
 
 class DatabaseConnectionTests(unittest.TestCase):
+    def test_remote_read_session_never_opens_a_native_driver_connection(self):
+        import io
+        import json
+        from backend.database import connection as connection_module
+
+        self.assertTrue(hasattr(connection_module, "database_read_session"))
+
+        payload = {"results": [{"type": "ok", "response": {"result": {
+            "cols": [{"name": "id"}], "rows": [[{"type": "integer", "value": "7"}]],
+        }}}]}
+        with patch.dict(os.environ, {"RUNR_ENV": "development", "DATABASE_BACKEND": "turso", "TURSO_DATABASE_URL": "libsql://example.turso.io", "TURSO_AUTH_TOKEN": "test-token"}), patch(
+            "backend.database.connection.connect_database"
+        ) as native, patch("backend.database.connection.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
+            with connection_module.database_read_session(Path("unused")) as connection:
+                cursor = connection.execute("SELECT 7 AS id")
+                self.assertEqual(cursor.fetchone()["id"], 7)
+                self.assertEqual(cursor.fetchall(), [])
+                with self.assertRaises(ValueError):
+                    connection.execute("DELETE FROM records")
+        native.assert_not_called()
+
+    def test_read_retries_share_one_deadline(self):
+        import io
+        import json
+        import inspect
+
+        self.assertIn("deadline", inspect.signature(DatabaseConnection.fetch_read_rows).parameters)
+
+        clock = [0.0]
+        timeouts = []
+        payload = {"results": [{"type": "ok", "response": {"result": {"cols": [], "rows": []}}}]}
+        def response(_request, timeout):
+            timeouts.append(timeout)
+            if len(timeouts) == 1:
+                clock[0] += timeout
+                raise TimeoutError("timed out")
+            return io.BytesIO(json.dumps(payload).encode())
+        with patch.dict(os.environ, {"TURSO_DATABASE_URL": "libsql://example.turso.io", "TURSO_AUTH_TOKEN": "test-token"}), patch(
+            "backend.database.connection.time.monotonic", side_effect=lambda: clock[0]
+        ), patch("backend.database.connection.time.sleep", side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), patch(
+            "backend.database.connection.random.uniform", return_value=0
+        ), patch("backend.database.connection.urlopen", side_effect=response):
+            connection = DatabaseConnection(None, backend="libsql")
+            self.assertEqual(connection.fetch_read_rows("SELECT 1", deadline=10.0), [])
+            self.assertEqual(timeouts[0], 8.0)
+            self.assertLessEqual(timeouts[1], 2.0)
+            clock[0] = 11.0
+            with self.assertRaises(TimeoutError):
+                connection.fetch_read_rows("SELECT 1", deadline=10.0)
+            self.assertEqual(len(timeouts), 2)
+
     def test_page_read_allows_sqlite_replace_text_function(self):
         connection = DatabaseConnection(sqlite3.connect(":memory:"), backend="sqlite")
         self.addCleanup(connection.close)

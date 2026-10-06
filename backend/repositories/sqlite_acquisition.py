@@ -3846,7 +3846,8 @@ class SqliteAcquisitionStore(_SqliteStore):
         )
         while True:
             with self._connect() as connection:
-                candidate_rows = connection.fetch_read_rows(
+                candidate_rows = self._fetch_read_rows(
+                    connection,
                     f"""
                     SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                     j.title, j.location, j.canonical_url,

@@ -26,6 +26,13 @@ class _SqliteStore:
         with database_session(self.db_path) as connection:
             yield connection
 
+    def _fetch_read_rows(self, connection, sql, parameters=()):
+        # A transaction_scope connection can contain uncommitted projections
+        # even when it was not opened by DatabaseConnection.transaction.
+        if getattr(self, "_active_transaction_connection", None) is connection:
+            return connection.execute(sql, parameters).fetchall()
+        return connection.fetch_read_rows(sql, parameters)
+
     @contextmanager
     def transaction_scope(self) -> Iterator[DatabaseConnection]:
         """Share one transaction across a bounded group of store operations.
