@@ -1250,7 +1250,10 @@ def test_bounded_incremental_run_publishes_before_resuming_remaining_targets(tmp
     assert first["status"] == "stopped"
     store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
     try:
-        assert store.get_public_catalog()["total"] > 0
+        first_catalog = store.get_public_catalog()
+        first_publication_id = first_catalog["publication"]["publication_id"]
+        first_job_count = first_catalog["total"]
+        assert first_job_count > 0
         assert store.publisher_checkpoint(SOURCE_LINKEDIN)["source_rowid"] == 0
     finally:
         if hasattr(store, "close"):
@@ -1270,6 +1273,23 @@ def test_bounded_incremental_run_publishes_before_resuming_remaining_targets(tmp
             break
     assert last["status"] in {"completed", "degraded"}
     assert last["publication_id"]
+    store = SqliteAcquisitionStore(data_dir / "backend.sqlite3")
+    try:
+        with store._connect() as connection:
+            publications = connection.execute(
+                "SELECT publication_id FROM acquisition_publications"
+            ).fetchall()
+            memberships = connection.execute(
+                "SELECT canonical_job_id FROM acquisition_publication_jobs WHERE publication_id=?",
+                (last["publication_id"],),
+            ).fetchall()
+        assert len(publications) == 1, "resuming one cycle must not copy the full catalog again"
+        assert publications[0]["publication_id"] == last["publication_id"] == first_publication_id
+        assert len(memberships) > first_job_count, "later batches must add their new jobs"
+        assert len(memberships) == store.get_public_catalog()["total"]
+    finally:
+        if hasattr(store, "close"):
+            store.close()
 
 def test_crash_before_checkpoint_save_reruns_the_same_window_idempotently(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNR_ENV", "test")

@@ -3893,7 +3893,9 @@ class SqliteAcquisitionStore(_SqliteStore):
             return ""
         now = utc_now_iso()
         publication_id = f"acq_publication_{uuid4().hex}"
-        publication_cycle_id = f"{cycle_id}:{batch_key}" if batch_key else cycle_id
+        # Incremental batches advance one publication per cycle. Reusing its
+        # membership avoids copying the entire catalog after every batch.
+        publication_cycle_id = cycle_id
         normalized_origin = _publication_origin(origin, default="scheduled")
         policy = get_publication_policy(policy_version)
         normalized_created_by = str(created_by or "system").strip()
@@ -4002,6 +4004,65 @@ class SqliteAcquisitionStore(_SqliteStore):
             ).fetchone()
             if existing is not None:
                 existing_id = str(existing["publication_id"])
+                if batch_key:
+                    if existing_id != previous_head_id:
+                        raise StalePublicationHeadError("Publication head changed during batch preparation.")
+                    old_ids = {str(row["canonical_job_id"]) for row in previous_snapshot}
+                    new_ids = {str(row["canonical_job_id"]) for row in snapshot}
+                    _assert_publication_size_is_safe(
+                        connection,
+                        previous_publication_id=existing_id,
+                        next_count=len(snapshot),
+                    )
+                    preflight = self._build_publication_preflight(
+                        connection,
+                        previous_publication_id=existing_id,
+                        next_snapshot=snapshot,
+                        cycle_id=cycle_id,
+                        policy_version=policy.version,
+                    )
+                    self._persist_publication_rejections(connection, cycle_id=cycle_id, rejected_rows=rejected_rows)
+                    for job_id in sorted(old_ids - new_ids):
+                        connection.execute(
+                            "DELETE FROM acquisition_publication_jobs WHERE publication_id=? AND canonical_job_id=?",
+                            (existing_id, job_id),
+                        )
+                    _insert_publication_jobs_batched(
+                        connection,
+                        publication_id=existing_id,
+                        canonical_job_ids=sorted(new_ids - old_ids),
+                    )
+                    connection.execute(
+                        "UPDATE acquisition_publications SET snapshot_json=?, published_at=?, valid_until=?, "
+                        "preflight_json=?, policy_version=? WHERE publication_id=?",
+                        (_json(snapshot), now, str(valid_until or ""), _json(preflight), policy.version, existing_id),
+                    )
+                    changed = connection.execute(
+                        "UPDATE acquisition_publication_head SET updated_at=? WHERE head_id=1 AND publication_id=?",
+                        (now, existing_id),
+                    ).rowcount
+                    if changed != 1:
+                        raise StalePublicationHeadError("Publication head changed during batch publication.")
+                    self._record_publication_audit(
+                        connection,
+                        publication_id=existing_id,
+                        event_type="publication_updated",
+                        actor_user_id=normalized_created_by,
+                        previous_publication_id=existing_id,
+                        payload={"added": len(new_ids - old_ids), "removed": len(old_ids - new_ids)},
+                        created_at=now,
+                    )
+                    _update_publication_task_counts_batched(
+                        connection,
+                        publication_id=existing_id,
+                        cycle_id=cycle_id,
+                        now=now,
+                    )
+                    connection.execute(
+                        "UPDATE acquisition_cycles SET jobs_published=?, publication_id=?, updated_at=? WHERE cycle_id=?",
+                        (len(snapshot), existing_id, now, cycle_id),
+                    )
+                    return existing_id
                 published_count = connection.execute(
                     "SELECT COUNT(*) AS count FROM acquisition_publication_jobs WHERE publication_id = ?",
                     (existing_id,),
