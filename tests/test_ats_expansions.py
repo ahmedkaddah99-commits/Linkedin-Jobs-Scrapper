@@ -13,6 +13,21 @@ from backend.connectors.ats_expansions import (
 
 
 class AtsExpansionContractTests(unittest.TestCase):
+    def test_personio_xml_retains_every_description_section(self):
+        payload = """<workzag-jobs><position><id>42</id><name>Data Analyst</name>
+        <office>Berlin</office><jobDescriptions>
+        <jobDescription><name>Company</name><value><![CDATA[<p>Example GmbH</p>]]></value></jobDescription>
+        <jobDescription><name>Responsibilities</name><value><![CDATA[<p>Build reports.</p>]]></value></jobDescription>
+        <jobDescription><name>Requirements</name><value><![CDATA[<p>SQL experience.</p>]]></value></jobDescription>
+        <jobDescription><name>Benefits</name><value><![CDATA[<p>30 vacation days.</p>]]></value></jobDescription>
+        </jobDescriptions></position></workzag-jobs>"""
+        result = run_fixture_snapshot("personio", "https://example.jobs.personio.de/", payload)
+        job = result["jobs"][0]
+        self.assertEqual(job["title"], "Data Analyst")
+        for text in ("Example GmbH", "Build reports.", "SQL experience.", "30 vacation days."):
+            self.assertIn(text, job["description"])
+        self.assertIn("<h3>Requirements</h3>", job["description"])
+
     def test_expansion_connectors_are_disabled_by_default_and_report_capabilities(self):
         snapshot = build_capability_snapshot("workday", "https://acme.wd1.myworkdayjobs.com/careers")
 

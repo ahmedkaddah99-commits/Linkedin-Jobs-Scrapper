@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -225,22 +225,37 @@ def main() -> int:
     started = time.monotonic()
     counts: dict[str, int] = {}
     attempted = 0
+    last_report = started
+    exhausted = False
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        while attempted < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
-            if generate.remaining() < 0.005:
-                counts["daily_budget_exhausted"] = 1
-                break
-            token, rows = claim(min(args.workers, args.max_jobs - attempted))
-            if not rows:
-                break
-            futures = [pool.submit(process, row, token, generate) for row in rows]
-            for future in as_completed(futures):
+        pending = set()
+        while True:
+            stop_claiming = (exhausted or attempted + len(pending) >= args.max_jobs
+                             or time.monotonic() - started >= args.runtime_seconds
+                             or counts.get("daily_budget_exhausted", 0))
+            slots = args.workers - len(pending)
+            if not stop_claiming and slots >= max(1, args.workers // 2):
+                if generate.remaining() < 0.005:
+                    counts["daily_budget_exhausted"] = counts.get("daily_budget_exhausted", 0) + 1
+                    stop_claiming = True
+                else:
+                    token, rows = claim(min(slots, args.max_jobs - attempted - len(pending)))
+                    if not rows:
+                        exhausted = True
+                        stop_claiming = True
+                    pending.update(pool.submit(process, row, token, generate) for row in rows)
+            if not pending:
+                if stop_claiming:
+                    break
+                continue
+            done, pending = wait(pending, timeout=30, return_when=FIRST_COMPLETED)
+            for future in done:
                 status = future.result()
                 attempted += 1
                 counts[status] = counts.get(status, 0) + 1
-            print(json.dumps({"attempted": attempted, **counts}), flush=True)
-            if counts.get("daily_budget_exhausted"):
-                break
+            if time.monotonic() - last_report >= 30:
+                print(json.dumps({"attempted": attempted, "in_flight": len(pending), **counts}), flush=True)
+                last_report = time.monotonic()
     print(json.dumps({"attempted": attempted, "seconds": round(time.monotonic() - started, 2), **counts}), flush=True)
     return 0
 

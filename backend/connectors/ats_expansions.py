@@ -15,6 +15,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
+from html import escape
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -592,6 +593,18 @@ def _items_from_payload(connector: str, payload: Any) -> list[Any]:
             if position.tag.rsplit("}", 1)[-1].casefold() != "position":
                 continue
             row: dict[str, Any] = dict(position.attrib)
+            sections = []
+            for section in position.iter():
+                if section.tag.rsplit("}", 1)[-1] != "jobDescription":
+                    continue
+                fields = {child.tag.rsplit("}", 1)[-1]: "".join(child.itertext()).strip()
+                          for child in section}
+                body = fields.get("value", "")
+                if body:
+                    heading = fields.get("name", "")
+                    sections.append((f"<h3>{escape(heading)}</h3>" if heading else "") + body)
+            if sections:
+                row["description"] = "\n\n".join(sections)
             for child in position.iter():
                 if child is position:
                     continue
