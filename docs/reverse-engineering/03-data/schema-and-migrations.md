@@ -239,3 +239,5 @@ Safe verification commands, not executed in Phase 2. The migrate command must ne
 2. Extend the frozen-id migration test to 001–060 (WS5-G1).
 3. Owner decision on U7/C7(c): remove the dead ingestion handler and frontend emitter, and decide whether 055's indexes should be dropped via a new `061_*` migration.
 4. Decide whether non-api roles should call `initialize_database` with migrations disabled (WS5-S1).
+
+Migration 070_job_function_lookup adds a normalized version/function lookup with a covering function index, classification synchronization triggers, and a one-time classification-only backfill. It does not add indexes to large posting payloads. Trigger writes are limited to actual role, collar, version or hash changes. This replaces the withdrawn covering-index proposal; 070_job_function_lookup is the next recorded registry migration after 069.

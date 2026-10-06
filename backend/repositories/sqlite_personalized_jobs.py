@@ -1246,20 +1246,35 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             params.append(f"%{str(company).casefold()}%")
         return [use_cached_source(predicate) for predicate in predicates], params
 
-    def _feed_scope_sql(self) -> str:
+    def _feed_scope_sql(self, roles: list[str] | None = None) -> str:
         return f"""
             SELECT catalog.*, COALESCE(d.state, 'none') AS user_state,
                    COALESCE(d.updated_at, '') AS user_state_updated_at
-            FROM ({self._published_jobs_sql()}) AS catalog
+            FROM ({self._scope_sql_to_roles(self._published_jobs_sql(), roles)}) AS catalog
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = catalog.canonical_job_id AND d.user_id = ?
         """
 
     @staticmethod
-    def _feed_candidate_sql() -> str:
+    def _scope_sql_to_roles(sql: str, roles: list[str] | None) -> str:
+        if roles is None:
+            return sql
+        placeholders = ','.join('?' for _ in roles)
+        return sql.replace(
+            'FROM acquisition_publication_jobs pj\n            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id',
+            f'''FROM (SELECT DISTINCT canonical_job_id, version_id, content_hash
+                FROM job_filter_roles INDEXED BY idx_job_filter_roles_role
+                WHERE role IN ({placeholders})) selected_roles
+            CROSS JOIN canonical_jobs j ON j.canonical_job_id = selected_roles.canonical_job_id
+                AND j.current_version_id = selected_roles.version_id
+            JOIN acquisition_publication_jobs pj ON pj.canonical_job_id = j.canonical_job_id''',
+        ) + ' AND v.content_hash = selected_roles.content_hash'
+
+    @staticmethod
+    def _feed_candidate_sql(roles: list[str] | None = None) -> str:
         """Return filter/sort inputs without hydrating expensive job history."""
 
-        return """
+        sql = """
             SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                    j.title, j.location, j.first_seen_at, j.last_verified_at,
                    j.current_version_id, v.description,
@@ -1279,6 +1294,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'
               AND COALESCE(CASE WHEN fi.content_hash = v.content_hash THEN json_extract(fi.filters_json, '$.collar') END, '') != 'blue'
         """
+        return SqlitePersonalizedJobsStore._scope_sql_to_roles(sql, roles)
 
     @staticmethod
     def _feed_index_sql() -> str:
@@ -1388,8 +1404,19 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         cursor: Mapping[str, Any] | None = None,
         include_hidden: bool = False,
         hidden_only: bool = False,
+        role_scoped: bool = False,
+        include_total: bool = True,
     ) -> dict[str, Any]:
         limit = max(1, min(100, int(limit)))
+        roles = None
+        if role_scoped:
+            requested = (filters or {}).get('role') or []
+            roles = sorted({str(role).strip().casefold() for role in
+                            (requested if isinstance(requested, (list, tuple, set)) else [requested])
+                            if str(role).strip()})
+            if not roles:
+                return {'publication': None, 'rows': [], 'total': None, 'selection_required': True}
+            filters = {key: value for key, value in (filters or {}).items() if key != 'role'}
         # Keep ambient transactions on their original connection; ordinary
         # remote feeds use only bounded HTTP reads and share one time budget.
         read_context = (
@@ -1414,7 +1441,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if isinstance(search_terms, str):
                 search_terms = [search_terms]
             search_candidates: set[str] | None = None
-            if search_terms:
+            if search_terms and not role_scoped:
                 for raw_term in search_terms:
                     term = str(raw_term).strip().casefold()
                     if not term:
@@ -1455,7 +1482,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     for key, value in dict(filters or {}).items()
                 )
                 candidate_source = (
-                    self._feed_candidate_sql() if has_catalog_filters else self._feed_index_sql()
+                    self._feed_candidate_sql(roles) if has_catalog_filters or role_scoped else self._feed_index_sql()
                 )
                 if search_candidates is not None:
                     candidate_source = candidate_source + " AND j.canonical_job_id IN (" + ",".join("?" for _ in search_candidates) + ")"
@@ -1463,7 +1490,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 count_where_sql = " AND ".join(predicates) if predicates else "1=1"
                 # Materialize only the matching IDs and sort keys once. Text
                 # Keep the count and requested page on the same matched IDs.
-                candidate_params = [str(user_id), str(publication["publication_id"]), *sorted(search_candidates or ()), *filter_params]
+                candidate_params = [*(roles or []), str(user_id), str(publication["publication_id"]), *sorted(search_candidates or ()), *filter_params]
                 cursor_params: list[Any] = []
                 if cursor:
                     cursor_sort = str(cursor.get("sort") or "")
@@ -1480,18 +1507,17 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     WITH matches AS MATERIALIZED (
                         SELECT page.canonical_job_id, {match_sort} AS sort_at
                         FROM ({candidate_source}) AS page WHERE {count_where_sql}
-                    ), totals AS (SELECT COUNT(*) AS total FROM matches),
+                    ),
                     page_ids AS (
                         SELECT page.canonical_job_id, page.sort_at FROM matches AS page
                         {cursor_where}
                         ORDER BY page.sort_at DESC, page.canonical_job_id DESC LIMIT ?
                     )
-                    SELECT page_ids.canonical_job_id, totals.total
-                    FROM totals LEFT JOIN page_ids ON 1=1
+                    {('SELECT page_ids.canonical_job_id, totals.total FROM (SELECT COUNT(*) AS total FROM matches) totals LEFT JOIN page_ids ON 1=1' if include_total else 'SELECT page_ids.canonical_job_id, NULL AS total FROM page_ids')}
                     """,
                     (*candidate_params, *cursor_params, limit + 1),
                 )
-                total = int(page_result[0]["total"] or 0)
+                total = int(page_result[0]["total"] or 0) if include_total else None
                 rows = self._hydrate_feed_page(
                     connection,
                     publication_id=str(publication["publication_id"]),
@@ -1511,7 +1537,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                           AND e.job_version_id = scoped.current_version_id
                           AND e.evaluator_version = 'phase_e_v2'
                         ORDER BY e.updated_at DESC LIMIT 1) AS evaluation_payload
-                FROM ({self._feed_scope_sql()}) AS scoped
+                FROM ({self._feed_scope_sql(roles)}) AS scoped
             """
             if sort_mode in {"priority", "best"}:
                 source = f"SELECT page.*, {self._priority_sql()} AS priority_score FROM ({page_source}) AS page"
@@ -1540,10 +1566,10 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     filter_params.extend([str(cursor.get("sort") or ""), str(cursor.get("sort") or ""), str(cursor.get("canonical_job_id") or "")])
             where_sql = " AND ".join(predicates) if predicates else "1=1"
             count_sql = f"SELECT COUNT(*) AS total FROM ({source}) AS page WHERE {count_where_sql}"
-            count_params = [str(user_id), str(publication["publication_id"]), str(user_id), *count_filter_params]
-            total = int(connection.execute(count_sql, tuple(count_params)).fetchone()["total"] or 0)
+            count_params = [str(user_id), *(roles or []), str(publication["publication_id"]), str(user_id), *count_filter_params]
+            total = int(connection.execute(count_sql, tuple(count_params)).fetchone()["total"] or 0) if include_total else None
             rows_sql = f"SELECT page.* FROM ({source}) AS page WHERE {where_sql} ORDER BY {order_sql} LIMIT ?"
-            rows_params = [str(user_id), str(publication["publication_id"]), str(user_id), *filter_params, limit + 1]
+            rows_params = [str(user_id), *(roles or []), str(publication["publication_id"]), str(user_id), *filter_params, limit + 1]
             rows = connection.execute(rows_sql, tuple(rows_params)).fetchall()
         return {
             "publication": publication_payload,
@@ -1589,7 +1615,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             ).fetchall()
         return {"company": _row_payload(company), "rows": [_row_payload(row) for row in rows], "total": total}
 
-    def get_published_filter_capabilities(self) -> dict[str, bool]:
+    def get_published_filter_capabilities(self, *, query_support_only: bool = False) -> dict[str, bool]:
         capability_exprs = {
             "salary": "json_extract(catalog.version_payload_json, '$.salary') IS NOT NULL",
             "language": "json_extract(catalog.version_payload_json, '$.languages') IS NOT NULL OR json_extract(catalog.version_payload_json, '$.language_requirements') IS NOT NULL",
@@ -1609,6 +1635,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "posting_recency": "COALESCE(catalog.last_verified_at, '') != ''",
             "hidden_companies": "COALESCE(catalog.company, '') != ''",
         }
+        if query_support_only:
+            return {key: True for key in capability_exprs}
         with self._connect() as connection:
             head = connection.execute(
                 "SELECT h.publication_id, h.updated_at FROM acquisition_publication_head h "

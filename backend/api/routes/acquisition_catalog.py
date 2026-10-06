@@ -209,6 +209,7 @@ def _send_feed(context: ApiRouteContext) -> bool:
             hidden_only=False,
             plan_id=_plan_id(context, user_id),
             card_view=_query_value(context.query, "view").casefold() == "cards",
+            require_role_selection=True,
         )
     )
     return True

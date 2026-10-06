@@ -10,6 +10,7 @@ import {
   companyProfileIsUnverified,
   filtersFromSavedSearch,
   formatJobDate,
+  hasSelectedJobFunction,
   INITIAL_PERSONALIZED_JOB_FILTERS,
   toPersonalizedJobView,
   toPersonalizedJobsFilterPayload,
@@ -447,6 +448,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const routeJobId = initialJobId || searchParams.get("job") || "";
   const isMobile = useIsMobile();
   const [filters, setFilters] = useState(INITIAL_PERSONALIZED_JOB_FILTERS);
+  const hasJobFunction = hasSelectedJobFunction(filters);
   const [feed, setFeed] = useState(null);
   const [detailJob, setDetailJob] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(routeJobId);
@@ -529,12 +531,25 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   useEffect(() => {
     if (!isConnected) return undefined;
+    if (!hasJobFunction) {
+      loadMoreAbortRef.current?.abort();
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+      setLoading(false);
+      setFeed(null);
+      setFeedError("");
+      if (!routeJobId) {
+        setDetailJob(null);
+        setSelectedJobId("");
+      }
+      return undefined;
+    }
     if (skipNextFeedRef.current) {
       skipNextFeedRef.current = false;
       return undefined;
     }
     let active = true;
-    const isInitialFeed = initialFeedRef.current && filters === INITIAL_PERSONALIZED_JOB_FILTERS;
+    const isInitialFeed = initialFeedRef.current;
     initialFeedRef.current = false;
     // The first feed request fires immediately after the route connects;
     // later filter edits stay debounced so rapid typing does not fan out.
@@ -548,7 +563,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       setLoading(true);
       setFeedError("");
       try {
-        const query = buildPersonalizedJobsQuery(filters, { limit: 25, omitSort: isInitialFeed, view: "cards" });
+        const query = buildPersonalizedJobsQuery(filters, { limit: 25, view: "cards" });
         const payload = await request(`/personalized-jobs?${query}`, { signal: controller?.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS });
         if (active) {
           const durationMs = requestStartedAt === null ? null : Math.round(performance.now() - requestStartedAt);
@@ -582,7 +597,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       void runFeedRequest();
     }
     return () => { active = false; if (timer) window.clearTimeout(timer); controller?.abort(); };
-  }, [feedAttempt, filters, isConnected, request]);
+  }, [feedAttempt, filters, hasJobFunction, isConnected, request, routeJobId]);
 
   function retryFeed() {
     setFeedAttempt((attempt) => attempt + 1);
@@ -807,7 +822,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   async function loadMore() {
-    if (!feed?.next_cursor || loading || loadingMoreRef.current) return;
+    if (!hasJobFunction || !feed?.next_cursor || loading || loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     const controller = new AbortController();
     loadMoreAbortRef.current = controller;
@@ -888,7 +903,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     {feedError ? <div className="jobs-feedback" role={feed ? "status" : "alert"}><Icon>cloud_off</Icon><span>{feed ? "Could not refresh the shared jobs catalog. The results below are the last verified page." : "Jobs are temporarily unavailable. Runr could not read the published catalog."}</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{hasJobFunction ? `${jobs.length} jobs loaded` : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!hasJobFunction ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
       {!isMobile || !showMobileList ? <section className="jobs-detail-panel">{detailContent}</section> : null}
     </div>
     {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}

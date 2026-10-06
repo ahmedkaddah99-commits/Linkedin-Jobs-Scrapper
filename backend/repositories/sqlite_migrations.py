@@ -3480,6 +3480,62 @@ def _apply_acquisition_identity_lookup_indexes_migration(connection: DatabaseCon
     """)
 
 
+def _apply_job_function_lookup_migration(connection: DatabaseConnection) -> None:
+    """Index classified job functions without scanning immutable posting payloads."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS job_filter_roles (
+            version_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            PRIMARY KEY (version_id, role)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_filter_roles_role
+            ON job_filter_roles(role, canonical_job_id, version_id, content_hash);
+
+        CREATE TRIGGER IF NOT EXISTS job_filter_roles_insert
+        AFTER INSERT ON job_filter_intelligence BEGIN
+            INSERT OR IGNORE INTO job_filter_roles
+            SELECT NEW.version_id, NEW.canonical_job_id, NEW.content_hash, LOWER(TRIM(r.value))
+            FROM json_each(CASE WHEN json_type(NEW.filters_json, '$.roles') = 'array'
+                THEN json_extract(NEW.filters_json, '$.roles')
+                ELSE json_array(json_extract(NEW.filters_json, '$.role')) END) r
+            WHERE r.type = 'text' AND TRIM(r.value) != ''
+              AND json_extract(NEW.filters_json, '$.collar') = 'white';
+        END;
+        CREATE TRIGGER IF NOT EXISTS job_filter_roles_update
+        AFTER UPDATE ON job_filter_intelligence
+        WHEN NEW.version_id != OLD.version_id OR NEW.canonical_job_id != OLD.canonical_job_id
+          OR NEW.content_hash != OLD.content_hash
+          OR COALESCE(json_extract(NEW.filters_json, '$.roles'), '') != COALESCE(json_extract(OLD.filters_json, '$.roles'), '')
+          OR COALESCE(json_extract(NEW.filters_json, '$.role'), '') != COALESCE(json_extract(OLD.filters_json, '$.role'), '')
+          OR COALESCE(json_extract(NEW.filters_json, '$.collar'), '') != COALESCE(json_extract(OLD.filters_json, '$.collar'), '')
+        BEGIN
+            DELETE FROM job_filter_roles WHERE version_id = OLD.version_id;
+            INSERT OR IGNORE INTO job_filter_roles
+            SELECT NEW.version_id, NEW.canonical_job_id, NEW.content_hash, LOWER(TRIM(r.value))
+            FROM json_each(CASE WHEN json_type(NEW.filters_json, '$.roles') = 'array'
+                THEN json_extract(NEW.filters_json, '$.roles')
+                ELSE json_array(json_extract(NEW.filters_json, '$.role')) END) r
+            WHERE r.type = 'text' AND TRIM(r.value) != ''
+              AND json_extract(NEW.filters_json, '$.collar') = 'white';
+        END;
+        CREATE TRIGGER IF NOT EXISTS job_filter_roles_delete
+        AFTER DELETE ON job_filter_intelligence BEGIN
+            DELETE FROM job_filter_roles WHERE version_id = OLD.version_id;
+        END;
+
+        INSERT OR IGNORE INTO job_filter_roles
+        SELECT fi.version_id, fi.canonical_job_id, fi.content_hash, LOWER(TRIM(r.value))
+        FROM job_filter_intelligence fi,
+             json_each(CASE WHEN json_type(fi.filters_json, '$.roles') = 'array'
+                THEN json_extract(fi.filters_json, '$.roles')
+                ELSE json_array(json_extract(fi.filters_json, '$.role')) END) r
+        WHERE r.type = 'text' AND TRIM(r.value) != ''
+          AND json_extract(fi.filters_json, '$.collar') = 'white';
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3854,6 +3910,11 @@ MIGRATIONS = (
         "069_acquisition_identity_lookup_indexes",
         "Index exact job URL and company name fallback identity lookups.",
         _apply_acquisition_identity_lookup_indexes_migration,
+    ),
+    Migration.from_callable(
+        "070_job_function_lookup",
+        "Maintain an indexed, version-bound lookup for classified job functions.",
+        _apply_job_function_lookup_migration,
     ),
 )
 

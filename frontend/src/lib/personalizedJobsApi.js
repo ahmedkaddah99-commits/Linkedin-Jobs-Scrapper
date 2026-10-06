@@ -84,6 +84,11 @@ function normalizeArrangement(value) {
   return normalized || "unknown";
 }
 
+export function hasSelectedJobFunction(filters = {}) {
+  const roles = Array.isArray(filters.role) ? filters.role : [filters.role];
+  return roles.some((role) => text(role).length > 0);
+}
+
 export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeHidden = false, limit = 25, omitSort = false, view = "cards" } = {}) {
   const params = new URLSearchParams();
   const values = {

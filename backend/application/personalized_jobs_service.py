@@ -1363,6 +1363,7 @@ class PersonalizedJobsService:
         hidden_only: bool = False,
         plan_id: str = DEFAULT_PLAN_ID,
         card_view: bool = False,
+        require_role_selection: bool = False,
     ) -> dict[str, Any]:
         self._assert_catalog_access(user_id)
         limit = max(1, min(100, int(limit)))
@@ -1374,6 +1375,12 @@ class PersonalizedJobsService:
         if not explicit_filters and saved and isinstance(saved.get("filters"), Mapping):
             effective_filters.update(normalize_filters(saved["filters"]))
         effective_filters.update(explicit_filters)
+        if require_role_selection and not effective_filters.get('role'):
+            return {
+                'jobs': [], 'total': None, 'next_cursor': None,
+                'filters': effective_filters, 'selection_required': True,
+                'filter_capabilities': {},
+            }
         sort_mode = _text(effective_filters.get("sort") or "newest").casefold()
         if sort_mode not in {"newest", "priority", "best", "least_competitive"}:
             sort_mode = "newest"
@@ -1394,6 +1401,8 @@ class PersonalizedJobsService:
             filters=effective_filters,
             limit=limit,
             cursor=cursor_payload,
+            role_scoped=require_role_selection,
+            include_total=not require_role_selection,
             include_hidden=include_hidden,
             hidden_only=hidden_only,
         )
@@ -1421,7 +1430,7 @@ class PersonalizedJobsService:
         dispositions = self.store.list_dispositions_for_jobs(user_id, job_ids)
         state = catalog_state if catalog_state in EVALUATION_STATES else "partial"
         capabilities_started = time.perf_counter()
-        filter_capabilities = self.store.get_published_filter_capabilities()
+        filter_capabilities = self.store.get_published_filter_capabilities(query_support_only=True) if require_role_selection else self.store.get_published_filter_capabilities()
         capabilities_ms = round((time.perf_counter() - capabilities_started) * 1000, 1)
 
         def _timings() -> dict[str, float]:
@@ -1447,7 +1456,7 @@ class PersonalizedJobsService:
             ]
             return {
                 "jobs": jobs,
-                "total": int(result.get("total") or 0),
+                "total": result.get("total") if require_role_selection else int(result.get("total") or 0),
                 "next_cursor": next_cursor or None,
                 "filters": effective_filters,
                 "filter_capabilities": filter_capabilities,
@@ -1509,7 +1518,7 @@ class PersonalizedJobsService:
             ))
         return {
             "jobs": jobs,
-            "total": int(result.get("total") or 0),
+            "total": result.get("total") if require_role_selection else int(result.get("total") or 0),
             "next_cursor": next_cursor or None,
             "filters": effective_filters,
             "filter_capabilities": filter_capabilities,

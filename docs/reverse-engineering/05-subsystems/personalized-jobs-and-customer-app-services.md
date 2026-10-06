@@ -314,3 +314,12 @@ Remote feed reads use an HTTP read session with a shared 15-second request and r
 
 Render migration deployment first verifies every registered remote migration timestamp and checksum through HTTP. When all match, it skips opening a redundant schema write transaction. Missing or unverified migrations retain normal initialization; checksum mismatches fail deployment.
 
+### Job Function selection and bounded feed reads — October 6, 2026
+
+The customer Jobs route requires at least one selected Job Function. Without one the frontend issues no feed request; the HTTP feed service returns an empty selection-required response before catalog access. Saved named filters remain available, and direct job details and hidden jobs retain their routes.
+
+Migration `070_job_function_lookup` creates `job_filter_roles` indexed by normalized function. Version-bound memberships come from white-collar classification metadata, with insert/update/delete triggers preserving the lookup and ignoring unrelated metadata updates. The one-time backfill reads classification JSON, not posting history. Queries start from selected functions, deduplicate overlapping functions, and verify current version, content hash and publication membership before applying other filters. Unclassified jobs require classification before function discovery; stale classification never supplies current function membership.
+
+Customer feed requests omit exact totals (`total: null`). The UI displays jobs loaded and uses the extra page row to determine whether more exist. Internal catalog queries retain optional exact totals. Customer filter capabilities describe supported queries and do not scan the catalog for field availability. Existing role-less internal and hidden-job contracts are unchanged.
+
+Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows (first) and 5,912 (next); Project/Program Manager read 14,761 and 14,736. Each wrote zero rows; server SQL durations were 23–46ms. These are page-selection measurements, not whole-request counters; hydration and account preferences add reads. Complete repository page retrievals took 1.1–4.2 seconds. The prior standalone count measurement was 169,481 reads. Selecting a broad function or several functions can still examine many matching candidates; it no longer scans every published job for an exact total on each page.
