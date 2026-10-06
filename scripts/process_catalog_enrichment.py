@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -64,6 +65,7 @@ class NemoClient:
         ledger.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(ledger, check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY,day TEXT,reserved REAL,cost REAL,state TEXT)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
         self.db.commit()
 
     def remaining(self) -> float:
@@ -93,7 +95,7 @@ class NemoClient:
             payload = json.load(response)
         usage = payload.get("usage") or {}
         cost = usage.get("cost")
-        if not isinstance(cost, (int, float)) or cost < 0:
+        if not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
             cost = reserve
         with self.lock:
             self.db.execute("UPDATE calls SET cost=?,state='received' WHERE id=?", (cost, identity))
@@ -121,7 +123,7 @@ def claim(limit: int) -> tuple[str, list[dict]]:
     ids = [r["version_id"] for r in rows]
     candidates = execute("""SELECT j.canonical_job_id,q.version_id AS current_version_id,j.title,j.canonical_url,
         CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
-        v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
+        q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
         CASE WHEN f.content_hash=v.content_hash AND f.model=? AND f.prompt_version=? THEN 1 ELSE 0 END AS filters_ready,
         CASE WHEN d.content_hash=v.content_hash AND d.provider='openrouter' AND d.model=?
             AND d.prompt_version=? THEN 1 ELSE 0 END AS description_ready
@@ -194,9 +196,13 @@ def process(row: dict, token: str, generate) -> str:
             "filter_response_identity_mismatch", "filter_validation_failed", "unexpected_model",
             "description_has_no_supported_facts"}:
             code = str(exc)
+        state = code if code in {"source_missing", "source_incomplete"} else "pending"
+        if code in {"filter_response_identity_mismatch", "filter_validation_failed",
+                    "description_has_no_supported_facts"} and row.get("attempts", 0) >= 3:
+            state = "review_required"
         retry = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         execute("UPDATE job_enrichment_queue SET state=?,next_attempt_at=?,error_code=?,lease_token='',lease_expires_at='',updated_at=? "
-                "WHERE version_id=? AND lease_token=?", (code if code in {"source_missing", "source_incomplete"} else "pending", retry, code, now(), row["current_version_id"], token))
+                "WHERE version_id=? AND lease_token=?", (state, retry, code, now(), row["current_version_id"], token))
         return code
 
 

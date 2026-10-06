@@ -298,6 +298,11 @@ def build_pilot_description(
         "Posting: " + json.dumps({"title": str(row.get("title") or ""), "passages": passages}, ensure_ascii=False)
     )
     if require_source_quotes:
+        prompt = re.sub(r'("source_ids":\["p[123]"\])',
+                        r'\1,"source_quote":"Verbatim original source excerpt"', prompt)
+        prompt = ("MANDATORY: include source_quote in EVERY item and non-null header candidate. "
+                  "Copy a contiguous excerpt verbatim from the original passage; never translate the quotation, "
+                  "insert ellipses or combine separated excerpts. " + prompt)
         prompt = prompt.replace("Posting: ",
             "Every item and every non-null header candidate MUST include source_quote: an exact nonempty quotation "
             "from its cited original passage. Translate only the stated meaning. A source ID alone is insufficient evidence. "

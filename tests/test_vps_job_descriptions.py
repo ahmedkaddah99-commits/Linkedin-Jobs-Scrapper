@@ -293,6 +293,25 @@ def test_pilot_description_is_served_to_customer_from_shared_version(tmp_path: P
     assert detail["structured_description"]["experience_years_min"] is None
 
 
+def test_grounded_nemo_description_is_served_to_customer_from_shared_version(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RUNR_TEST_MODE", "1")
+    monkeypatch.setenv("RUNR_ENV", "test")
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
+    app = create_backend(tmp_path, storage_backend="sqlite", test_mode=True)
+    _seed_catalog(app, payload_overrides={"job-a": {"description": "Build reports."}})
+    store = app.repositories.personalized_jobs_store
+    row = store.get_published_job_row("job-a")
+    result = build_pilot_description(row, lambda _: {
+        "items": [{"section": "responsibilities", "text": "Build reports.", "source_ids": ["p1"], "source_quote": "Build reports."}],
+        "header_candidates": {"experience_years_min": {"value": 1, "source_ids": ["p1"], "source_quote": "Build reports."}},
+    }, require_source_quotes=True)
+    store.save_description_intelligence(**result)
+    detail = app.get_personalized_job_detail("user-a", "job-a")
+    assert detail["description_intelligence"]["prompt_version"] == "runr_description_nemo_v3"
+    assert detail["runr_summary"]["responsibilities"][0]["text"] == "Build reports."
+    assert detail["structured_description"]["experience_years_min"] is None
+
+
 def test_rule_backfill_prepares_all_jobs_and_model_can_upgrade_them(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("RUNR_TEST_MODE", "1")
     monkeypatch.setenv("RUNR_ENV", "test")
