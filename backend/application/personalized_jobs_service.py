@@ -1402,7 +1402,7 @@ class PersonalizedJobsService:
             limit=limit,
             cursor=cursor_payload,
             role_scoped=require_role_selection,
-            include_total=not require_role_selection,
+            include_total=not require_role_selection or cursor_payload is None,
             include_hidden=include_hidden,
             hidden_only=hidden_only,
         )

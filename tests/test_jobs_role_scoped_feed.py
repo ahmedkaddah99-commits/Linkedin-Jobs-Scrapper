@@ -110,7 +110,7 @@ class RoleScopedFeedTests(unittest.TestCase):
             [],
         )
 
-    def test_customer_feed_paginates_without_total_or_capability_scan(self):
+    def test_customer_feed_reuses_total_without_capability_scan(self):
         app = self.classified()
         store = app.repositories.personalized_jobs_store
         filters = {"role": ["Data Analyst", "Business Analyst", "Finance Analyst"]}
@@ -126,11 +126,36 @@ class RoleScopedFeedTests(unittest.TestCase):
                 require_role_selection=True,
                 card_view=True,
             )
-        self.assertIsNone(first["total"])
-        self.assertIsNone(second["total"])
+        self.assertEqual(first["total"], 2)
+        self.assertEqual(second["total"], 2)
         self.assertEqual(len({first["jobs"][0]["canonical_job_id"], second["jobs"][0]["canonical_job_id"]}), 2)
         self.assertIsNone(second["next_cursor"])
         capabilities.assert_called_with(query_support_only=True)
+
+    def test_count_cache_scopes_filters_expires_and_invalidates_hidden_jobs(self):
+        from contextlib import contextmanager
+        app = self.classified()
+        store = app.repositories.personalized_jobs_store
+        trace = []
+        original = store._connect
+        @contextmanager
+        def traced():
+            with original() as c:
+                c._connection.set_trace_callback(trace.append)
+                yield c
+        options = {'filters': {'role': ['Data Analyst']}, 'role_scoped': True}
+        with patch.object(store, '_connect', traced):
+            self.assertEqual(store.query_published_jobs('user-a', **options)['total'], 1)
+            trace.clear()
+            self.assertEqual(store.query_published_jobs('user-a', **options)['total'], 1)
+            self.assertFalse(any('COUNT(' in s.upper() for s in trace if 'feed_page_ids' in s))
+            self.assertEqual(store.query_published_jobs('user-a', filters={'role': ['Data Analyst'], 'location': ['Munich']}, role_scoped=True)['total'], 0)
+            with patch('backend.repositories.sqlite_personalized_jobs.time.monotonic', return_value=10**12):
+                trace.clear()
+                self.assertEqual(store.query_published_jobs('user-a', **options)['total'], 1)
+                self.assertTrue(any('COUNT(' in s.upper() for s in trace if 'feed_page_ids' in s))
+            store.set_disposition('user-a', 'job-a', state='hidden')
+            self.assertEqual(store.query_published_jobs('user-a', **options)['total'], 0)
 
     def test_role_query_plan_starts_from_indexed_lookup(self):
         app = self.classified()

@@ -10,6 +10,13 @@ application details, make the description displayable. Existing overview text
 remains visible after a supplemental Nemo pass. Previously the reader accepted
 only Nemo v2 and hid stored v3 descriptions behind its pending message.
 Backend enrichment gap flags remain outside the customer payload.
+The list header shows loaded jobs and the total matching the selected filters.
+The first page computes `COUNT(*)` over the indexed role scope and already
+materialized matching IDs; later pages reuse the count. A bounded process cache
+keys counts by publication, user, functions, filters and visibility for 120 seconds.
+Disposition changes clear the local cache. Counts can lag enrichment or changes
+made through another API process by up to two minutes. Pagination never computes
+a missing count; the frontend preserves the first page's total.
 The enrichment worker isolates failures to persist one job's error state; its
 lease permits later recovery while other jobs continue.
 

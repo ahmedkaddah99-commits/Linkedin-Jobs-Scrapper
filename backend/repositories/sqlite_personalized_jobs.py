@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from threading import RLock
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,6 +91,19 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
     def __init__(self, db_path: Path, *, initialize: bool = True):
         super().__init__(db_path, initialize=initialize)
         self._filter_capabilities_cache: dict[str, dict[str, bool]] = {}
+        self._feed_counts: dict[str, tuple[float, int]] = {}
+        self._feed_counts_lock = RLock()
+
+    def _cached_feed_count(self, key: str) -> int | None:
+        with self._feed_counts_lock:
+            cached = self._feed_counts.get(key)
+            return cached[1] if cached and time.monotonic() - cached[0] < 120 else None
+
+    def _remember_feed_count(self, key: str, total: int) -> None:
+        with self._feed_counts_lock:
+            if len(self._feed_counts) >= 512:
+                self._feed_counts.pop(next(iter(self._feed_counts)))
+            self._feed_counts[key] = (time.monotonic(), total)
 
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -324,7 +339,10 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             ).fetchone()
             return _row_payload(row)
 
-        return self._run_transaction(write)
+        result = self._run_transaction(write)
+        with self._feed_counts_lock:
+            self._feed_counts.clear()
+        return result
 
     def record_event(
         self,
@@ -1437,6 +1455,11 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if publication is None:
                 return {"publication": None, "rows": [], "total": 0}
             publication_payload = _row_payload(publication)
+            count_key = _json([str(publication['publication_id']), str(user_id), roles,
+                               {k: v for k, v in (filters or {}).items() if k != 'sort'},
+                               include_hidden, hidden_only])
+            cached_total = self._cached_feed_count(count_key) if role_scoped else None
+            compute_total = include_total and cached_total is None
             search_terms = (filters or {}).get("search_text") or []
             if isinstance(search_terms, str):
                 search_terms = [search_terms]
@@ -1513,11 +1536,13 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                         {cursor_where}
                         ORDER BY page.sort_at DESC, page.canonical_job_id DESC LIMIT ?
                     )
-                    {('SELECT page_ids.canonical_job_id, totals.total FROM (SELECT COUNT(*) AS total FROM matches) totals LEFT JOIN page_ids ON 1=1' if include_total else 'SELECT page_ids.canonical_job_id, NULL AS total FROM page_ids')}
+                    {('SELECT page_ids.canonical_job_id, totals.total FROM (SELECT COUNT(*) AS total FROM matches) totals LEFT JOIN page_ids ON 1=1' if compute_total else 'SELECT page_ids.canonical_job_id, NULL AS total FROM page_ids')}
                     """,
                     (*candidate_params, *cursor_params, limit + 1),
                 )
-                total = int(page_result[0]["total"] or 0) if include_total else None
+                total = int(page_result[0]["total"] or 0) if compute_total else cached_total
+                if role_scoped and compute_total:
+                    self._remember_feed_count(count_key, total)
                 rows = self._hydrate_feed_page(
                     connection,
                     publication_id=str(publication["publication_id"]),
@@ -1567,7 +1592,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             where_sql = " AND ".join(predicates) if predicates else "1=1"
             count_sql = f"SELECT COUNT(*) AS total FROM ({source}) AS page WHERE {count_where_sql}"
             count_params = [str(user_id), *(roles or []), str(publication["publication_id"]), str(user_id), *count_filter_params]
-            total = int(connection.execute(count_sql, tuple(count_params)).fetchone()["total"] or 0) if include_total else None
+            total = int(connection.execute(count_sql, tuple(count_params)).fetchone()["total"] or 0) if compute_total else cached_total
+            if role_scoped and compute_total:
+                self._remember_feed_count(count_key, total)
             rows_sql = f"SELECT page.* FROM ({source}) AS page WHERE {where_sql} ORDER BY {order_sql} LIMIT ?"
             rows_params = [str(user_id), *(roles or []), str(publication["publication_id"]), str(user_id), *filter_params, limit + 1]
             rows = connection.execute(rows_sql, tuple(rows_params)).fetchall()
