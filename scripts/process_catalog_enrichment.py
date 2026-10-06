@@ -277,6 +277,19 @@ def process(row: dict, token: str, generate) -> str:
         return code
 
 
+def process_isolated(row: dict, token: str, generate) -> str:
+    try:
+        return process(row, token, generate)
+    except Exception as exc:
+        # A failed error-state write must not kill unrelated jobs. The durable
+        # lease expires so the queue can reclaim this job without replaying its
+        # already reserved supplemental pass.
+        code = type(exc).__name__
+        print(json.dumps({"event": "enrichment_persistence_failed", "version_id": row["current_version_id"],
+                          "error_code": code}), flush=True)
+        return "persistence_" + code
+
+
 def main() -> int:
     load_project_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -314,7 +327,7 @@ def main() -> int:
                     if not rows:
                         exhausted = True
                         stop_claiming = True
-                    pending.update(pool.submit(process, row, token, generate) for row in rows)
+                    pending.update(pool.submit(process_isolated, row, token, generate) for row in rows)
             if not pending:
                 if stop_claiming:
                     break

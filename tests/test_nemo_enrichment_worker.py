@@ -7,6 +7,14 @@ from tests import test_jobs_role_scoped_feed as fixtures
 from scripts import process_catalog_enrichment as worker
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_failure_to_record_a_job_error_does_not_stop_other_jobs(self):
+  row={'current_version_id':'test-version'}
+  with patch.object(worker,'process',side_effect=[TimeoutError('private connection detail'),'completed']),patch('builtins.print') as log:
+   self.assertEqual(worker.process_isolated(row,'lease',None),'persistence_TimeoutError')
+   self.assertEqual(worker.process_isolated(row,'lease',None),'completed')
+   message=json.loads(log.call_args.args[0])
+   self.assertEqual(message['error_code'],'TimeoutError')
+   self.assertNotIn('private connection detail',log.call_args.args[0])
  _backend=fixtures.RoleScopedFeedTests._backend
  def classified(self):
   original=fixtures._seed_catalog

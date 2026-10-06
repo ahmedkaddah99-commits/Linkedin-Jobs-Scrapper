@@ -2,6 +2,17 @@
 
 # Customer web frontend (WS-8)
 
+## Description display correction (2026-10-07)
+
+The Jobs reader accepts `runr_description_v1`, `runr_description_nemo_v2` and
+`runr_description_nemo_v3`. Nonempty supported summary sections, including
+application details, make the description displayable. Existing overview text
+remains visible after a supplemental Nemo pass. Previously the reader accepted
+only Nemo v2 and hid stored v3 descriptions behind its pending message.
+Backend enrichment gap flags remain outside the customer payload.
+The enrichment worker isolates failures to persist one job's error state; its
+lease permits later recovery while other jobs continue.
+
 Scope: the Vite/React single-page app in `frontend/`. Everything here was read statically at `58a96674`. No build, test or browser session was run in Phase 2. LIVE PRODUCTION = UNKNOWN.
 
 ---

@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "./jobReadingPresentation.js";
+import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "./jobReadingPresentation.js";
+
+test("published Nemo v3 facts and preserved summaries are displayable", () => {
+  for (const prompt_version of ["runr_description_v1", "runr_description_nemo_v2", "runr_description_nemo_v3"]) {
+    const descriptionIntelligence = { prompt_version };
+    assert.equal(hasRunrDescription({ descriptionIntelligence, runrSummary: { responsibilities: [{ text: "Build data pipelines", source_ids: ["p1"] }] } }), true);
+    assert.equal(hasRunrDescription({ descriptionIntelligence, runrSummary: { overview: "Existing approved overview" } }), true);
+    assert.equal(hasRunrDescription({ descriptionIntelligence, runrSummary: { application_details: ["Apply through the employer website"] } }), true);
+    assert.equal(hasRunrDescription({ descriptionIntelligence, runrSummary: { responsibilities: [{ text: " " }, {}] } }), false);
+  }
+  assert.equal(hasRunrDescription({ runrSummary: { overview: "Unversioned result" } }), false);
+});
 
 test("posting age stays in hours or days", () => {
   const now = Date.parse("2026-10-02T12:00:00Z");

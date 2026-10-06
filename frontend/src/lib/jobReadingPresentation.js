@@ -1,3 +1,16 @@
+export function hasRunrDescription(job) {
+  const supported = ["runr_description_v1", "runr_description_nemo_v2", "runr_description_nemo_v3"];
+  if (!supported.includes(job.descriptionIntelligence?.prompt_version)) return false;
+  const summary = job.runrSummary || {};
+  if (typeof summary.overview === "string" && summary.overview.trim()) return true;
+  return ["responsibilities", "required_qualifications", "preferred_qualifications", "benefits", "application_details"].some(
+    (key) => Array.isArray(summary[key]) && summary[key].some((item) => {
+      const text = typeof item === "string" ? item : item?.text;
+      return typeof text === "string" && Boolean(text.trim());
+    }),
+  );
+}
+
 export function formatPostingAge(value, now = Date.now()) {
   const timestamp = Date.parse(String(value || ""));
   if (!Number.isFinite(timestamp)) return "";

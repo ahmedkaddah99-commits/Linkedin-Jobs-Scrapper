@@ -19,7 +19,7 @@ import {
 import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
-import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, seniorityFromYears } from "../../lib/jobReadingPresentation";
+import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
 import AllJobFilters from "./AllJobFilters";
 
 const NETWORK_ITEMS = [
@@ -317,7 +317,6 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
 
 function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
   const summary = job.runrSummary || {};
-  const pilot = job.descriptionIntelligence?.prompt_version === "runr_description_nemo_v2";
   const structured = job.structuredDescription || {};
   const extracted = (name) => structured[name]?.value;
   const present = (value) => value && String(value).toLowerCase() !== "unknown" ? value : null;
@@ -342,13 +341,13 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
     ["payments", scrapedSalary || salaryText],
     ];
   const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
-  const available = (job.descriptionIntelligence?.prompt_version === "runr_description_v1" && summary.overview)
-    || (pilot && ["responsibilities", "required_qualifications", "preferred_qualifications", "benefits"].some((key) => summary[key]?.length));
+  const available = hasRunrDescription(job);
   const itemsFor = (key) => Array.isArray(summary[key]) ? summary[key].filter((item) => typeof (typeof item === "string" ? item : item?.text) === "string" && (typeof item === "string" ? item : item.text).trim()) : [];
   const responsibilities = itemsFor("responsibilities");
   const required = itemsFor("required_qualifications");
   const preferred = itemsFor("preferred_qualifications");
   const benefits = itemsFor("benefits");
+  const applicationDetails = itemsFor("application_details");
   const list = (items) => <ul className="jobs-reading__list">{descriptionLines(items).map((line, index) => <li key={index}>{line}</li>)}</ul>;
   const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
   const postingAge = formatPostingAge(job.publishedAt);
@@ -356,10 +355,11 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
     <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value, className]) => <span className={className} key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
     <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
     {available ? <>
-      {!pilot && summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}
+      {summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}
       {responsibilities.length > 0 ? <section className="jobs-reading__section" id="job-responsibilities"><h2><Icon>checklist</Icon>Responsibilities</h2>{list(responsibilities)}</section> : null}
       {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
       {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
+      {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
     </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></div></section>}
     <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
     <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
