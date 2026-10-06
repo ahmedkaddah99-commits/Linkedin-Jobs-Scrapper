@@ -10,6 +10,7 @@ from unittest.mock import patch
 from backend.database import connection
 from backend.database.connection import (
     DatabaseConfigurationError,
+    DatabaseConnection,
     database_session,
 )
 from backend.database.initialization import initialize_database
@@ -171,7 +172,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         migration_ids = [migration.migration_id for migration in MIGRATIONS]
         self.assertEqual(migration_ids, sorted(migration_ids))
         self.assertEqual(len(migration_ids), len(set(migration_ids)))
-        self.assertEqual(current_migration_head(), "068_published_job_filter_intelligence")
+        self.assertEqual(current_migration_head(), "069_acquisition_identity_lookup_indexes")
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
 
     def test_database_boundary_rejects_a_configured_head_older_than_the_registry(self):
@@ -424,12 +425,11 @@ class DatabaseMigrationTests(unittest.TestCase):
         db_path = self._db_path("publisher_checkpoint_upgrade_missing")
         with closing(sqlite3.connect(db_path)) as connection:
             connection.executescript(BASE_SCHEMA_SQL)
-            connection.executemany(
-                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
-                [
-                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
-                    for migration in MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")]
-                ],
+            # Build the real prior schema before testing a checkpoint upgrade.
+            # Fake migration receipts leave catalog tables missing for later indexes.
+            run_migrations(
+                DatabaseConnection(connection, backend="sqlite"),
+                MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")],
             )
             connection.commit()
 
@@ -454,12 +454,11 @@ class DatabaseMigrationTests(unittest.TestCase):
         db_path = self._db_path("publisher_checkpoint_upgrade_existing")
         with closing(sqlite3.connect(db_path)) as connection:
             connection.executescript(BASE_SCHEMA_SQL)
-            connection.executemany(
-                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
-                [
-                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
-                    for migration in MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")]
-                ],
+            # Build the real prior schema before testing a checkpoint upgrade.
+            # Fake migration receipts leave catalog tables missing for later indexes.
+            run_migrations(
+                DatabaseConnection(connection, backend="sqlite"),
+                MIGRATIONS[: self._migration_index("061_acquisition_publisher_checkpoints")],
             )
             connection.execute(
                 """

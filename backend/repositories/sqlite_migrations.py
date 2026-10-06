@@ -3470,6 +3470,16 @@ def _apply_published_job_filter_intelligence_migration(connection: DatabaseConne
     """)
 
 
+def _apply_acquisition_identity_lookup_indexes_migration(connection: DatabaseConnection) -> None:
+    """Bound exact fallback identity resolution for each staged job/company."""
+    connection.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_url_identity
+            ON canonical_jobs(canonical_url, first_seen_at, canonical_job_id);
+        CREATE INDEX IF NOT EXISTS idx_canonical_companies_name_kind
+            ON canonical_companies(canonical_name, entity_kind, company_id);
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3839,6 +3849,11 @@ MIGRATIONS = (
         "068_published_job_filter_intelligence",
         "Store version-bound inferred job filters separately from employer postings.",
         _apply_published_job_filter_intelligence_migration,
+    ),
+    Migration.from_callable(
+        "069_acquisition_identity_lookup_indexes",
+        "Index exact job URL and company name fallback identity lookups.",
+        _apply_acquisition_identity_lookup_indexes_migration,
     ),
 )
 

@@ -3846,7 +3846,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         )
         while True:
             with self._connect() as connection:
-                candidate_rows = connection.execute(
+                candidate_rows = connection.fetch_read_rows(
                     f"""
                     SELECT DISTINCT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                                     j.title, j.location, j.canonical_url,
@@ -3882,7 +3882,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         *((*target_scope_params, cycle_id) if include_previous else ()),
                         bounded_page_size,
                     ),
-                ).fetchall()
+                )
             page_snapshot, page_rejected = self._publication_rows_with_completeness(
                 candidate_rows,
                 policy=policy,
@@ -7757,22 +7757,25 @@ class SqliteAcquisitionStore(_SqliteStore):
         )
         partial_source_warnings: list[dict[str, Any]] = []
         if cycle_id:
-            task_rows = connection.execute(
-                "SELECT task_id, target_id, status, complete_snapshot, valid_snapshot, quality_warnings_json "
-                "FROM acquisition_tasks WHERE cycle_id=?",
+            warning_row = connection.execute(
+                """
+                SELECT json_group_array(json_object(
+                    'task_id', COALESCE(task_id,''),
+                    'target_id', COALESCE(target_id,''),
+                    'status', COALESCE(status,''),
+                    'quality_warnings', json(CASE
+                        WHEN json_valid(quality_warnings_json) THEN CASE
+                            WHEN json_type(quality_warnings_json)='array' THEN quality_warnings_json
+                            ELSE '[]' END
+                        ELSE '[]' END)
+                )) AS warnings_json
+                FROM acquisition_tasks WHERE cycle_id=?
+                  AND (COALESCE(complete_snapshot,0)=0 OR status IN ('partial','interrupted'))
+                """,
                 (cycle_id,),
-            ).fetchall()
-            for task in task_rows:
-                quality_warnings = _decode(task["quality_warnings_json"], [])
-                if not bool(task["complete_snapshot"]) or str(task["status"] or "") in {"partial", "interrupted"}:
-                    partial_source_warnings.append(
-                        {
-                            "task_id": str(task["task_id"] or ""),
-                            "target_id": str(task["target_id"] or ""),
-                            "status": str(task["status"] or ""),
-                            "quality_warnings": quality_warnings if isinstance(quality_warnings, list) else [],
-                        }
-                    )
+            ).fetchone()
+            if warning_row is not None:
+                partial_source_warnings = _decode(warning_row["warnings_json"], [])
         warnings: list[dict[str, Any]] = []
         for code, values in (
             ("additions", additions),

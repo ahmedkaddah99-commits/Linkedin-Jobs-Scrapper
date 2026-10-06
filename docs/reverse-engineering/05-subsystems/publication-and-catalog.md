@@ -94,6 +94,14 @@ of at most 400, and retrieves its read-only result through the bounded HTTP read
 path. It no longer streams every historical target through the native driver
 before beginning delivery. `tests/test_producer_state_delivery.py` checks query
 plans, target scoping, replay, closure, atomic rollback, and version history.
+Publication candidate pages use the same bounded HTTP SELECT path outside the
+write transaction. Preflight aggregates partial-source warnings into one JSON
+row inside its existing transaction, preserving every warning without streaming
+all cycle tasks through the native driver after each delivery batch.
+Migration `069_acquisition_identity_lookup_indexes` adds ordinary B-tree indexes
+for exact canonical job URL and company name/kind fallback identity resolution.
+The same plan regression rejects a full durable job/company scan inside staging
+resolution as well as a full table scan by the projector's outer UPDATE.
 
 Ordinary small-company snapshots no longer execute the legacy dependent query series once per job. `run_delivery` packs at most 50 companies and 100 total source rows by default, normalizes them before remote projection, and calls `SqliteAcquisitionStore.ingest_snapshots_bulk`. Migration `062_acquisition_bulk_ingest_staging` supplies batch-scoped staging tables loaded through bounded `executemany` calls. Set-based projection preserves canonical company and job identity, append-only observations, immutable version history, source-state and closure rules, lifecycle recomputation, normalization provenance, completeness reports, and task evidence in one transaction.
 

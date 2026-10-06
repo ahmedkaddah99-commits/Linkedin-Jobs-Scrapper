@@ -36,6 +36,41 @@ import pytest
 from datetime import datetime, timezone
 
 
+def test_publication_preflight_keeps_all_warnings_in_one_database_row():
+    from backend.database.connection import DatabaseConnection
+
+    raw = sqlite3.connect(":memory:")
+    raw.execute("CREATE TABLE acquisition_tasks(task_id TEXT, target_id TEXT, status TEXT, complete_snapshot INTEGER, valid_snapshot INTEGER, quality_warnings_json TEXT, cycle_id TEXT)")
+    raw.executemany("INSERT INTO acquisition_tasks VALUES (?, ?, 'partial', 0, 1, '[\"coverage\"]', 'cycle')",
+                    [(f"task-{index}", f"target-{index}") for index in range(1000)])
+    connection = DatabaseConnection(raw, backend="sqlite")
+    transferred = []
+
+    class TrackedCursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+        def fetchall(self):
+            rows = self.cursor.fetchall()
+            transferred.append(len(rows))
+            return rows
+        def fetchone(self):
+            row = self.cursor.fetchone()
+            transferred.append(int(row is not None))
+            return row
+
+    class TrackedConnection:
+        def execute(self, sql, parameters=()):
+            return TrackedCursor(connection.execute(sql, parameters))
+
+    store = SqliteAcquisitionStore.__new__(SqliteAcquisitionStore)
+    preflight = store._build_publication_preflight(
+        TrackedConnection(), previous_publication_id="", next_snapshot=[], cycle_id="cycle",
+    )
+    assert len(preflight["partial_source_warnings"]) == 1000
+    assert all(item["quality_warnings"] == ["coverage"] for item in preflight["partial_source_warnings"])
+    assert max(transferred) == 1
+
+
 def test_source_state_lookup_is_scoped_to_current_targets(tmp_path):
     store = SqliteAcquisitionStore(tmp_path / "catalog.sqlite3")
     target = _target({"canonical_company_id": "company-scope", "canonical_company_name": "Company"}, SOURCE_EMPLOYER)
@@ -509,7 +544,7 @@ def test_bulk_projection_updates_search_batch_ids_instead_of_scanning_catalog(tm
         normalized = " ".join(sql.split())
         if normalized.startswith("UPDATE ") and any(
             normalized.startswith("UPDATE " + table + " AS ")
-            for table in ("canonical_jobs", "job_source_states", "canonical_job_external_ids", "acquisition_tasks")
+            for table in ("canonical_jobs", "job_source_states", "canonical_job_external_ids", "acquisition_tasks", "acquisition_ingest_staging")
         ):
             plan = original_execute(connection, "EXPLAIN QUERY PLAN " + sql, parameters).fetchall()
             plans.append((normalized, [row["detail"] for row in plan]))
@@ -524,8 +559,8 @@ def test_bulk_projection_updates_search_batch_ids_instead_of_scanning_catalog(tm
     }])
     assert len(plans) >= 8
     for sql, plan in plans:
-        alias = sql.split()[3]
-        assert not any(detail == f"SCAN {alias}" for detail in plan), (sql, plan)
+        forbidden = {"SCAN j", "SCAN c", "SCAN job", "SCAN state", "SCAN e", "SCAN task"}
+        assert not any(detail in forbidden for detail in plan), (sql, plan)
 
 
 def test_bulk_projection_failure_rolls_back_staging_and_projection(tmp_path, monkeypatch):

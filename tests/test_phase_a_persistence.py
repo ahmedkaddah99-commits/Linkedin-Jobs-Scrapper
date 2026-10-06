@@ -23,11 +23,16 @@ class _RowsCursor:
 class _RecordingConnection:
     def __init__(self, rows=()):
         self.calls = []
+        self.read_calls = []
         self._rows = rows
 
     def execute(self, sql, parameters=()):
         self.calls.append((sql, tuple(parameters)))
         return _RowsCursor(self._rows if sql.lstrip().startswith("SELECT") else ())
+
+    def fetch_read_rows(self, sql, parameters=()):
+        self.read_calls.append((sql, tuple(parameters)))
+        return self.execute(sql, parameters).fetchall()
 
 
 class PhaseAPersistenceTests(unittest.TestCase):
@@ -67,6 +72,7 @@ class PhaseAPersistenceTests(unittest.TestCase):
         self.assertEqual([row["canonical_job_id"] for row in snapshot], ["job-b", "job-c", "job-d"])
         self.assertEqual(rejected, [])
         self.assertEqual(len(connection.calls), 2)
+        self.assertEqual(len(connection.read_calls), 2)
         self.assertEqual(connection.calls[0][1][0], "")
         self.assertEqual(connection.calls[1][1][0], "job-c")
         self.assertTrue(all("LIMIT ?" in sql for sql, _ in connection.calls))
