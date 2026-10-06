@@ -271,7 +271,9 @@ def build_pilot_description(
         raise ValueError("posting description is empty")
     lookup = {entry["id"]: entry["text"] for entry in passages}
     prompt = (
-        "Read this ONE English employer job posting. Return one JSON object only with keys items and header_candidates. "
+        "Read this ONE employer job posting in its original language. Write the extracted facts in English. "
+        "Keep source IDs tied to the original passages, including German source text. "
+        "Return one JSON object only with keys items and header_candidates. "
         "Follow this shape exactly: {\"items\":[{\"section\":\"responsibilities\",\"text\":\"One fact\",\"source_ids\":[\"p1\"]}],"
         "\"header_candidates\":{\"location\":null,\"work_arrangement\":{\"value\":\"remote\",\"source_ids\":[\"p2\"]},"
         "\"employment_type\":null,\"seniority\":null,\"experience_years_min\":{\"value\":1,\"source_ids\":[\"p3\"]},"

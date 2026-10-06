@@ -1,0 +1,243 @@
+"""Continuously enrich queued published versions with Mistral Nemo on the VPS."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from uuid import uuid4
+
+PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT))
+
+from backend.application.catalog_enrichment import attach_source_metadata, enrich_version
+from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
+from backend.application.vps_job_descriptions import NEMO_MODEL, PILOT_PROMPT_VERSION
+from backend.config import load_project_dotenv
+from backend.database.connection import validate_release_provenance
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def execute(sql: str, args=()) -> list[dict]:
+    def parameter(value):
+        if value is None:
+            return {"type": "null"}
+        if isinstance(value, int):
+            return {"type": "integer", "value": str(value)}
+        return {"type": "text", "value": str(value)}
+    body = {"requests": [{"type": "execute", "stmt": {
+        "sql": sql, "args": [parameter(v) for v in args], "want_rows": True}}, {"type": "close"}]}
+    url = os.environ["TURSO_DATABASE_URL"].replace("libsql://", "https://").rstrip("/") + "/v2/pipeline"
+    request = Request(url, data=json.dumps(body).encode(), headers={
+        "Authorization": "Bearer " + os.environ["TURSO_AUTH_TOKEN"], "Content-Type": "application/json"})
+    with urlopen(request, timeout=30) as response:
+        result = json.load(response)["results"][0]
+    if result["type"] != "ok":
+        raise RuntimeError("turso_" + str(result.get("error", {}).get("code", "unknown")))
+    value = result["response"]["result"]
+    def decode(cell):
+        if cell["type"] == "null":
+            return None
+        if cell["type"] == "integer":
+            return int(cell["value"])
+        return cell["value"]
+    names = [c["name"] for c in value["cols"]]
+    return [dict(zip(names, map(decode, row))) for row in value["rows"]]
+
+
+class NemoClient:
+    """Bound daily cost before calls and retain a durable local usage ledger."""
+    def __init__(self, ledger: Path, budget: float):
+        self.lock = threading.Lock()
+        self.budget = budget
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(ledger, check_same_thread=False)
+        self.db.execute("CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY,day TEXT,reserved REAL,cost REAL,state TEXT)")
+        self.db.commit()
+
+    def remaining(self) -> float:
+        day = datetime.now(timezone.utc).date().isoformat()
+        with self.lock:
+            used = self.db.execute("SELECT COALESCE(SUM(COALESCE(cost,reserved)),0) FROM calls WHERE day=?", (day,)).fetchone()[0]
+        return self.budget - used
+
+    def __call__(self, prompt: str) -> dict:
+        day = datetime.now(timezone.utc).date().isoformat()
+        # UTF-8 bytes upper-bound input tokens; reserve the entire output cap.
+        reserve = (len(prompt.encode()) + 8192) * 0.03 / 1_000_000
+        identity = uuid4().hex
+        with self.lock:
+            used = self.db.execute("SELECT COALESCE(SUM(COALESCE(cost,reserved)),0) FROM calls WHERE day=?", (day,)).fetchone()[0]
+            if used + reserve > self.budget:
+                raise RuntimeError("daily_budget_exhausted")
+            self.db.execute("INSERT INTO calls VALUES (?,?,?,NULL,'reserved')", (identity, day, reserve))
+            self.db.commit()
+        body = {"model": NEMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0, "max_tokens": 8192, "response_format": {"type": "json_object"},
+                "provider": {"order": ["Parasail", "DeepInfra", "DekaLLM"], "require_parameters": True,
+                             "max_price": {"prompt": 0.03, "completion": 0.03}}}
+        request = Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps(body).encode(),
+                          headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"], "Content-Type": "application/json"})
+        with urlopen(request, timeout=120) as response:
+            payload = json.load(response)
+        usage = payload.get("usage") or {}
+        cost = usage.get("cost")
+        if not isinstance(cost, (int, float)) or cost < 0:
+            cost = reserve
+        with self.lock:
+            self.db.execute("UPDATE calls SET cost=?,state='received' WHERE id=?", (cost, identity))
+            self.db.commit()
+        if payload.get("model") != NEMO_MODEL:
+            raise ValueError("unexpected_model")
+        result = json.loads(payload["choices"][0]["message"]["content"])
+        result["_runr_model"] = NEMO_MODEL
+        return result
+
+
+def claim(limit: int) -> tuple[str, list[dict]]:
+    timestamp = now()
+    execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
+            "WHERE state='processing' AND lease_expires_at<?", (timestamp,))
+    token = uuid4().hex
+    lease = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    rows = execute("""UPDATE job_enrichment_queue SET state='processing',attempts=attempts+1,
+        lease_token=?,lease_expires_at=?,updated_at=? WHERE version_id IN (
+        SELECT q.version_id FROM job_enrichment_queue q
+        WHERE q.state='pending' AND q.next_attempt_at<=? ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
+        AND state='pending' RETURNING version_id""", (token, lease, timestamp, timestamp, limit))
+    if not rows:
+        return token, []
+    ids = [r["version_id"] for r in rows]
+    candidates = execute("""SELECT j.canonical_job_id,q.version_id AS current_version_id,j.title,j.canonical_url,
+        CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
+        v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
+        CASE WHEN f.content_hash=v.content_hash AND f.model=? AND f.prompt_version=? THEN 1 ELSE 0 END AS filters_ready,
+        CASE WHEN d.content_hash=v.content_hash AND d.provider='openrouter' AND d.model=?
+            AND d.prompt_version IN ('runr_description_v1',?) THEN 1 ELSE 0 END AS description_ready
+        FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
+        JOIN job_posting_versions v ON v.version_id=q.version_id
+        LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
+        LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id
+        WHERE v.version_id IN (""" + ",".join("?" for _ in ids) + ")",
+        (NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, PILOT_PROMPT_VERSION, *ids))
+    return token, candidates
+
+
+def save_stage(row: dict, token: str, output: dict) -> None:
+    timestamp = now()
+    guard = """SELECT 1 FROM job_enrichment_queue q JOIN canonical_jobs j
+        ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
+        JOIN job_posting_versions v ON v.version_id=q.version_id AND v.content_hash=q.content_hash
+        WHERE q.version_id=? AND q.lease_token=? AND q.content_hash=? AND q.state='processing'"""
+    ownership = (row["current_version_id"], token, row["content_hash"])
+    if "filters" in output:
+        raw = row.get("version_payload_json") or "{}"
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+        filters = attach_source_metadata(output["filters"], payload)
+        execute("""INSERT INTO job_filter_intelligence
+            SELECT ?,?,?,?,?,?,? WHERE EXISTS(""" + guard + """)
+            ON CONFLICT(version_id) DO UPDATE SET content_hash=excluded.content_hash,
+            filters_json=excluded.filters_json,model=excluded.model,prompt_version=excluded.prompt_version,
+            generated_at=excluded.generated_at RETURNING version_id""",
+            (row["current_version_id"], row["canonical_job_id"], row["content_hash"], json.dumps(filters, ensure_ascii=False),
+             NEMO_MODEL, FILTER_PROMPT, timestamp, *ownership))
+    if "description" in output:
+        d = output["description"]
+        execute("""INSERT INTO job_description_intelligence
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(""" + guard + """)
+            ON CONFLICT(version_id) DO UPDATE SET content_hash=excluded.content_hash,
+            summary_json=excluded.summary_json,structured_json=excluded.structured_json,original_json=excluded.original_json,
+            provider=excluded.provider,model=excluded.model,prompt_version=excluded.prompt_version,
+            generated_at=excluded.generated_at,updated_at=excluded.updated_at RETURNING version_id""",
+            (d["version_id"], d["canonical_job_id"], d["content_hash"], json.dumps(d["summary"], ensure_ascii=False),
+             json.dumps(d["structured_description"], ensure_ascii=False), json.dumps(d["original_posting"], ensure_ascii=False),
+             "openrouter", NEMO_MODEL, d["prompt_version"], timestamp, timestamp, timestamp, *ownership))
+
+
+def process(row: dict, token: str, generate) -> str:
+    try:
+        if not row.get("version_is_current", True):
+            execute("UPDATE job_enrichment_queue SET state='superseded',lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?",
+                    (now(), row["current_version_id"], token))
+            return "superseded"
+        if not row["filters_ready"]:
+            output = enrich_version({**row, "description_ready": True}, generate)
+            save_stage(row, token, output)
+        if not row["description_ready"]:
+            output = enrich_version({**row, "filters_ready": True}, generate)
+            save_stage(row, token, output)
+        saved = execute("""UPDATE job_enrichment_queue SET state='completed',error_code='',
+            lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?
+            AND EXISTS(SELECT 1 FROM job_filter_intelligence f WHERE f.version_id=job_enrichment_queue.version_id
+                AND f.content_hash=job_enrichment_queue.content_hash AND f.model=? AND f.prompt_version=?)
+            AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
+                AND d.content_hash=job_enrichment_queue.content_hash AND d.model=? AND d.provider='openrouter'
+                AND d.prompt_version IN ('runr_description_v1',?))
+            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, PILOT_PROMPT_VERSION))
+        return "completed" if saved else "superseded"
+    except Exception as exc:
+        code = "source_missing" if str(exc) == "source_missing" else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
+        if isinstance(exc, HTTPError):
+            code = "provider_http_" + str(exc.code)
+        elif isinstance(exc, ValueError) and str(exc) in {
+            "filter_response_identity_mismatch", "filter_validation_failed", "unexpected_model",
+            "description_has_no_supported_facts"}:
+            code = str(exc)
+        retry = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+        execute("UPDATE job_enrichment_queue SET state=?,next_attempt_at=?,error_code=?,lease_token='',lease_expires_at='',updated_at=? "
+                "WHERE version_id=? AND lease_token=?", ("source_missing" if code == "source_missing" else "pending", retry, code, now(), row["current_version_id"], token))
+        return code
+
+
+def main() -> int:
+    load_project_dotenv()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--max-jobs", type=int, default=512)
+    parser.add_argument("--runtime-seconds", type=int, default=900)
+    parser.add_argument("--daily-budget", type=float, default=10)
+    parser.add_argument("--ledger", type=Path, default=Path("/srv/runr/state/nemo-enrichment-usage.sqlite3"))
+    args = parser.parse_args()
+    if not 1 <= args.workers <= 32 or not 1 <= args.max_jobs <= 10000 or args.daily_budget <= 0:
+        parser.error("invalid worker, job or budget limit")
+    for key in ("OPENROUTER_API_KEY", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
+        if not os.environ.get(key):
+            parser.error("missing " + key)
+    validate_release_provenance()
+    generate = NemoClient(args.ledger, args.daily_budget)
+    started = time.monotonic()
+    counts: dict[str, int] = {}
+    attempted = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        while attempted < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
+            if generate.remaining() < 0.005:
+                counts["daily_budget_exhausted"] = 1
+                break
+            token, rows = claim(min(args.workers, args.max_jobs - attempted))
+            if not rows:
+                break
+            futures = [pool.submit(process, row, token, generate) for row in rows]
+            for future in as_completed(futures):
+                status = future.result()
+                attempted += 1
+                counts[status] = counts.get(status, 0) + 1
+            print(json.dumps({"attempted": attempted, **counts}), flush=True)
+            if counts.get("daily_budget_exhausted"):
+                break
+    print(json.dumps({"attempted": attempted, "seconds": round(time.monotonic() - started, 2), **counts}), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

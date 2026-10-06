@@ -3536,6 +3536,50 @@ def _apply_job_function_lookup_migration(connection: DatabaseConnection) -> None
     """)
 
 
+def _apply_nemo_enrichment_queue_migration(connection: DatabaseConnection) -> None:
+    """Durably discover published versions without polling the whole catalog."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS job_enrichment_queue (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL DEFAULT '',
+            lease_token TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_enrichment_queue_due
+            ON job_enrichment_queue(state, next_attempt_at, version_id);
+        CREATE TRIGGER IF NOT EXISTS job_enrichment_published
+        AFTER INSERT ON acquisition_publication_jobs BEGIN
+            INSERT OR IGNORE INTO job_enrichment_queue(version_id,canonical_job_id,content_hash)
+            SELECT v.version_id,j.canonical_job_id,v.content_hash
+            FROM canonical_jobs j JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            WHERE j.canonical_job_id=NEW.canonical_job_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS job_enrichment_version_changed
+        AFTER UPDATE OF current_version_id ON canonical_jobs
+        WHEN NEW.current_version_id != OLD.current_version_id BEGIN
+            INSERT OR IGNORE INTO job_enrichment_queue(version_id,canonical_job_id,content_hash)
+            SELECT v.version_id,NEW.canonical_job_id,v.content_hash
+            FROM job_posting_versions v WHERE v.version_id=NEW.current_version_id
+            AND EXISTS(SELECT 1 FROM acquisition_publication_head h
+                JOIN acquisition_publication_jobs pj ON pj.publication_id=h.publication_id
+                WHERE h.head_id=1 AND pj.canonical_job_id=NEW.canonical_job_id);
+        END;
+        INSERT OR IGNORE INTO job_enrichment_queue(version_id,canonical_job_id,content_hash)
+        SELECT v.version_id,j.canonical_job_id,v.content_hash
+        FROM acquisition_publication_head h
+        JOIN acquisition_publication_jobs pj ON pj.publication_id=h.publication_id
+        JOIN canonical_jobs j ON j.canonical_job_id=pj.canonical_job_id
+        JOIN job_posting_versions v ON v.version_id=j.current_version_id
+        WHERE h.head_id=1;
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3915,6 +3959,11 @@ MIGRATIONS = (
         "070_job_function_lookup",
         "Maintain an indexed, version-bound lookup for classified job functions.",
         _apply_job_function_lookup_migration,
+    ),
+    Migration.from_callable(
+        "071_nemo_catalog_enrichment_queue",
+        "Durably queue published posting versions for Nemo descriptions and filters.",
+        _apply_nemo_enrichment_queue_migration,
     ),
 )
 

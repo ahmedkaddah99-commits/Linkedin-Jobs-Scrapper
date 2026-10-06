@@ -2,8 +2,8 @@
 Description=Process published Runr job descriptions
 
 [Timer]
-OnCalendar=*-*-* 03,09,15,21:30:00
-Persistent=true
+OnBootSec=1min
+OnUnitInactiveSec=1min
 Unit=runr-job-descriptions.service
 
 [Install]
