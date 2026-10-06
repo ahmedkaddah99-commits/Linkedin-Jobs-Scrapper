@@ -26,6 +26,10 @@ def missing_fields(filters, summary, structured):
         missing.append('filters.employment_type')
     missing += ['summary.' + key for key in SECTIONS if empty(summary.get(key))]
     missing += ['structured.' + key for key in HEADERS if empty(structured.get(key))]
+    salary = structured.get('salary')
+    if isinstance(salary, dict) and isinstance(salary.get('value'), dict):
+        missing += ['structured.salary.' + key for key in ('min', 'max', 'currency', 'period')
+                    if empty(salary['value'].get(key))]
     return missing
 
 
@@ -94,6 +98,18 @@ def supplement(row, filters, summary, structured, generate):
             for key in HEADERS:
                 if empty(updated_structured.get(key)) and not empty(candidate['structured_description'].get(key)):
                     updated_structured[key] = candidate['structured_description'][key]
+            old_salary = updated_structured.get('salary')
+            new_salary = candidate['structured_description'].get('salary')
+            if isinstance(old_salary, dict) and isinstance(new_salary, dict):
+                old_value, new_value = old_salary.get('value'), new_salary.get('value')
+                if isinstance(old_value, dict) and isinstance(new_value, dict) and all(
+                        empty(old_value.get(key)) or old_value[key] == new_value.get(key)
+                        for key in ('currency', 'period')):
+                    for key in ('min', 'max', 'currency', 'period'):
+                        if empty(old_value.get(key)) and not empty(new_value.get(key)):
+                            old_value[key] = new_value[key]
+                    old_salary['source_ids'] = list(dict.fromkeys(
+                        old_salary.get('source_ids', []) + new_salary.get('source_ids', [])))
             if updated_summary != summary or updated_structured != structured:
                 updated_structured['source_passages'] = candidate['structured_description']['source_passages']
                 candidate['summary'], candidate['structured_description'] = updated_summary, updated_structured

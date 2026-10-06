@@ -130,7 +130,7 @@ class NemoClient:
 def claim(limit: int) -> tuple[str, list[dict]]:
     timestamp = now()
     execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='' WHERE version_id IN ("
-            "SELECT version_id FROM job_enrichment_queue WHERE state='completed' AND gap_pass_attempted=0 LIMIT ?)", (limit,))
+            "SELECT version_id FROM job_enrichment_queue WHERE state IN ('completed','review_required','source_missing','source_incomplete') AND gap_pass_attempted=0 LIMIT ?)", (limit,))
     execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
             "WHERE state='processing' AND lease_expires_at<?", (timestamp,))
     token = uuid4().hex

@@ -32,3 +32,10 @@ def test_unsupported_fields_stay_missing_after_one_pass():
 
 def test_zero_is_populated_not_a_missing_experience_value():
  assert 'filters.required_experience_years' not in missing_fields({'required_experience_years':0},{},{})
+
+
+def test_partial_salary_marks_the_missing_bound_only():
+ gaps=missing_fields({}, {}, {'salary':{'value':{'min':50000,'max':None,'currency':'EUR','period':'year'}}})
+ assert 'structured.salary.max' in gaps
+ assert 'structured.salary.min' not in gaps
+ assert 'structured.salary' not in gaps
