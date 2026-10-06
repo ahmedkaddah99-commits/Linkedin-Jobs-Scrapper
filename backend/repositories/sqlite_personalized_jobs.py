@@ -1288,9 +1288,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             SELECT j.canonical_job_id, j.first_seen_at, j.last_verified_at,
                    COALESCE(d.state, 'none') AS user_state
             FROM acquisition_publication_jobs pj
-            JOIN canonical_jobs j INDEXED BY idx_canonical_jobs_feed_metadata ON j.canonical_job_id = pj.canonical_job_id
+            JOIN canonical_jobs j ON j.canonical_job_id = pj.canonical_job_id
             JOIN canonical_companies c ON c.company_id = j.company_id
-            LEFT JOIN job_filter_intelligence fi INDEXED BY idx_job_filter_feed_metadata ON fi.version_id = j.current_version_id
+            LEFT JOIN job_filter_intelligence fi ON fi.version_id = j.current_version_id
             LEFT JOIN personalized_job_dispositions d
               ON d.canonical_job_id = j.canonical_job_id AND d.user_id = ?
             WHERE pj.publication_id = ? AND c.entity_kind = 'employer'

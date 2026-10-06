@@ -309,5 +309,5 @@ Local source, model responses, API usage, all job links and rollback evidence ar
 
 ### October 6 feed read correction
 
-Remote feed reads use an HTTP read session with a shared 15-second request and retry budget. This is a request budget, not a strict wall-clock deadline. Reads inside an existing transaction retain that connection so uncommitted changes remain visible. The default count checks posting hashes only for blue-collar candidates; migration 070 adds covering indexes for catalog metadata, filter collar metadata, and version hashes. Membership publication remains one catalog per acquisition cycle with incremental membership changes.
+Remote feed reads use an HTTP read session with a shared 15-second request and retry budget. This is a request budget, not a strict wall-clock deadline. Reads inside an existing transaction retain that connection so uncommitted changes remain visible. The default count checks posting hashes only for blue-collar candidates. A proposed covering-index migration was withdrawn before being recorded because Turso returned SQLITE_IOERR during index creation; the deployed migration head remains 069. Membership publication remains one catalog per acquisition cycle with incremental membership changes.
 
