@@ -21,9 +21,28 @@ sys.path.insert(0, str(PROJECT))
 
 from backend.application.catalog_enrichment import attach_source_metadata, enrich_version
 from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
-from backend.application.vps_job_descriptions import NEMO_MODEL, GROUNDED_PROMPT_VERSION
+from backend.application.vps_job_descriptions import NEMO_MODEL
 from backend.config import load_project_dotenv
 from backend.database.connection import validate_release_provenance
+
+
+FILTER_ACCEPTABLE_SQL = """CASE WHEN json_valid(f.filters_json) THEN
+    json_type(f.filters_json)='object' AND (
+        json_extract(f.filters_json,'$.collar')='blue'
+        OR EXISTS(SELECT 1 FROM job_filter_roles r WHERE r.version_id=f.version_id
+            AND r.content_hash=f.content_hash)) ELSE 0 END"""
+
+
+DESCRIPTION_ACCEPTABLE_SQL = """d.prompt_version IN ('runr_description_v1','runr_description_nemo_v2','runr_description_nemo_v3')
+    AND CASE WHEN json_valid(d.summary_json) AND json_valid(d.structured_json) THEN
+        json_type(d.summary_json)='object' AND json_type(d.structured_json)='object' AND (
+            COALESCE(json_array_length(d.summary_json,'$.responsibilities'),0)>0
+            OR COALESCE(json_array_length(d.summary_json,'$.required_qualifications'),0)>0
+            OR COALESCE(json_array_length(d.summary_json,'$.preferred_qualifications'),0)>0
+            OR COALESCE(json_array_length(d.summary_json,'$.benefits'),0)>0
+            OR COALESCE(json_array_length(d.summary_json,'$.application_details'),0)>0
+            OR LENGTH(TRIM(COALESCE(json_extract(d.summary_json,'$.overview'),'')))>0)
+        ELSE 0 END"""
 
 
 def now() -> str:
@@ -124,15 +143,15 @@ def claim(limit: int) -> tuple[str, list[dict]]:
     candidates = execute("""SELECT j.canonical_job_id,q.version_id AS current_version_id,j.title,j.canonical_url,
         CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
         q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
-        CASE WHEN f.content_hash=v.content_hash AND f.model=? AND f.prompt_version=? THEN 1 ELSE 0 END AS filters_ready,
+        CASE WHEN f.content_hash=v.content_hash AND f.model=? AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
         CASE WHEN d.content_hash=v.content_hash AND d.provider='openrouter' AND d.model=?
-            AND d.prompt_version=? THEN 1 ELSE 0 END AS description_ready
+            AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
         LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id
         WHERE v.version_id IN (""" + ",".join("?" for _ in ids) + ")",
-        (NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, GROUNDED_PROMPT_VERSION, *ids))
+        (NEMO_MODEL, NEMO_MODEL, *ids))
     return token, candidates
 
 
@@ -176,17 +195,20 @@ def process(row: dict, token: str, generate) -> str:
         if not row["filters_ready"]:
             output = enrich_version({**row, "description_ready": True}, generate)
             save_stage(row, token, output)
+            filters = output["filters"]
+            if filters.get("collar") == "white" and not filters.get("roles"):
+                raise ValueError("function_missing")
         if not row["description_ready"]:
             output = enrich_version({**row, "filters_ready": True}, generate)
             save_stage(row, token, output)
         saved = execute("""UPDATE job_enrichment_queue SET state='completed',error_code='',
             lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?
             AND EXISTS(SELECT 1 FROM job_filter_intelligence f WHERE f.version_id=job_enrichment_queue.version_id
-                AND f.content_hash=job_enrichment_queue.content_hash AND f.model=? AND f.prompt_version=?)
+                AND f.content_hash=job_enrichment_queue.content_hash AND f.model=? AND """ + FILTER_ACCEPTABLE_SQL + """)
             AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
                 AND d.content_hash=job_enrichment_queue.content_hash AND d.model=? AND d.provider='openrouter'
-                AND d.prompt_version=?)
-            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, FILTER_PROMPT, NEMO_MODEL, GROUNDED_PROMPT_VERSION))
+                AND """ + DESCRIPTION_ACCEPTABLE_SQL + """)
+            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, NEMO_MODEL))
         return "completed" if saved else "superseded"
     except Exception as exc:
         code = str(exc) if str(exc) in {"source_missing", "source_incomplete"} else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
@@ -194,9 +216,11 @@ def process(row: dict, token: str, generate) -> str:
             code = "provider_http_" + str(exc.code)
         elif isinstance(exc, ValueError) and str(exc) in {
             "filter_response_identity_mismatch", "filter_validation_failed", "unexpected_model",
-            "description_has_no_supported_facts"}:
+            "description_has_no_supported_facts", "function_missing"}:
             code = str(exc)
         state = code if code in {"source_missing", "source_incomplete"} else "pending"
+        if code == "function_missing":
+            state = "review_required"
         if code in {"filter_response_identity_mismatch", "filter_validation_failed",
                     "description_has_no_supported_facts"} and row.get("attempts", 0) >= 3:
             state = "review_required"
