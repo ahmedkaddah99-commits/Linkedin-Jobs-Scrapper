@@ -143,15 +143,14 @@ def claim(limit: int) -> tuple[str, list[dict]]:
     candidates = execute("""SELECT j.canonical_job_id,q.version_id AS current_version_id,j.title,j.canonical_url,
         CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
         q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
-        CASE WHEN f.content_hash=v.content_hash AND f.model=? AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
-        CASE WHEN d.content_hash=v.content_hash AND d.provider='openrouter' AND d.model=?
-            AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
+        CASE WHEN f.content_hash=v.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
+        CASE WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
         LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id
         WHERE v.version_id IN (""" + ",".join("?" for _ in ids) + ")",
-        (NEMO_MODEL, NEMO_MODEL, *ids))
+        tuple(ids))
     return token, candidates
 
 
@@ -204,11 +203,10 @@ def process(row: dict, token: str, generate) -> str:
         saved = execute("""UPDATE job_enrichment_queue SET state='completed',error_code='',
             lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?
             AND EXISTS(SELECT 1 FROM job_filter_intelligence f WHERE f.version_id=job_enrichment_queue.version_id
-                AND f.content_hash=job_enrichment_queue.content_hash AND f.model=? AND """ + FILTER_ACCEPTABLE_SQL + """)
+                AND f.content_hash=job_enrichment_queue.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """)
             AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
-                AND d.content_hash=job_enrichment_queue.content_hash AND d.model=? AND d.provider='openrouter'
-                AND """ + DESCRIPTION_ACCEPTABLE_SQL + """)
-            RETURNING version_id""", (now(), row["current_version_id"], token, NEMO_MODEL, NEMO_MODEL))
+                AND d.content_hash=job_enrichment_queue.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """)
+            RETURNING version_id""", (now(), row["current_version_id"], token))
         return "completed" if saved else "superseded"
     except Exception as exc:
         code = str(exc) if str(exc) in {"source_missing", "source_incomplete"} else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)

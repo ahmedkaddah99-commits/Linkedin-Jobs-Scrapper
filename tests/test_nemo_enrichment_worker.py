@@ -17,6 +17,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
  def test_claim_save_and_reuse_after_description_failure(self):
   app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
+   c.execute("DELETE FROM job_filter_intelligence")
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     token,rows=worker.claim(2);self.assertEqual(len(rows),2)
@@ -48,6 +49,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
  def test_description_failure_preserves_filters_and_retry_only_generates_description(self):
   app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
+   c.execute("DELETE FROM job_filter_intelligence")
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     token,rows=worker.claim(1);row=rows[0]
@@ -71,16 +73,18 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     self.assertEqual(len(prompts),1)
     self.assertNotIn('Classify each',prompts[0])
 
- def test_acceptable_older_nemo_output_is_reused_without_model_calls(self):
+ def test_acceptable_existing_output_is_reused_without_model_calls(self):
   from backend.application.vps_job_descriptions import build_pilot_description
   app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     token,rows=worker.claim(1);row=rows[0]
-    c.execute("UPDATE job_filter_intelligence SET model='mistralai/mistral-nemo',prompt_version='older_acceptable_prompt' WHERE version_id=?",(row['current_version_id'],))
+    c.execute("UPDATE job_filter_intelligence SET model='older_provider',prompt_version='older_acceptable_prompt' WHERE version_id=?",(row['current_version_id'],))
     old=build_pilot_description(row,lambda _: {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1']}],'header_candidates':{}})
+    old.update(model='runr_rules',provider='rules',prompt_version='runr_description_v1')
     worker.save_stage(row,token,{'description':old})
+    c.execute("UPDATE job_description_intelligence SET model='runr_rules',provider='rules' WHERE version_id=?",(row['current_version_id'],))
     c.execute("UPDATE job_enrichment_queue SET state='pending',lease_token='' WHERE version_id=?",(row['current_version_id'],))
     c.execute("UPDATE job_enrichment_queue SET next_attempt_at='9999' WHERE version_id!=?",(row['current_version_id'],))
     token,rows=worker.claim(1)
@@ -88,4 +92,4 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     def forbidden(_):raise AssertionError('acceptable output must not be regenerated')
     self.assertEqual(worker.process(rows[0],token,forbidden),'completed')
     cached=c.execute('SELECT prompt_version FROM job_description_intelligence WHERE version_id=?',(row['current_version_id'],)).fetchone()
-    self.assertEqual(cached['prompt_version'],'runr_description_nemo_v2')
+    self.assertEqual(cached['prompt_version'],'runr_description_v1')
