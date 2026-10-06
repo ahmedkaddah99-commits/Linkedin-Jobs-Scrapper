@@ -3,7 +3,11 @@ from backend.application.source_eligibility_manifest import (
     read_master_snapshot,
     write_manifest_bundle,
 )
-from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore, _BulkTraceConnection
+from backend.repositories.sqlite_acquisition import (
+    SqliteAcquisitionStore,
+    _BulkTraceConnection,
+    _update_publication_task_counts_batched,
+)
 from scripts.master_employer_jobs_catalog import EmployerCollectionResult, EmployerCompany, EmployerState
 from scripts.master_linkedin_jobs_catalog import CATALOG_FIELDS, StateStore
 from scripts.publish_producer_states import (
@@ -29,6 +33,36 @@ import json
 import sqlite3
 import pytest
 from datetime import datetime, timezone
+
+
+def test_incremental_publication_updates_only_affected_task_counts():
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE acquisition_publication_jobs(publication_id TEXT, canonical_job_id TEXT)")
+    connection.execute("CREATE TABLE job_source_observations(cycle_id TEXT, target_id TEXT, canonical_job_id TEXT)")
+    connection.execute("CREATE TABLE acquisition_tasks(cycle_id TEXT, target_id TEXT, jobs_published INTEGER, updated_at TEXT)")
+    connection.executemany(
+        "INSERT INTO acquisition_publication_jobs VALUES (?, ?)",
+        [("publication", "job-a"), ("publication", "job-b")],
+    )
+    connection.executemany(
+        "INSERT INTO job_source_observations VALUES (?, ?, ?)",
+        [("cycle", "target-a", "job-a"), ("cycle", "target-b", "job-b")],
+    )
+    connection.executemany(
+        "INSERT INTO acquisition_tasks VALUES (?, ?, ?, ?)",
+        [("cycle", "target-a", 0, "before"), ("cycle", "target-b", 0, "before")],
+    )
+
+    _update_publication_task_counts_batched(
+        connection,
+        publication_id="publication",
+        cycle_id="cycle",
+        now="after",
+        target_ids=["target-a"],
+    )
+    assert connection.execute(
+        "SELECT target_id, jobs_published, updated_at FROM acquisition_tasks ORDER BY target_id"
+    ).fetchall() == [("target-a", 1, "after"), ("target-b", 0, "before")]
 
 
 def test_complete_employer_generation_excludes_retained_jobs_but_partial_keeps_them():

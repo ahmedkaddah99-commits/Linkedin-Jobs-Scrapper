@@ -82,6 +82,9 @@ creates its first complete snapshot, and historical publications from prior cycl
 intact. This avoids a full membership copy after every batch while preserving partial
 visibility when a cycle stops for recovery. The full `snapshot_json` is still rewritten
 for a changed batch; that read/write cost remains a separate optimization target.
+Per-target published counts are recomputed only for the delivered targets and any
+other targets in the cycle sharing changed jobs. Pending and unrelated tasks retain
+their existing counts and timestamps, rather than being rewritten on every batch.
 
 Ordinary small-company snapshots no longer execute the legacy dependent query series once per job. `run_delivery` packs at most 50 companies and 100 total source rows by default, normalizes them before remote projection, and calls `SqliteAcquisitionStore.ingest_snapshots_bulk`. Migration `062_acquisition_bulk_ingest_staging` supplies batch-scoped staging tables loaded through bounded `executemany` calls. Set-based projection preserves canonical company and job identity, append-only observations, immutable version history, source-state and closure rules, lifecycle recomputation, normalization provenance, completeness reports, and task evidence in one transaction.
 

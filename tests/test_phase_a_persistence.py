@@ -94,7 +94,6 @@ class PhaseAPersistenceTests(unittest.TestCase):
             publication_id="publication-1",
             cycle_id="cycle-1",
             now="2026-09-30T00:00:00+00:00",
-            batch_size=400,
         )
         self.assertEqual(len(count_connection.calls), 1)
         self.assertIn("WITH published_counts", count_connection.calls[0][0])

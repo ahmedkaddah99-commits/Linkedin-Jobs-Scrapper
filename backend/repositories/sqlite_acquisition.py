@@ -189,15 +189,28 @@ def _update_publication_task_counts_batched(
     publication_id: str,
     cycle_id: str,
     now: str,
-    batch_size: int = 400,
+    target_ids: Iterable[str] | None = None,
 ) -> None:
+    selected = sorted({str(target_id) for target_id in target_ids or () if str(target_id)})
+    if target_ids is not None and not selected:
+        return
+    target_filter = (
+        "AND o.target_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))"
+        if target_ids is not None else ""
+    )
+    task_filter = (
+        "AND target_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))"
+        if target_ids is not None else ""
+    )
+    selected_json = _json(selected) if target_ids is not None else ""
     connection.execute(
-        """
+        f"""
         WITH published_counts AS (
             SELECT o.target_id, COUNT(DISTINCT pj.canonical_job_id) AS jobs_published
-            FROM acquisition_publication_jobs pj
-            JOIN job_source_observations o ON o.canonical_job_id=pj.canonical_job_id
-            WHERE pj.publication_id=? AND o.cycle_id=?
+            FROM job_source_observations o
+            JOIN acquisition_publication_jobs pj
+              ON pj.canonical_job_id=o.canonical_job_id AND pj.publication_id=?
+            WHERE o.cycle_id=? {target_filter}
             GROUP BY o.target_id
         )
         UPDATE acquisition_tasks
@@ -207,9 +220,14 @@ def _update_publication_task_counts_batched(
                 WHERE published_counts.target_id=acquisition_tasks.target_id
             ), 0),
             updated_at=?
-        WHERE cycle_id=?
+        WHERE cycle_id=? {task_filter}
         """,
-        (publication_id, cycle_id, now, cycle_id),
+        (
+            publication_id, cycle_id,
+            *((selected_json,) if target_ids is not None else ()),
+            now, cycle_id,
+            *((selected_json,) if target_ids is not None else ()),
+        ),
     )
 
 
@@ -4052,11 +4070,23 @@ class SqliteAcquisitionStore(_SqliteStore):
                         payload={"added": len(new_ids - old_ids), "removed": len(old_ids - new_ids)},
                         created_at=now,
                     )
+                    affected_target_ids = set(target_ids)
+                    if changed_job_ids:
+                        affected_target_ids.update(
+                            str(row["target_id"])
+                            for row in connection.execute(
+                                "SELECT DISTINCT target_id FROM job_source_observations "
+                                "WHERE cycle_id=? AND canonical_job_id IN "
+                                "(SELECT CAST(value AS TEXT) FROM json_each(?))",
+                                (cycle_id, _json(sorted(changed_job_ids))),
+                            ).fetchall()
+                        )
                     _update_publication_task_counts_batched(
                         connection,
                         publication_id=existing_id,
                         cycle_id=cycle_id,
                         now=now,
+                        target_ids=affected_target_ids,
                     )
                     connection.execute(
                         "UPDATE acquisition_cycles SET jobs_published=?, publication_id=?, updated_at=? WHERE cycle_id=?",
@@ -4177,6 +4207,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 publication_id=publication_id,
                 cycle_id=cycle_id,
                 now=now,
+                target_ids=target_ids if batch_key else None,
             )
             return publication_id
 
