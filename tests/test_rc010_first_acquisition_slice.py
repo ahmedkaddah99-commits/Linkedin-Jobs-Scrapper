@@ -138,14 +138,14 @@ def _send_final(
     return receipt
 
 
-def _dispatch_jobs_route(app, user_id: str):
+def _dispatch_jobs_route(app, user_id: str, *, role: str = ""):
     handler = _UserHandler(user_id)
     context = ApiRouteContext(
         application=app,
         handler=handler,
         method="GET",
         segments=("personalized-jobs",),
-        query={},
+        query={"role": [role]} if role else {},
     )
     assert build_route_registry().dispatch(context, auth_required=True)
     assert handler.payload is not None
@@ -240,9 +240,17 @@ def test_rc010_dual_source_slice_reaches_jobs_and_preserves_public_head_on_failu
     # The actual user Jobs route is a read of the published head. Two users
     # can browse the same result without reserving an acquisition request.
     request_count_before_reads = _request_count(store)
-    first_user = _dispatch_jobs_route(app, "user-a")
-    second_user = _dispatch_jobs_route(app, "user-b")
-    assert first_user["total"] == second_user["total"] == 1
+    assert _dispatch_jobs_route(app, "user-a")["selection_required"] is True
+    with store._connect() as connection:
+        version = connection.execute("SELECT current_version_id FROM canonical_jobs").fetchone()["current_version_id"]
+        content_hash = connection.execute("SELECT content_hash FROM job_posting_versions WHERE version_id=?", (version,)).fetchone()["content_hash"]
+        connection.execute("INSERT INTO job_filter_intelligence VALUES (?,?,?,?,?,?,?)", (
+            version, canonical[0]["canonical_job_id"], content_hash,
+            json.dumps({"collar": "white", "roles": ["Business Analyst"]}), "fixture", "fixture", "now",
+        ))
+    first_user = _dispatch_jobs_route(app, "user-a", role="Business Analyst")
+    second_user = _dispatch_jobs_route(app, "user-b", role="Business Analyst")
+    assert first_user["total"] is None and second_user["total"] is None
     assert first_user["jobs"][0]["title"] == "Operations Analyst"
     assert second_user["jobs"][0]["posting_id"] == first_user["jobs"][0]["posting_id"]
     assert _request_count(store) == request_count_before_reads
