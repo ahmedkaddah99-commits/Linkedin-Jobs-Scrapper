@@ -11,7 +11,14 @@ def test_enrichment_reuses_completed_stages():
 def test_missing_source_is_explicit_and_does_not_call_model():
  import pytest
  with pytest.raises(ValueError,match='source_missing'):
-  enrich_version(row(description=''),lambda _: (_ for _ in ()).throw(AssertionError('model should not run')))
+  enrich_version(row(description='',filters_ready=True),lambda _: (_ for _ in ()).throw(AssertionError('model should not run')))
+
+def test_known_title_can_supply_function_when_description_is_missing():
+ value=enrich_version(row(description='',description_ready=True),lambda _: {
+  'jobs':[{'id':'job','collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}]})
+ assert value['filters']['roles']==['Data Analyst']
+ assert value['filters'].get('required_experience_years') is None
+ assert 'description' not in value
 
 def test_filters_and_description_are_validated_before_save():
  def generate(prompt):

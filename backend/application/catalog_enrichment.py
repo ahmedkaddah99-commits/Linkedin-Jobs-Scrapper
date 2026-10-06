@@ -15,7 +15,7 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
         return {}
     original = build_preserved_original_posting(row)
     source = str(original.get("description_text") or original.get("description") or "").strip()
-    if not source:
+    if not source and not str(row.get("title") or "").strip():
         raise ValueError("source_missing")
     result: dict[str, Any] = {}
     if not row.get("filters_ready"):
@@ -30,6 +30,8 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
             raise ValueError("filter_validation_failed")
         result["filters"] = filters
     if not row.get("description_ready"):
+        if not source:
+            raise ValueError("source_missing")
         if len(source) < 80:
             raise ValueError("source_incomplete")
         description = build_pilot_description(row, generate, require_source_quotes=True)
