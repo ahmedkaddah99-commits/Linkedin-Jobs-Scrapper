@@ -12,6 +12,7 @@ UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
 EnvironmentFile=/etc/runr/description.env
 EnvironmentFile=/etc/runr/acquisition-catalog.env
+EnvironmentFile=/etc/runr/nemo-enrichment.env
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
 ExecStart=/usr/bin/flock -n /srv/runr/state/description-worker.lock /opt/runr/.venv/bin/python scripts/process_catalog_enrichment.py --workers 16 --max-jobs 4096 --runtime-seconds 1800 --daily-budget 10
 CPUAccounting=true
