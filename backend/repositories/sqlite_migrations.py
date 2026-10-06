@@ -3580,6 +3580,17 @@ def _apply_nemo_enrichment_queue_migration(connection: DatabaseConnection) -> No
     """)
 
 
+def _apply_enrichment_field_pass_migration(connection: DatabaseConnection) -> None:
+    connection.executescript("""
+        ALTER TABLE job_enrichment_queue ADD COLUMN gap_pass_attempted INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE job_enrichment_queue ADD COLUMN missing_fields_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE job_enrichment_queue ADD COLUMN gap_pass_error_code TEXT NOT NULL DEFAULT '';
+        CREATE INDEX idx_job_enrichment_gap_pass ON job_enrichment_queue(state,gap_pass_attempted,next_attempt_at,version_id);
+        UPDATE job_enrichment_queue SET state='pending',next_attempt_at='',error_code=''
+        WHERE state IN ('completed','review_required','source_missing','source_incomplete');
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3964,6 +3975,11 @@ MIGRATIONS = (
         "071_nemo_catalog_enrichment_queue",
         "Durably queue published posting versions for Nemo descriptions and filters.",
         _apply_nemo_enrichment_queue_migration,
+    ),
+    Migration.from_callable(
+        "072_enrichment_field_pass",
+        "Record one supplemental missing-field AI pass and backend-only unresolved fields.",
+        _apply_enrichment_field_pass_migration,
     ),
 )
 

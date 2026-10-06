@@ -20,6 +20,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
 from backend.application.catalog_enrichment import attach_source_metadata, enrich_version
+from backend.application.enrichment_field_pass import missing_fields, supplement
 from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
 from backend.application.vps_job_descriptions import NEMO_MODEL
 from backend.config import load_project_dotenv
@@ -128,6 +129,8 @@ class NemoClient:
 
 def claim(limit: int) -> tuple[str, list[dict]]:
     timestamp = now()
+    execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='' WHERE version_id IN ("
+            "SELECT version_id FROM job_enrichment_queue WHERE state='completed' AND gap_pass_attempted=0 LIMIT ?)", (limit,))
     execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
             "WHERE state='processing' AND lease_expires_at<?", (timestamp,))
     token = uuid4().hex
@@ -185,6 +188,54 @@ def save_stage(row: dict, token: str, output: dict) -> None:
              "openrouter", NEMO_MODEL, d["prompt_version"], timestamp, timestamp, timestamp, *ownership))
 
 
+def run_gap_pass(row, token, generate):
+    cached = execute("""SELECT q.gap_pass_attempted,f.filters_json,d.summary_json,d.structured_json
+        FROM job_enrichment_queue q
+        LEFT JOIN job_filter_intelligence f ON f.version_id=q.version_id AND f.content_hash=q.content_hash
+        LEFT JOIN job_description_intelligence d ON d.version_id=q.version_id AND d.content_hash=q.content_hash
+        WHERE q.version_id=? AND q.lease_token=?""", (row['current_version_id'], token))
+    if not cached or cached[0]['gap_pass_attempted']:
+        return
+    def object_value(raw):
+        try:
+            value=json.loads(raw or '{}')
+            return value if isinstance(value,dict) else {}
+        except ValueError:
+            return {}
+    filters,summary,structured = (object_value(cached[0][key]) for key in ('filters_json','summary_json','structured_json'))
+    gaps=missing_fields(filters,summary,structured)
+    reserved=execute("""UPDATE job_enrichment_queue SET gap_pass_attempted=?,missing_fields_json=?
+        WHERE version_id=? AND lease_token=? AND state='processing' AND gap_pass_attempted=0
+        AND EXISTS(SELECT 1 FROM canonical_jobs j WHERE j.canonical_job_id=job_enrichment_queue.canonical_job_id
+            AND j.current_version_id=job_enrichment_queue.version_id) RETURNING version_id""",
+        (1 if gaps else 2,json.dumps(gaps),row['current_version_id'],token))
+    if not reserved or not gaps:
+        return
+    try:
+        output,gaps=supplement(row,filters,summary,structured,generate)
+        save_stage(row,token,output)
+        execute("UPDATE job_enrichment_queue SET missing_fields_json=?,gap_pass_error_code='' WHERE version_id=? AND lease_token=?",
+                (json.dumps(gaps),row['current_version_id'],token))
+    except Exception as exc:
+        if str(exc)=='daily_budget_exhausted':
+            execute("UPDATE job_enrichment_queue SET gap_pass_attempted=0 WHERE version_id=? AND lease_token=?",
+                    (row['current_version_id'],token))
+            raise
+        code='provider_http_'+str(exc.code) if isinstance(exc,HTTPError) else type(exc).__name__
+        execute("UPDATE job_enrichment_queue SET gap_pass_error_code=? WHERE version_id=? AND lease_token=?",
+                (code,row['current_version_id'],token))
+
+
+def complete_if_ready(row,token):
+    saved = execute("""UPDATE job_enrichment_queue SET state='completed',error_code='',
+        lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?
+        AND EXISTS(SELECT 1 FROM job_filter_intelligence f WHERE f.version_id=job_enrichment_queue.version_id
+            AND f.content_hash=job_enrichment_queue.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """)
+        AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
+            AND d.content_hash=job_enrichment_queue.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """)
+        RETURNING version_id""", (now(), row["current_version_id"], token))
+    return bool(saved)
+
 def process(row: dict, token: str, generate) -> str:
     try:
         if not row.get("version_is_current", True):
@@ -200,15 +251,13 @@ def process(row: dict, token: str, generate) -> str:
         if not row["description_ready"]:
             output = enrich_version({**row, "filters_ready": True}, generate)
             save_stage(row, token, output)
-        saved = execute("""UPDATE job_enrichment_queue SET state='completed',error_code='',
-            lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?
-            AND EXISTS(SELECT 1 FROM job_filter_intelligence f WHERE f.version_id=job_enrichment_queue.version_id
-                AND f.content_hash=job_enrichment_queue.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """)
-            AND EXISTS(SELECT 1 FROM job_description_intelligence d WHERE d.version_id=job_enrichment_queue.version_id
-                AND d.content_hash=job_enrichment_queue.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """)
-            RETURNING version_id""", (now(), row["current_version_id"], token))
-        return "completed" if saved else "superseded"
+        run_gap_pass(row,token,generate)
+        return "completed" if complete_if_ready(row,token) else "superseded"
     except Exception as exc:
+        if isinstance(exc,ValueError) and str(exc) in {'source_missing','source_incomplete','function_missing','description_has_no_supported_facts','filter_validation_failed','filter_response_identity_mismatch'}:
+            run_gap_pass(row,token,generate)
+            if complete_if_ready(row,token):
+                return "completed"
         code = str(exc) if str(exc) in {"source_missing", "source_incomplete"} else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
         if isinstance(exc, HTTPError):
             code = "provider_http_" + str(exc.code)
@@ -220,7 +269,7 @@ def process(row: dict, token: str, generate) -> str:
         if code == "function_missing":
             state = "review_required"
         if code in {"filter_response_identity_mismatch", "filter_validation_failed",
-                    "description_has_no_supported_facts"} and row.get("attempts", 0) >= 3:
+                    "description_has_no_supported_facts"}:
             state = "review_required"
         retry = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         execute("UPDATE job_enrichment_queue SET state=?,next_attempt_at=?,error_code=?,lease_token='',lease_expires_at='',updated_at=? "

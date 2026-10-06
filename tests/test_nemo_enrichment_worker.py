@@ -70,7 +70,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
      prompts.append(prompt)
      return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1'],'source_quote':'Analyze operations.'}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
     self.assertEqual(worker.process(rows[0],token,description),'completed')
-    self.assertEqual(len(prompts),1)
+    self.assertEqual(len(prompts),2)
     self.assertNotIn('Classify each',prompts[0])
 
  def test_acceptable_existing_output_is_reused_without_model_calls(self):
@@ -89,7 +89,20 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     c.execute("UPDATE job_enrichment_queue SET next_attempt_at='9999' WHERE version_id!=?",(row['current_version_id'],))
     token,rows=worker.claim(1)
     self.assertTrue(rows[0]['filters_ready']);self.assertTrue(rows[0]['description_ready'])
-    def forbidden(_):raise AssertionError('acceptable output must not be regenerated')
+    extra=[]
+    def forbidden(prompt):
+     extra.append(prompt)
+     return {'filters':{'jobs':[]},'description':{'items':[],'header_candidates':{}}}
     self.assertEqual(worker.process(rows[0],token,forbidden),'completed')
     cached=c.execute('SELECT prompt_version FROM job_description_intelligence WHERE version_id=?',(row['current_version_id'],)).fetchone()
     self.assertEqual(cached['prompt_version'],'runr_description_v1')
+    audit=c.execute('SELECT gap_pass_attempted,missing_fields_json FROM job_enrichment_queue WHERE version_id=?',(row['current_version_id'],)).fetchone()
+    self.assertEqual(audit['gap_pass_attempted'],1)
+    self.assertIn('structured.salary',json.loads(audit['missing_fields_json']))
+    c.commit()
+    public=json.dumps(app.get_personalized_job_detail('user-a',row['canonical_job_id']))
+    self.assertNotIn('missing_fields_json',public)
+    self.assertNotIn('gap_pass_attempted',public)
+    self.assertEqual(len(extra),1)
+    self.assertIn('supplemental',extra[0])
+    self.assertEqual(worker.claim(1)[1],[])
