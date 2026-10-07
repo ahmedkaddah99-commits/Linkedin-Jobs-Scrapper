@@ -77,6 +77,7 @@ export default function ProfilePage() {
         <Field label="Profile email"><Input onChange={(value) => updateProfile({ email: value })} type="email" value={profile.email || account.email} /></Field>
         <Field label="Role title"><Input onChange={(value) => updateProfile({ role_title: value })} value={profile.role_title} /></Field>
         <Field label="Industry"><Input onChange={(value) => updateProfile({ industry: value })} value={profile.industry} /></Field>
+        <Field label="Skills" hint="Separate skills with commas." wide><Input onChange={(value) => updateProfile({ competencies: splitList(value) })} value={valueList(profile.competencies).join(", ")} /></Field>
         <Field label="Location"><Input onChange={(value) => updateProfile({ location: value })} value={profile.location} /></Field>
         <Field label="Website"><Input onChange={(value) => updateProfile({ website: value })} placeholder="https://" value={profile.website} /></Field>
         <Field label="LinkedIn URL"><Input onChange={(value) => updateProfile({ linkedin_url: value })} placeholder="https://linkedin.com/in/" value={profile.linkedin_url} /></Field>

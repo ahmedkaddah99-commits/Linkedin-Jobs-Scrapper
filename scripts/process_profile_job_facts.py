@@ -18,7 +18,7 @@ from backend.application.profile_job_matching import FEATURE_VERSION, build_job_
 from backend.config import load_project_dotenv
 from scripts.process_catalog_enrichment import execute, now
 
-SIGNATURE = "COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(p.updated_at,'')"
+SIGNATURE = "COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(json_extract(p.profile_json,'$.fields.industry'),'')"
 JOINS = """FROM canonical_jobs j
     JOIN job_posting_versions v ON v.version_id=j.current_version_id
     LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id AND d.content_hash=v.content_hash
@@ -55,8 +55,8 @@ def write_batch(rows):
             AND m.input_signature=json_extract(i.value,'$.input_signature'))"""
     def statement(sql, args=()):
         return {'type': 'execute', 'stmt': {'sql': sql, 'args': [{'type': 'text', 'value': str(v)} for v in args], 'want_rows': False}}
-    requests = [statement('BEGIN IMMEDIATE'), statement(insert, [FEATURE_VERSION, now(), payload]),
-                statement(acknowledge, [receipts, receipts]), statement('COMMIT'), {'type': 'close'}]
+    requests = [statement(insert, [FEATURE_VERSION, now(), payload]),
+                statement(acknowledge, [receipts, receipts]), {'type': 'close'}]
     url = os.environ['TURSO_DATABASE_URL'].replace('libsql://', 'https://').rstrip('/') + '/v2/pipeline'
     request = Request(url, data=json.dumps({'requests': requests}).encode(), headers={
         'Authorization': 'Bearer ' + os.environ['TURSO_AUTH_TOKEN'], 'Content-Type': 'application/json'})
@@ -64,7 +64,7 @@ def write_batch(rows):
         results = json.load(response)['results']
     if any(r.get('type') != 'ok' for r in results):
         raise RuntimeError('profile_facts_batch_failed')
-    return int(results[1].get('response', {}).get('result', {}).get('affected_row_count', 0))
+    return int(results[0].get('response', {}).get('result', {}).get('affected_row_count', 0))
 
 
 def main():

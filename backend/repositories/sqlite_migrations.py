@@ -3659,6 +3659,23 @@ def _apply_profile_job_facts_migration(connection: DatabaseConnection) -> None:
     """)
 
 
+def _apply_profile_matching_industry_invalidation_migration(connection: DatabaseConnection) -> None:
+    connection.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_profile_matching_company_jobs ON canonical_jobs(company_id,current_version_id);
+        DROP TRIGGER IF EXISTS profile_facts_company_update;
+        CREATE TRIGGER profile_facts_company_update AFTER UPDATE OF profile_json ON canonical_company_profiles
+        WHEN COALESCE(json_extract(NEW.profile_json,'$.fields.industry'),'') != COALESCE(json_extract(OLD.profile_json,'$.fields.industry'),'')
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id)
+                SELECT current_version_id FROM canonical_jobs WHERE company_id=NEW.company_id AND current_version_id!=''
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        INSERT INTO profile_job_fact_queue(version_id)
+            SELECT current_version_id FROM canonical_jobs WHERE current_version_id!=''
+            ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -4053,6 +4070,11 @@ MIGRATIONS = (
         "073_profile_job_facts",
         "Store shared version-bound facts for profile-only job matching.",
         _apply_profile_job_facts_migration,
+    ),
+    Migration.from_callable(
+        "074_profile_matching_industry_invalidation",
+        "Index matching invalidation and fence facts to industry rather than unrelated company updates.",
+        _apply_profile_matching_industry_invalidation_migration,
     ),
 )
 

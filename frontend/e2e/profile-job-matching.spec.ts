@@ -1,4 +1,6 @@
 import { expect, test } from "playwright/test";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 
 const job = {
   canonical_job_id: "job-profile", company_id: "company-profile", company: "Acme",
@@ -58,4 +60,56 @@ test("cards open a profile-scored detail with external posting and no embedded o
   await page.screenshot({ path: `../data/audit/profile_job_matching_2026-10-07/detail-${testInfo.project.name}.png`, fullPage: true });
   await page.getByRole('button', { name: 'Back to jobs' }).click();
   await expect(page.locator('.jobs-list-card')).toBeVisible();
+});
+
+
+test("fill a saved profile and recompute actual rubric after a skill edit", async ({ page }, testInfo) => {
+  let profile: Record<string, unknown> = {};
+  const root = path.resolve(process.cwd(), '..');
+  const python = path.join(root, '.venv', 'Scripts', 'python.exe');
+  function calculate() {
+    const script = `import sys,json
+from types import SimpleNamespace
+from backend.application.profile_job_matching import FEATURE_VERSION,profile_snapshot,evaluate_profile_match
+profile=json.load(sys.stdin)
+facts={'version':FEATURE_VERSION,'title':'Business Analyst','roles':[],'levels':['entry'],'years_min':2,'industries':['Banking'],'skills':[{'name':'Power BI','requiredness':'required','job_evidence':'Power BI required'},{'name':'Python','requiredness':'preferred','job_evidence':'Python preferred'}]}
+print(json.dumps(evaluate_profile_match(facts,profile_snapshot(SimpleNamespace(metadata={'profile':profile})))))`;
+    return JSON.parse(execFileSync(python, ['-c', script], { cwd: root, input: JSON.stringify(profile), encoding: 'utf8' }));
+  }
+  const payload = () => ({ ...job, match_intelligence: calculate(), runr_summary: { overview: 'Analyze business processes.', required_qualifications: [{ text: 'Power BI required' }], preferred_qualifications: [{ text: 'Python preferred' }] } });
+  await page.route('**/v1/settings', async (route) => {
+    if (['POST', 'PUT', 'PATCH'].includes(route.request().method())) profile = route.request().postDataJSON().profile;
+    return route.fulfill({ json: { account: { display_name: 'Matching QA' }, profile } });
+  });
+  await page.route('**/v1/personalized-jobs/job-profile', (route) => route.fulfill({ json: payload() }));
+  await page.goto('/profile');
+  await page.getByLabel('Role title', { exact: true }).fill('Business Analyst');
+  await page.getByLabel('Industry', { exact: true }).fill('Insurance');
+  await page.getByLabel('Skills', { exact: false }).fill('Power BI');
+  await page.getByRole('button', { name: 'Experience', exact: true }).click();
+  await page.getByRole('button', { name: 'Add experience', exact: false }).first().click();
+  await page.getByLabel('Role', { exact: true }).fill('Business Analyst');
+  await page.getByLabel('Company', { exact: true }).fill('QA Insurance');
+  await page.getByLabel('Industry', { exact: true }).fill('Insurance');
+  await page.getByLabel('Start', { exact: true }).fill('2022-01');
+  await page.getByLabel('End', { exact: true }).fill('2025-01');
+  await page.getByRole('button', { name: 'Save changes', exact: false }).first().click();
+  await expect.poll(() => profile.role_title).toBe('Business Analyst');
+  expect(profile.competencies).toEqual(['Power BI']);
+  await page.screenshot({ path: `../data/audit/profile_job_matching_2026-10-07/filled-profile-${testInfo.project.name}.png`, fullPage: true });
+  await page.goto('/jobs/job-profile');
+  const panel = page.getByLabel('Profile job match');
+  await expect(panel).toContainText('72%');
+  await expect(panel).toContainText('100%');
+  await expect(panel).toContainText('67%');
+  await expect(panel).toContainText('50%');
+  await page.screenshot({ path: `../data/audit/profile_job_matching_2026-10-07/calculated-profile-${testInfo.project.name}.png`, fullPage: true });
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'Personal', exact: true }).click();
+  await page.getByLabel('Skills', { exact: false }).fill('Power BI, Python');
+  await page.getByRole('button', { name: 'Save changes', exact: false }).first().click();
+  await expect.poll(() => profile.competencies).toEqual(['Power BI', 'Python']);
+  await page.goto('/jobs/job-profile');
+  await expect(page.getByLabel('Profile job match')).toContainText('83%');
+  await expect(page.getByLabel('Profile job match')).toContainText('50%');
 });

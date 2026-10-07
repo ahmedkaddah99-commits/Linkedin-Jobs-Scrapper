@@ -119,7 +119,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id AND f.content_hash=v.content_hash
                 LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id
                 WHERE m.version_id IN ({placeholders}) AND m.feature_version='profile_job_facts_v1'
-                AND m.input_signature=COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(p.updated_at,'')""", ids)
+                AND m.input_signature=COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(json_extract(p.profile_json,'$.fields.industry'),'')""", ids)
         return {str(r['version_id']): _decode(r['facts_json'], {}) for r in rows}
 
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
