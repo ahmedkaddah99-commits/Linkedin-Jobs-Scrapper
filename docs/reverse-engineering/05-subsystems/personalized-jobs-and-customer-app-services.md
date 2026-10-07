@@ -327,6 +327,22 @@ Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows
 
 ### Continuous published-job Nemo enrichment (2026-10-06)
 
+Restored English-input workflow (2026-10-07): the description worker detects
+source language and uses local Argos translation before Nemo extraction. English
+passage text and original quotations share passage IDs; employer originals stay
+unchanged. English output is checked before saving substantial descriptions.
+Translation dependencies are isolated in `requirements-translation.txt`; install
+CPU-only torch first, then Argos and language models with
+`scripts/install_description_translation_models.py`. Unsupported languages fail
+explicitly rather than silently passing untranslated descriptions to Nemo.
+`scripts/repair_english_descriptions.py` audits current published versions and
+requeues German output or unattempted missing-field passes with `--apply`; it
+never deletes stored descriptions. Regeneration retains populated header values
+when a new candidate is empty. Description and filter prompts select the highest
+minimum across separate mandatory experience requirements, distinguish explicit
+alternative paths, and require JSON numeric years. Existing matching-fact triggers
+enqueue updated descriptions for recalculation; Nemo does not assign fit scores.
+
 Live performance diagnosis on 2026-10-07 found a temporary four-worker override
 and subsequently an inactive description timer/stopped service. VPS reads took
 0.10–0.15 seconds and a no-op write took 0.17 seconds during diagnosis. The claim

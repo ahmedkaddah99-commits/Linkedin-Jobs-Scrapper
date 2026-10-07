@@ -1,5 +1,12 @@
 import importlib
 
+def test_experience_prompts_select_highest_separate_required_minimum():
+    from backend.application.catalog_job_filters import classification_prompt, metadata_prompt
+    row = {'id': 'job', 'title': 'Analyst', 'description': 'Requirements: 5 years experience. 2 years SQL experience.'}
+    for prompt in (classification_prompt([row]), metadata_prompt(row)):
+        assert 'highest minimum across separate mandatory experience requirements' in prompt
+        assert 'JSON number' in prompt
+
 
 def test_all_current_functions_reach_both_nemo_classification_prompts():
     import json

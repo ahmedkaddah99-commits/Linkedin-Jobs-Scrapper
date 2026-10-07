@@ -174,7 +174,8 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
         q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
         CASE WHEN f.content_hash=v.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
-        CASE WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
+        CASE WHEN q.error_code='english_description_repair' THEN 0
+        WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
@@ -204,6 +205,13 @@ def save_stage(row: dict, token: str, output: dict) -> None:
              NEMO_MODEL, FILTER_PROMPT, timestamp, *ownership))
     if "description" in output:
         d = output["description"]
+        cached = execute('SELECT structured_json FROM job_description_intelligence WHERE version_id=? AND content_hash=?',
+                         (row['current_version_id'], row['content_hash']))
+        if cached:
+            previous = json.loads(cached[0]['structured_json'] or '{}')
+            for key in ('location', 'work_arrangement', 'employment_type', 'seniority', 'experience_years_min', 'experience_years_max', 'salary'):
+                if d['structured_description'].get(key) is None and previous.get(key) is not None:
+                    d['structured_description'][key] = previous[key]
         execute("""INSERT INTO job_description_intelligence
             SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(""" + guard + """)
             ON CONFLICT(version_id) DO UPDATE SET content_hash=excluded.content_hash,
@@ -264,6 +272,7 @@ def complete_if_ready(row,token):
     return bool(saved)
 
 def process(row: dict, token: str, generate) -> str:
+    row = {**row, '_translate_before_nemo': True}
     try:
         if not row.get("version_is_current", True):
             execute("UPDATE job_enrichment_queue SET state='superseded',lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?",

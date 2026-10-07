@@ -272,8 +272,13 @@ def build_pilot_description(
     if not passages:
         raise ValueError("posting description is empty")
     lookup = {entry["id"]: entry["text"] for entry in passages}
+    prompt_passages = passages
+    if row.get('_translate_before_nemo'):
+        from backend.application.description_translation import english_passages
+        prompt_passages = english_passages(passages)
     prompt = (
-        "Read this ONE employer job posting in its original language. Write the extracted facts in English. "
+        "Read this ONE employer job posting. Write the extracted facts in English. "
+        "When original_text is provided, text is the English translation; extract from text but quote original_text for source_quote. "
         "Keep source IDs tied to the original passages, including German source text. "
         "Return one JSON object only with keys items and header_candidates. "
         "Follow this shape exactly: {\"items\":[{\"section\":\"responsibilities\",\"text\":\"One fact\",\"source_ids\":[\"p1\"]}],"
@@ -293,9 +298,12 @@ def build_pilot_description(
         "work_arrangement value is onsite, hybrid, or remote. employment_type value is full_time, part_time, contract, temporary, internship, or apprenticeship. "
         "seniority value is entry, mid, senior, lead, director, or executive. Do not infer seniority from years or title alone. "
         "experience_years_min and experience_years_max values must be JSON numbers, never strings. An unstated bound is null. "
+        "For experience_years_min use the highest minimum across separate mandatory experience requirements, including different bullet points. "
+        "Do not select preferred years, add years together, or confuse the upper end of a range with its required minimum. "
+        "Explicit alternative qualification paths remain alternatives; use the lowest qualifying path minimum and preserve both paths in qualifications. "
         "salary value is an object with min, max (JSON numbers or null), currency (ISO code), and period (hour, day, week, month, year). "
         "If salary currency or period is unstated, return null. Use null for unsupported facts. "
-        "Posting: " + json.dumps({"title": str(row.get("title") or ""), "passages": passages}, ensure_ascii=False)
+        "Posting: " + json.dumps({"title": str(row.get("title") or ""), "passages": prompt_passages}, ensure_ascii=False)
     )
     if require_source_quotes:
         prompt = re.sub(r'("source_ids":\["p[123]"\])',
@@ -337,6 +345,9 @@ def build_pilot_description(
         candidates = {}
         rejected.append("missing_header_candidates")
     structured: dict[str, Any] = {"source_passages": passages, "rejected_fields": rejected}
+    if row.get('_translate_before_nemo'):
+        structured['translation_pipeline'] = 'argos_english_v1'
+        structured['english_source_passages'] = prompt_passages
     for field in ("location", "work_arrangement", "employment_type", "seniority", "experience_years_min", "experience_years_max", "salary"):
         raw = candidates.get(field)
         structured[field] = None
@@ -380,6 +391,19 @@ def build_pilot_description(
         "model": str(response.get("_runr_model") or NEMO_MODEL),
         "prompt_version": GROUNDED_PROMPT_VERSION if require_source_quotes else PILOT_PROMPT_VERSION,
     }
+    if row.get('_translate_before_nemo'):
+        # Apply English-only experience validation and section boundaries to the
+        # translation, retaining the original passage IDs and original text.
+        structured['source_passages'] = prompt_passages
+        try:
+            result = supplement_explicit_sections(result)
+        finally:
+            structured['source_passages'] = passages
+        from backend.application.description_translation import source_language
+        rendered = ' '.join(item['text'] for section in SECTIONS for item in result['summary'][section])
+        if len(rendered) >= 80 and source_language(rendered) != 'en':
+            raise ValueError('description_output_not_english')
+        return result
     return supplement_explicit_sections(result)
 
 
