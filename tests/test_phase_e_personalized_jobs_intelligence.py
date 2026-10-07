@@ -23,22 +23,22 @@ class PhaseEPersonalizedJobsIntelligenceTests(unittest.TestCase):
         )
         return create_backend(Path(temporary_directory.name), storage_backend="sqlite", test_mode=True)
 
-    def test_description_bundle_and_both_match_versions_are_published(self):
+    def test_read_keeps_missing_profile_separate_from_pending_description(self):
         app = self._backend()
         _seed_catalog(app)
         pending = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(pending["description_intelligence"]["provider"], None)
-        self.assertEqual(pending["match_intelligence"]["state"], "pending")
+        self.assertEqual(pending["match_intelligence"]["state"], "needs_profile")
         result = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(result["description_intelligence"]["state"], "pending")
-        self.assertEqual(result["match_intelligence"]["state"], "pending")
+        self.assertEqual(result["match_intelligence"]["state"], "needs_profile")
         self.assertIsNone(app.process_next_personalized_intelligence())
 
     def test_description_generation_is_cached_by_immutable_version(self):
         app = self._backend()
         _seed_catalog(app)
         first = app.get_personalized_job_detail("user-a", "job-a")
-        self.assertEqual(first["match_intelligence"]["state"], "pending")
+        self.assertEqual(first["match_intelligence"]["state"], "needs_profile")
         second = app.get_personalized_job_detail("user-a", "job-a")
 
         third = app.get_personalized_job_detail("user-a", "job-a")

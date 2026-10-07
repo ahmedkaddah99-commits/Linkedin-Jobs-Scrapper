@@ -20,28 +20,28 @@ class PhaseEAsyncIntelligenceTests(unittest.TestCase):
         _seed_catalog(app)
         pending = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(pending["description_intelligence"]["state"], "pending")
-        self.assertIsNone(pending["match_intelligence"]["v1"]["score"])
+        self.assertIsNone(pending["match_intelligence"]["score"])
         with app.repositories.personalized_jobs_store._connect() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) AS n FROM job_intelligence_queue WHERE state='queued'").fetchone()["n"], 0)
         self.assertIsNone(app.process_next_personalized_intelligence())
         available = app.get_personalized_job_detail("user-a", "job-a")
-        self.assertEqual(available["match_intelligence"]["state"], "pending")
+        self.assertEqual(available["match_intelligence"]["state"], "needs_profile")
 
     def test_worker_precompute_publishes_cache_without_a_read_request(self):
         app = self._backend()
         _seed_catalog(app)
         queued = app.enqueue_personalized_job_intelligence("user-a", "job-a")
         self.assertEqual(queued["state"], "queued")
-        self.assertEqual(len(queued["queued_cache_ids"]), 3)
-        self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["match_intelligence"]["state"], "pending")
+        self.assertEqual(len(queued["queued_cache_ids"]), 1)
+        self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["match_intelligence"]["state"], "needs_profile")
         while app.process_next_personalized_intelligence() is not None:
             pass
         available = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(available["description_intelligence"]["state"], "available")
-        self.assertIsInstance(available["match_intelligence"]["v1"]["score"], int)
-        self.assertIsInstance(available["match_intelligence"]["v2"]["score"], int)
+        self.assertIsNone(available["match_intelligence"]["score"])
+        self.assertNotIn("v2", available["match_intelligence"])
 
-    def test_profile_revision_changes_input_key_without_mutating_old_result(self):
+    def test_preference_changes_do_not_enqueue_legacy_profile_match_work(self):
         app = self._backend()
         _seed_catalog(app)
         app.enqueue_personalized_job_intelligence("user-a", "job-a")
@@ -54,9 +54,9 @@ class PhaseEAsyncIntelligenceTests(unittest.TestCase):
         app.enqueue_personalized_job_intelligence("user-a", "job-a")
         with app.repositories.personalized_jobs_store._connect() as connection:
             current_keys = [row["cache_id"] for row in connection.execute("SELECT cache_id FROM job_intelligence_cache WHERE intelligence_kind='match'").fetchall()]
-        self.assertEqual(len(first_keys), 2)
-        self.assertEqual(len(current_keys), 4)
-        self.assertTrue(set(first_keys).isdisjoint(current_keys[2:]))
+        self.assertEqual(first_keys, [])
+        self.assertEqual(current_keys, [])
+        self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["match_intelligence"]["state"], "needs_profile")
 
     def test_deterministic_fixture_exposes_formula_and_truthful_evidence(self):
         row = {"canonical_job_id": "job-fixture", "current_version_id": "version-fixture", "version_number": 1, "content_hash": "fixture-hash", "title": "Operations Analyst", "location": "Berlin"}
@@ -104,14 +104,14 @@ class PhaseEAsyncIntelligenceTests(unittest.TestCase):
         free = app.get_personalized_job_detail("user-a", "job-a", plan_id="free")
         pro = app.get_personalized_job_detail("user-a", "job-a", plan_id="pro")
         for result in (free, pro):
-            self.assertIsInstance(result["match_intelligence"]["v1"]["score"], int)
-            self.assertIsInstance(result["match_intelligence"]["v2"]["score"], int)
+            self.assertIsNone(result["match_intelligence"]["score"])
+            self.assertNotIn("v2", result["match_intelligence"])
             self.assertTrue(result["match_intelligence"]["entitlements"]["match_scores"]["free"])
         with self.assertRaises(PermissionError):
             app.improve_personalized_resume("user-a", "job-a", mode="rewrite", plan_id="free")
         review = app.improve_personalized_resume("user-a", "job-a", mode="review", plan_id="free")
         self.assertTrue(review["entitlement"]["available"])
-        self.assertIn("v1_v2_difference", review["evidence"])
+        self.assertEqual(review["evidence"]["profile_source"], "saved_profile")
         queued = app.improve_personalized_resume("user-a", "job-a", mode="rewrite", plan_id="pro")
         self.assertEqual(queued["state"], "queued")
         self.assertTrue(queued["entitlement"]["available"])

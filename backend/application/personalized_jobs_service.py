@@ -1474,13 +1474,22 @@ class PersonalizedJobsService:
         row = self.store.get_published_job_row(posting_id)
         if row is None:
             return None
-        disposition = self.store.list_dispositions_for_jobs(user_id, [posting_id]).get(posting_id)
-        preferences = self.get_preferences(user_id)
-        publication = self.store.get_current_publication()
+        # These independent, read-only projections use separate repository
+        # connections. Overlap transport latency without sharing transactions.
+        from concurrent.futures import ThreadPoolExecutor
+        def description():
+            entries = self.store.list_intelligence_cache_entries([posting_id], intelligence_kind="description")
+            return self._description_intelligence(row, cache_entries=entries)
+        with ThreadPoolExecutor(max_workers=4) as reads:
+            disposition_read = reads.submit(self.store.list_dispositions_for_jobs, user_id, [posting_id])
+            publication_read = reads.submit(self.store.get_current_publication)
+            description_read = reads.submit(description)
+            match_read = reads.submit(self._match_intelligence, user_id, row, {}, None, state="available")
+            disposition = disposition_read.result().get(posting_id)
+            publication = publication_read.result()
+            description_intelligence = description_read.result()
+            match_intelligence = match_read.result()
         catalog_state = self._publication_state(publication) if publication is not None else "unavailable"
-        cache_entries = self.store.list_intelligence_cache_entries([posting_id], intelligence_kind="description")
-        description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)
-        match_intelligence = self._match_intelligence(user_id, row, description_intelligence, preferences, state=catalog_state)
         match_intelligence = self._apply_plan_entitlements(match_intelligence, plan_id)
         evaluation_payload = {
             "state": catalog_state if catalog_state in EVALUATION_STATES else "partial",
