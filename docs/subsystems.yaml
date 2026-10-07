@@ -260,6 +260,7 @@ subsystems:
       - npm --prefix frontend run check
     key_invariants:
       - No restoring admin routes/pages (retired).
+      - Opening a posting retains the jobs feed and uses its embedded company profile without fetching employer jobs.
       - frontend/.env.local values are never read or printed.
       - CV-render files (package.json, package-lock.json, scripts/render-cv-pdf.mjs, lib/cvStudio.js, lib/cvSocialLinks.js) change only with a coordinated WS-4/WS-7 review (they affect the deployed API/worker image filter).
 
