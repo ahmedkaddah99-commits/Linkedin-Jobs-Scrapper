@@ -327,6 +327,16 @@ Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows
 
 ### Continuous published-job Nemo enrichment (2026-10-06)
 
+Live performance diagnosis on 2026-10-07 found a temporary four-worker override
+and subsequently an inactive description timer/stopped service. VPS reads took
+0.10–0.15 seconds and a no-op write took 0.17 seconds during diagnosis. The claim
+UPDATE planner selected a pending-state index over approximately 29,000 waiting
+rows; explicit primary-key indexing changes it to selected version-ID lookups.
+Queue recovery maintenance runs once per minute rather than on every refill.
+Slow database operations report total duration and local slot wait without SQL,
+job text or credentials. Intermittent provider/database timeouts still require
+live timing evidence; these observations do not prove a universal timeout cause.
+
 Both Nemo classification prompts read the same taxonomy JSON as the frontend.
 Function selection starts from the posting's main duties and orders matches by
 suitability, most specific primary function first (`roles[0]`, also stored as

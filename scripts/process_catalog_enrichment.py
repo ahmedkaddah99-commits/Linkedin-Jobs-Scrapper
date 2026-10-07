@@ -65,9 +65,19 @@ def execute(sql: str, args=()) -> list[dict]:
     url = os.environ["TURSO_DATABASE_URL"].replace("libsql://", "https://").rstrip("/") + "/v2/pipeline"
     request = Request(url, data=json.dumps(body).encode(), headers={
         "Authorization": "Bearer " + os.environ["TURSO_AUTH_TOKEN"], "Content-Type": "application/json"})
-    with DATABASE_SLOTS:
-        with urlopen(request, timeout=30) as response:
-            result = json.load(response)["results"][0]
+    started = time.monotonic()
+    acquired = started
+    try:
+        with DATABASE_SLOTS:
+            acquired = time.monotonic()
+            with urlopen(request, timeout=30) as response:
+                result = json.load(response)["results"][0]
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= 2:
+            print(json.dumps({"event": "enrichment_database_slow", "operation": sql.split()[0],
+                              "seconds": round(elapsed, 3),
+                              "slot_wait_seconds": round(acquired - started, 3)}), flush=True)
     if result["type"] != "ok":
         raise RuntimeError("turso_" + str(result.get("error", {}).get("code", "unknown")))
     value = result["response"]["result"]
@@ -131,15 +141,16 @@ class NemoClient:
         return result
 
 
-def claim(limit: int) -> tuple[str, list[dict]]:
+def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
     timestamp = now()
-    execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='' WHERE version_id IN ("
+    if maintain:
+        execute("UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 SET state='pending',next_attempt_at='' WHERE version_id IN ("
             "SELECT version_id FROM job_enrichment_queue WHERE state IN ('completed','review_required','source_missing','source_incomplete') AND gap_pass_attempted=0 LIMIT ?)", (limit,))
-    execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
+        execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
             "WHERE state='processing' AND lease_expires_at<?", (timestamp,))
     token = uuid4().hex
     lease = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
-    rows = execute("""UPDATE job_enrichment_queue SET state='processing',attempts=attempts+1,
+    rows = execute("""UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 SET state='processing',attempts=attempts+1,
         lease_token=?,lease_expires_at=?,updated_at=? WHERE version_id IN (
         SELECT q.version_id FROM job_enrichment_queue q
         WHERE q.state='pending' AND q.next_attempt_at<=? ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
@@ -316,6 +327,7 @@ def main() -> int:
     last_report = started
     exhausted = False
     next_claim = started
+    next_maintenance = started
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = set()
         while True:
@@ -329,7 +341,10 @@ def main() -> int:
                     stop_claiming = True
                 else:
                     try:
-                        token, rows = claim(min(slots, args.max_jobs - attempted - len(pending)))
+                        maintain = time.monotonic() >= next_maintenance
+                        token, rows = claim(min(slots, args.max_jobs - attempted - len(pending)), maintain=maintain)
+                        if maintain:
+                            next_maintenance = time.monotonic() + 60
                     except Exception as exc:
                         # A timed-out claim may have committed. Do not replay it
                         # blindly; its lease will recover any ambiguous rows.

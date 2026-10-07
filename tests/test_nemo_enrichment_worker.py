@@ -7,6 +7,21 @@ from tests import test_jobs_role_scoped_feed as fixtures
 from scripts import process_catalog_enrichment as worker
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_claim_uses_selected_version_lookups_and_can_skip_maintenance(self):
+  app=self.classified();store=app.repositories.personalized_jobs_store
+  with store._connect() as c:
+   queries=[]
+   def sql(query,args=()):
+    queries.append(query)
+    if "SET state='processing',attempts=" in query:
+     plan=[dict(r) for r in c.execute('EXPLAIN QUERY PLAN '+query,args).fetchall()]
+     outer=[r['detail'] for r in plan if 'SEARCH job_enrichment_queue ' in r['detail']]
+     self.assertTrue(any('version_id=?' in detail for detail in outer),plan)
+    return [dict(r) for r in c.execute(query,args).fetchall()]
+   with patch.object(worker,'execute',sql):
+    self.assertEqual(len(worker.claim(1,maintain=False)[1]),1)
+   self.assertEqual(len(queries),2)
+
  def test_claim_timeout_recovers_without_terminating_worker(self):
   import tempfile
   from unittest.mock import Mock
