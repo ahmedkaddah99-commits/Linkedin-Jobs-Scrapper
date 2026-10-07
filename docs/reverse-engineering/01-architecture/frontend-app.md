@@ -10,7 +10,8 @@ application details, make the description displayable. Existing overview text
 remains visible after a supplemental Nemo pass. Previously the reader accepted
 only Nemo v2 and hid stored v3 descriptions behind its pending message.
 Backend enrichment gap flags remain outside the customer payload.
-The list header shows loaded jobs and the total matching the selected filters.
+Catalog status and feed error banners appear only after a Job Function is selected; the empty selection state uses its existing Job Function prompt.
+The list header shows only the total matching the selected filters. When the total is unavailable, it shows "Matching jobs" without a partial loaded count.
 The first page computes `COUNT(*)` over the indexed role scope and already
 materialized matching IDs; later pages reuse the count. A bounded process cache
 keys counts by publication, user, functions, filters and visibility for 120 seconds.
