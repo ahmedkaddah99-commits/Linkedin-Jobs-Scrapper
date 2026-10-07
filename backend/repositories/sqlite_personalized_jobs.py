@@ -1513,7 +1513,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             elif not include_hidden:
                 predicates.append("page.user_state != 'hidden'")
             sort_mode = str((filters or {}).get("sort") or "newest").casefold()
-            if sort_mode not in {"newest", "priority", "best", "least_competitive"}:
+            if sort_mode not in {"newest", "least_competitive"}:
                 sort_mode = "newest"
             sort_expr = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
             if sort_mode == "newest":

@@ -30,7 +30,7 @@ QUEUED_JOINS = JOINS.replace("FROM canonical_jobs j\n    JOIN job_posting_versio
 
 
 def write_batch(rows):
-    requests = []
+    requests = [{"type": "execute", "stmt": {"sql": "BEGIN IMMEDIATE", "args": [], "want_rows": False}}]
     for row in rows:
         facts = build_job_facts(row)
         # The source versions and enrichment timestamps are rechecked at write.
@@ -48,6 +48,7 @@ def write_batch(rows):
         requests.append({'type': 'execute', 'stmt': {'sql': '''DELETE FROM profile_job_fact_queue WHERE version_id=? AND revision=?
             AND EXISTS(SELECT 1 FROM profile_job_facts m WHERE m.version_id=profile_job_fact_queue.version_id AND m.input_signature=?)''',
             'args': [{'type': 'text', 'value': str(v)} for v in [row['version_id'], row['queued_revision'], row['input_signature']]], 'want_rows': False}})
+    requests.append({'type': 'execute', 'stmt': {'sql': 'COMMIT', 'args': [], 'want_rows': False}})
     requests.append({'type': 'close'})
     url = os.environ['TURSO_DATABASE_URL'].replace('libsql://', 'https://').rstrip('/') + '/v2/pipeline'
     request = Request(url, data=json.dumps({'requests': requests}).encode(), headers={
@@ -56,7 +57,7 @@ def write_batch(rows):
         results = json.load(response)['results']
     if any(r.get('type') != 'ok' for r in results):
         raise RuntimeError('profile_facts_batch_failed')
-    return sum(int(r.get('response', {}).get('result', {}).get('affected_row_count', 0)) for r in results[::2])
+    return sum(int(r.get('response', {}).get('result', {}).get('affected_row_count', 0)) for r in results[1:-2:2])
 
 
 def main():
@@ -74,13 +75,13 @@ def main():
         print(json.dumps(rows))
         return
     started, processed, written = time.monotonic(), 0, 0
+    # Superseded or unpublished versions cannot block current queue work.
+    execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
+        SELECT q.version_id FROM profile_job_fact_queue q
+        LEFT JOIN job_posting_versions v ON v.version_id=q.version_id
+        LEFT JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id
+        WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")
     while processed < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
-        # Superseded or unpublished versions cannot block current queue work.
-        execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
-            SELECT q.version_id FROM profile_job_fact_queue q
-            LEFT JOIN job_posting_versions v ON v.version_id=q.version_id
-            LEFT JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id
-            WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")
         rows = execute(f"""SELECT j.canonical_job_id,j.title,v.version_id,v.content_hash,v.description,
             v.payload_json,d.summary_json,f.filters_json,p.profile_json AS company_profile_json,
             q.revision AS queued_revision, ({SIGNATURE}) AS input_signature {QUEUED_JOINS}

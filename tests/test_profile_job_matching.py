@@ -124,6 +124,9 @@ def test_acquisition_queue_races_cannot_publish_or_acknowledge_old_facts(monkeyp
                     if item['type'] == 'close':
                         results.append({'type': 'ok', 'response': {}})
                         continue
+                    if item['stmt']['sql'] in {'BEGIN IMMEDIATE', 'COMMIT'}:
+                        results.append({'type': 'ok', 'response': {}})
+                        continue
                     args = [a['value'] for a in item['stmt']['args']]
                     cursor = connection.execute(item['stmt']['sql'], args)
                     results.append({'type': 'ok', 'response': {'result': {'affected_row_count': cursor.rowcount}}})
