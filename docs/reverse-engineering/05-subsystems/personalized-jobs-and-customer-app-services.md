@@ -327,6 +327,15 @@ Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows
 
 ### Continuous published-job Nemo enrichment (2026-10-06)
 
+Both Nemo classification prompts read the same taxonomy JSON as the frontend.
+Function selection starts from the posting's main duties and orders matches by
+suitability, most specific primary function first (`roles[0]`, also stored as
+`role`). Secondary functions require substantial distinct duties; incidental
+keywords, employer industry and redundant broader labels do not justify them.
+Taxonomy changes require restarting the worker on an updated release because
+the allowed list is loaded at process startup. Existing classifications are
+reused and are not automatically reclassified by a taxonomy or prompt change.
+
 Migration `071_nemo_catalog_enrichment_queue` queues each published posting version once. Publication membership inserts and current-version changes enqueue work; repeated publication of unchanged versions does not regenerate descriptions or classifications. `scripts/process_catalog_enrichment.py` uses exactly `mistralai/mistral-nemo` through OpenRouter for missing descriptions (`runr_description_nemo_v3`) and filter metadata (`runr_catalog_filters_nemo_v3`). Current acceptable results are reused regardless of the earlier provider; Nemo fills missing stages. App-listed jobs must have an indexed function assignment; intentionally excluded blue-collar jobs retain their classification. Missing white-collar function assignments are flagged `review_required`, never invented. New description v3 outputs require exact quoted source evidence for each model fact. Existing descriptions using a frontend-supported prompt (v1/v2/v3), matching content hash, valid JSON objects and populated frontend description fields are reused; a newer prompt alone never forces regeneration. Short source fragments (under 80 characters) are flagged `source_incomplete` rather than expanded from the job title. Filter writes also maintain the indexed job-function lookup. Source metadata is retained in the compact filter projection.
 
 Each stage is persisted independently with a current-version/hash/lease guard. Failed descriptions therefore reuse successful filters on retry. Claims have ten-minute recoverable leases; provider/validation failures retry after thirty minutes. Three unsuccessful validation attempts move a version to `review_required` to bound repeated model costs. Missing original text is recorded as `source_missing`, with no invented description. Original employer text is preserved alongside generated English facts and source passage IDs.

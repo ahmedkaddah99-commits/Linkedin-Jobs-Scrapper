@@ -1,6 +1,25 @@
 import importlib
 
 
+def test_all_current_functions_reach_both_nemo_classification_prompts():
+    import json
+    from backend.application.catalog_job_filters import ROLES, FUNCTION_SELECTION_RULES, classification_prompt, function_prompt
+    row = {'id': 'job', 'title': 'Python Engineer', 'description': 'Build Python backend services.'}
+    for prompt, marker, end in ((classification_prompt([row]), 'Allowed roles: ', '\nPostings: '),
+                                (function_prompt(row), 'Allowed functions: ', '\nPosting: ')):
+        assert json.loads(prompt.split(marker, 1)[1].split(end, 1)[0]) == list(ROLES)
+        assert FUNCTION_SELECTION_RULES in prompt
+
+
+def test_primary_function_preserves_the_ranked_specific_selection():
+    from backend.application.catalog_job_filters import validate_classification
+    source = 'Python Engineer. Build Python backend services and SQL data pipelines.'
+    result = validate_classification({'collar': 'white', 'roles': ['Python Engineer', 'Data Engineer'],
+                                      'evidence': 'Build Python backend services'}, source, 'Python Engineer')
+    assert result['roles'] == ['Python Engineer', 'Data Engineer']
+    assert result['role'] == 'Python Engineer'
+
+
 def test_catalog_classification_rejects_missing_roles_for_white_collar():
     module = importlib.import_module('backend.application.catalog_job_filters')
     assert module.validate_classification({'collar': 'white', 'roles': [], 'evidence': 'analysis'}, 'analysis') is None
