@@ -30,26 +30,32 @@ QUEUED_JOINS = JOINS.replace("FROM canonical_jobs j\n    JOIN job_posting_versio
 
 
 def write_batch(rows):
-    requests = [{"type": "execute", "stmt": {"sql": "BEGIN IMMEDIATE", "args": [], "want_rows": False}}]
-    for row in rows:
-        facts = build_job_facts(row)
-        # The source versions and enrichment timestamps are rechecked at write.
-        sql = f"""INSERT INTO profile_job_facts
-            (version_id,canonical_job_id,content_hash,feature_version,input_signature,facts_json,updated_at)
-            SELECT v.version_id,j.canonical_job_id,v.content_hash,?,?,?,? {JOINS}
-            WHERE j.canonical_job_id=? AND v.version_id=? AND v.content_hash=? AND ({SIGNATURE})=?
-            AND EXISTS(SELECT 1 FROM profile_job_fact_queue q WHERE q.version_id=v.version_id AND q.revision=?)
-            ON CONFLICT(version_id) DO UPDATE SET content_hash=excluded.content_hash,
-            feature_version=excluded.feature_version,input_signature=excluded.input_signature,
-            facts_json=excluded.facts_json,updated_at=excluded.updated_at"""
-        args = [FEATURE_VERSION, row['input_signature'], json.dumps(facts, ensure_ascii=False), now(),
-                row['canonical_job_id'], row['version_id'], row['content_hash'], row['input_signature'], row['queued_revision']]
-        requests.append({'type': 'execute', 'stmt': {'sql': sql, 'args': [{'type': 'text', 'value': str(v)} for v in args], 'want_rows': False}})
-        requests.append({'type': 'execute', 'stmt': {'sql': '''DELETE FROM profile_job_fact_queue WHERE version_id=? AND revision=?
-            AND EXISTS(SELECT 1 FROM profile_job_facts m WHERE m.version_id=profile_job_fact_queue.version_id AND m.input_signature=?)''',
-            'args': [{'type': 'text', 'value': str(v)} for v in [row['version_id'], row['queued_revision'], row['input_signature']]], 'want_rows': False}})
-    requests.append({'type': 'execute', 'stmt': {'sql': 'COMMIT', 'args': [], 'want_rows': False}})
-    requests.append({'type': 'close'})
+    inputs = [{**{key: row[key] for key in ('version_id', 'canonical_job_id', 'content_hash', 'input_signature', 'queued_revision')},
+               'facts_json': json.dumps(build_job_facts(row), ensure_ascii=False)} for row in rows]
+    payload = json.dumps(inputs, ensure_ascii=False)
+    joins = JOINS.replace('FROM canonical_jobs j',
+        "FROM json_each(?) i CROSS JOIN canonical_jobs j ON j.canonical_job_id=json_extract(i.value,'$.canonical_job_id')")
+    insert = f"""INSERT INTO profile_job_facts
+        (version_id,canonical_job_id,content_hash,feature_version,input_signature,facts_json,updated_at)
+        SELECT v.version_id,j.canonical_job_id,v.content_hash,?,json_extract(i.value,'$.input_signature'),
+            json_extract(i.value,'$.facts_json'),? {joins}
+        WHERE v.version_id=json_extract(i.value,'$.version_id') AND v.content_hash=json_extract(i.value,'$.content_hash')
+        AND ({SIGNATURE})=json_extract(i.value,'$.input_signature')
+        AND EXISTS(SELECT 1 FROM profile_job_fact_queue q WHERE q.version_id=v.version_id
+                   AND q.revision=json_extract(i.value,'$.queued_revision'))
+        ON CONFLICT(version_id) DO UPDATE SET content_hash=excluded.content_hash,
+        feature_version=excluded.feature_version,input_signature=excluded.input_signature,
+        facts_json=excluded.facts_json,updated_at=excluded.updated_at"""
+    acknowledge = """DELETE FROM profile_job_fact_queue
+        WHERE version_id IN (SELECT json_extract(value,'$.version_id') FROM json_each(?))
+        AND EXISTS(SELECT 1 FROM json_each(?) i JOIN profile_job_facts m ON m.version_id=profile_job_fact_queue.version_id
+            WHERE json_extract(i.value,'$.version_id')=profile_job_fact_queue.version_id
+            AND json_extract(i.value,'$.queued_revision')=profile_job_fact_queue.revision
+            AND m.input_signature=json_extract(i.value,'$.input_signature'))"""
+    def statement(sql, args=()):
+        return {'type': 'execute', 'stmt': {'sql': sql, 'args': [{'type': 'text', 'value': str(v)} for v in args], 'want_rows': False}}
+    requests = [statement('BEGIN IMMEDIATE'), statement(insert, [FEATURE_VERSION, now(), payload]),
+                statement(acknowledge, [payload, payload]), statement('COMMIT'), {'type': 'close'}]
     url = os.environ['TURSO_DATABASE_URL'].replace('libsql://', 'https://').rstrip('/') + '/v2/pipeline'
     request = Request(url, data=json.dumps({'requests': requests}).encode(), headers={
         'Authorization': 'Bearer ' + os.environ['TURSO_AUTH_TOKEN'], 'Content-Type': 'application/json'})
@@ -57,7 +63,7 @@ def write_batch(rows):
         results = json.load(response)['results']
     if any(r.get('type') != 'ok' for r in results):
         raise RuntimeError('profile_facts_batch_failed')
-    return sum(int(r.get('response', {}).get('result', {}).get('affected_row_count', 0)) for r in results[1:-2:2])
+    return int(results[1].get('response', {}).get('result', {}).get('affected_row_count', 0))
 
 
 def main():
@@ -83,7 +89,8 @@ def main():
         WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")
     while processed < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
         rows = execute(f"""SELECT j.canonical_job_id,j.title,v.version_id,v.content_hash,v.description,
-            v.payload_json,d.summary_json,f.filters_json,p.profile_json AS company_profile_json,
+            json_object('industry',COALESCE(json_extract(v.payload_json,'$.industry'),json_extract(v.payload_json,'$.company_industry'))) AS payload_json,
+            d.summary_json,f.filters_json,json_object('fields',json_object('industry',json_extract(p.profile_json,'$.fields.industry'))) AS company_profile_json,
             q.revision AS queued_revision, ({SIGNATURE}) AS input_signature {QUEUED_JOINS}
             WHERE {PUBLISHED} ORDER BY q.version_id LIMIT ?""", [min(max(1, args.batch_size), 100, args.max_jobs - processed)])
         if not rows:
