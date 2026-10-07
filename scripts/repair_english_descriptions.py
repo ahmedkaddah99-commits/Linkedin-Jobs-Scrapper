@@ -43,6 +43,11 @@ def main():
                 time.sleep(2)
         if not page:
             break
+        for row in page:
+            summary = json.loads(row.pop('summary_json') or '{}')
+            text = ' '.join(str(item.get('text', '') if isinstance(item, dict) else item)
+                            for value in summary.values() for item in (value if isinstance(value, list) else [value]))
+            row['german'] = len(text) >= 80 and bool(re.search(r'\b(?:und|für|Ihre|Sie|Aufgaben|Erfahrung|Kenntnisse|mit|Wir)\b', text)) and source_language(text) == 'de'
         rows.extend(page)
         with inventory.open('a', encoding='utf-8') as output:
             for row in page:
@@ -51,10 +56,7 @@ def main():
         print(json.dumps({'event': 'repair_inventory', 'read': len(rows)}), flush=True)
     targets = []
     for row in rows:
-        summary = json.loads(row['summary_json'] or '{}')
-        text = ' '.join(str(item.get('text', '') if isinstance(item, dict) else item)
-                        for value in summary.values() for item in (value if isinstance(value, list) else [value]))
-        german = len(text) >= 80 and bool(re.search(r'\b(?:und|für|Ihre|Sie|Aufgaben|Erfahrung|Kenntnisse|mit|Wir)\b', text)) and source_language(text) == 'de'
+        german = row['german']
         if german or row['gap_pass_attempted'] == 0 or row.get('gap_pass_error_code'):
             targets.append({**row, 'german': german})
     args.audit.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +69,9 @@ def main():
                 SET state='pending',next_attempt_at='',gap_pass_attempted=0,
                 error_code=(SELECT json_extract(value,'$.error') FROM json_each(?)
                             WHERE json_extract(value,'$.id')=job_enrichment_queue.version_id)
-                WHERE version_id IN (SELECT json_extract(value,'$.id') FROM json_each(?)) AND state!='processing'""",
+                WHERE version_id IN (SELECT json_extract(value,'$.id') FROM json_each(?)) AND state!='processing'
+                AND EXISTS(SELECT 1 FROM canonical_jobs j WHERE j.canonical_job_id=job_enrichment_queue.canonical_job_id
+                           AND j.current_version_id=job_enrichment_queue.version_id)""",
                 (batch, batch))
     print(json.dumps({'targeted': len(targets), 'german': sum(r['german'] for r in targets), 'applied': args.apply}))
 
