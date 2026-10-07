@@ -61,8 +61,8 @@ class PhaseCFeedPerformanceSecurityTests(unittest.TestCase):
             state="available",
             payload={"match_intelligence": {"state": "available", "score": 99}},
         )
-        self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["match_intelligence"]["score"], 99)
-        self.assertEqual(app.get_personalized_job_detail("user-b", "job-a")["match_intelligence"]["state"], "pending")
+        self.assertIsNone(app.get_personalized_job_detail("user-a", "job-a")["match_intelligence"]["score"])
+        self.assertEqual(app.get_personalized_job_detail("user-b", "job-a")["match_intelligence"]["state"], "needs_profile")
 
         with app.repositories.personalized_jobs_store._connect() as connection:
             events = connection.execute(

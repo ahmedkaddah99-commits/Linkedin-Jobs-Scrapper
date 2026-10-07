@@ -3591,6 +3591,74 @@ def _apply_enrichment_field_pass_migration(connection: DatabaseConnection) -> No
     """)
 
 
+def _apply_profile_job_facts_migration(connection: DatabaseConnection) -> None:
+    connection.executescript("""
+        CREATE TABLE profile_job_facts (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            feature_version TEXT NOT NULL,
+            input_signature TEXT NOT NULL,
+            facts_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_profile_job_facts_job ON profile_job_facts(canonical_job_id);
+        CREATE TABLE profile_job_fact_queue (
+            version_id TEXT PRIMARY KEY,
+            revision INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO profile_job_fact_queue(version_id)
+            SELECT DISTINCT j.current_version_id FROM acquisition_publication_jobs pj
+            JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id
+            JOIN canonical_jobs j ON j.canonical_job_id=pj.canonical_job_id
+            WHERE h.head_id=1 AND j.current_version_id!='';
+        CREATE TRIGGER profile_facts_publication AFTER INSERT ON acquisition_publication_jobs
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id)
+                SELECT current_version_id FROM canonical_jobs WHERE canonical_job_id=NEW.canonical_job_id AND current_version_id!=''
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_posting AFTER UPDATE OF current_version_id ON canonical_jobs
+        WHEN NEW.current_version_id!=OLD.current_version_id AND NEW.current_version_id!=''
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id) VALUES(NEW.current_version_id)
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_description_insert AFTER INSERT ON job_description_intelligence
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id) VALUES(NEW.version_id)
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_description_update AFTER UPDATE ON job_description_intelligence
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id) VALUES(NEW.version_id)
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_filter_insert AFTER INSERT ON job_filter_intelligence
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id) VALUES(NEW.version_id)
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_filter_update AFTER UPDATE ON job_filter_intelligence
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id) VALUES(NEW.version_id)
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_company_insert AFTER INSERT ON canonical_company_profiles
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id)
+                SELECT current_version_id FROM canonical_jobs WHERE company_id=NEW.company_id AND current_version_id!=''
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+        CREATE TRIGGER profile_facts_company_update AFTER UPDATE ON canonical_company_profiles
+        BEGIN
+            INSERT INTO profile_job_fact_queue(version_id)
+                SELECT current_version_id FROM canonical_jobs WHERE company_id=NEW.company_id AND current_version_id!=''
+                ON CONFLICT(version_id) DO UPDATE SET revision=revision+1;
+        END;
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3980,6 +4048,11 @@ MIGRATIONS = (
         "072_enrichment_field_pass",
         "Record one supplemental missing-field AI pass and backend-only unresolved fields.",
         _apply_enrichment_field_pass_migration,
+    ),
+    Migration.from_callable(
+        "073_profile_job_facts",
+        "Store shared version-bound facts for profile-only job matching.",
+        _apply_profile_job_facts_migration,
     ),
 )
 

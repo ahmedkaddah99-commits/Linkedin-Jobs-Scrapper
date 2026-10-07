@@ -105,6 +105,23 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 self._feed_counts.pop(next(iter(self._feed_counts)))
             self._feed_counts[key] = (time.monotonic(), total)
 
+    def list_profile_job_facts(self, version_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        ids = list(dict.fromkeys(str(v) for v in version_ids if v))
+        if not ids:
+            return {}
+        placeholders = ','.join('?' for _ in ids)
+        with self._connect() as connection:
+            rows = self._fetch_read_rows(connection, f"""SELECT m.version_id,m.facts_json
+                FROM profile_job_facts m
+                JOIN job_posting_versions v ON v.version_id=m.version_id AND v.content_hash=m.content_hash
+                JOIN canonical_jobs j ON j.canonical_job_id=m.canonical_job_id AND j.current_version_id=v.version_id
+                LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id AND d.content_hash=v.content_hash
+                LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id AND f.content_hash=v.content_hash
+                LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id
+                WHERE m.version_id IN ({placeholders}) AND m.feature_version='profile_job_facts_v1'
+                AND m.input_signature=COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(p.updated_at,'')""", ids)
+        return {str(r['version_id']): _decode(r['facts_json'], {}) for r in rows}
+
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(

@@ -116,6 +116,5 @@ export const JOB_FILTER_GROUPS = [
 
 export const JOB_SORT_OPTIONS = [
   ["newest", "Most recent"],
-  ["priority", "Most suitable"],
   ["least_competitive", "Least competitive"],
 ];

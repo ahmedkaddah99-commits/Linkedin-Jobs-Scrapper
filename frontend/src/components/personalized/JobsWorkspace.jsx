@@ -1,5 +1,5 @@
-import { createElement, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
 import { markJobsPhase } from "../../lib/api";
 import { logPersonalizedEvent } from "../../lib/personalizedAnalytics";
@@ -21,6 +21,8 @@ import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxo
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
 import { alternativeSeniority, descriptionLines, descriptionPlaceholder, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
 import AllJobFilters from "./AllJobFilters";
+import EvaluationPanel from "./ProfileMatchPanel";
+import { matchLabel, matchScore } from "../../lib/profileJobMatch";
 
 const NETWORK_ITEMS = [
   ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
@@ -60,10 +62,13 @@ function JobListCard({ isSaved, job, onSave, onSelect, selected }) {
   const arrangement = job.workArrangement === "onsite" ? "On-site" : job.workArrangement === "unknown" ? "Unknown" : job.workArrangement;
   return <article className={["jobs-list-card", selected ? "is-selected" : ""].join(" ")}>
     <button className="jobs-list-card__select" onClick={onSelect} type="button">
+      <div className="jobs-list-card__score"><strong>{matchScore(job.matchIntelligence?.score)}</strong><span>{matchLabel(job.matchIntelligence)}</span></div>
       <div className="jobs-list-card__company"><CompanyMark company={job.company} logoUrl={job.companyLogoUrl} monogram={job.companyMonogram || job.companyProfile?.monogram} /><span>{job.company}</span></div>
       <strong>{job.title}</strong>
       <div className="jobs-list-card__meta">
         <span><Icon>calendar_month</Icon>{job.experienceLevel}</span>
+        <span><Icon>schedule</Icon>{employmentTypeLabel(job.employmentType) || "Job type unspecified"}</span>
+        {formatPostingAge(job.publishedAt) ? <span>{formatPostingAge(job.publishedAt)}</span> : null}
         <span><Icon>location_on</Icon>{job.location}</span>
         <span><Icon>{job.workArrangement === "remote" ? "wifi" : job.workArrangement === "hybrid" ? "sync_alt" : "business"}</Icon>{arrangement}</span>
         {job.applicantLabel !== "Unknown" ? <span><Icon>groups</Icon>{job.applicantLabel}</span> : null}
@@ -161,159 +166,18 @@ function CompetitionPanel({ job }) {
   </section>;
 }
 
-function EvaluationPanel({ job, onImprove }) {
-  const [selectedVersion, setSelectedVersion] = useState("v2");
-  const evaluation = job.evaluation || {};
-  const match = job.matchIntelligence || {};
-  const state = String(match.state || evaluation.state || "unknown");
-  const v1 = match.v1 || {};
-  const v2 = match.v2 || {};
-  const scoreMatch = selectedVersion === "v1" ? v1 : v2;
-  const score = Number.isFinite(Number(scoreMatch.score)) ? Number(scoreMatch.score) : null;
-  const missing = intelligenceValues(scoreMatch.missing_keywords).map(String).filter(Boolean).slice(0, 6);
-  return <section className={["jobs-match-card", "jobs-evaluation-card", `jobs-evaluation-card--${state}`].join(" ")}>
-    <div className="jobs-section__heading"><div><h3>Match intelligence</h3><p>Scores are not AI confidence percentages.</p></div><span className="jobs-data-badge">Free + Pro</span></div>
-    <fieldset aria-label="Choose match score version" className="jobs-version-selector"><legend>Score version</legend>{[["v1", "v1 · ATS-style"], ["v2", "v2 · Semantic/evidence-aware"]].map(([version, label]) => <label key={version}><input checked={selectedVersion === version} name="match-version" onChange={() => setSelectedVersion(version)} type="radio" />{label}</label>)}</fieldset>
-    <div aria-label={`v1 score ${v1.score ?? "pending"}; v2 score ${v2.score ?? "pending"}`} className="jobs-score-pair">{[["v1", v1], ["v2", v2]].map(([version, value]) => { const numericScore = Number(value.score); const tone = Number.isFinite(numericScore) ? numericScore >= 75 ? "strong" : numericScore >= 50 ? "medium" : "weak" : "pending"; return <button aria-pressed={selectedVersion === version} className={[selectedVersion === version ? "is-selected" : "", `is-${tone}`].join(" ")} key={version} onClick={() => setSelectedVersion(version)} type="button"><strong>{value.score ?? "—"}</strong><span>{version}</span></button>; })}</div>
-    <div className="jobs-ats-summary">
-      <div className="jobs-ats-score" style={{ "--ats-score": `${score ?? 0}%` }}><strong>{score ?? "—"}</strong></div>
-      <div className="jobs-ats-copy"><strong>{selectedVersion} resume match</strong><span>{score === null ? "Pending precompute" : score >= 70 ? "Good match" : "Needs review"}</span></div>
-    </div>
-    {missing.length ? <div className="jobs-ats-missing"><strong>{missing.length} missing {missing.length === 1 ? "keyword" : "keywords"}</strong><div>{missing.map((value, index) => <span key={`${value}-${index}`}>{value}</span>)}</div></div> : null}
-    {match.difference ? <div className="jobs-match-difference"><strong>Why v1 and v2 differ</strong><span>{match.difference.summary}</span>{match.difference.score_delta !== null && match.difference.score_delta !== undefined ? <b>{Number(match.difference.score_delta) >= 0 ? "+" : ""}{match.difference.score_delta}</b> : null}</div> : null}
-    {score !== null || state === "pending" ? <button className="jobs-text-link jobs-improve-button" onClick={onImprove} type="button">Improve resume · review evidence <Icon>arrow_forward</Icon></button> : null}
-  </section>;
-}
-
 function ImproveResumeReview({ job, result, onClose, onRewrite, busy }) {
   const match = job.matchIntelligence || {};
   const evidence = result?.evidence || {};
-  const value = (key) => evidence[key] ?? match.v2?.[key];
+  const value = (key) => evidence[key] ?? match[key];
   const canRewrite = Boolean(job.improveResume?.rewriting_available);
   return <div className="jobs-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section aria-labelledby="improve-resume-title" aria-modal="true" className="jobs-improve-modal" role="dialog">
     <header><div><p className="jobs-eyebrow">Evidence review</p><h2 id="improve-resume-title">Improve Resume</h2></div><button aria-label="Close evidence review" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
     <p>Review what your current profile supports before making any change. Never claim experience you cannot verify.</p>
     <div className="jobs-intelligence-grid">{[["Matched keywords", "matched_keywords"], ["Missing keywords", "missing_keywords"], ["Matched requirements", "matched_requirements"], ["Unproven requirements", "unproven_requirements"], ["Apparent non-matches", "apparent_non_matches"], ["Matched evidence", "matched_evidence"], ["Missing evidence", "missing_evidence"]].map(([label, key]) => <div className="jobs-intelligence-card" key={key}><strong>{label}</strong><IntelligenceList evidence={key === "matched_evidence" || key === "missing_evidence"} items={value(key)} /></div>)}</div>
-    <div className="jobs-match-difference"><strong>v1/v2 differences</strong><span>{evidence.v1_v2_difference?.summary || match.difference?.summary || "Pending until both deterministic evaluators finish."}</span></div>
+    <p>Matching uses your saved profile. Tailoring a resume does not change your profile match.</p>
     <footer><button className="jobs-outline-button" onClick={onClose} type="button">Close review</button>{canRewrite ? <button className="jobs-primary-button" disabled={busy} onClick={onRewrite} type="button">{busy ? "Queuing…" : "Create tailored resume"}</button> : <span className="jobs-pro-gate">Tailored rewriting is available in Runr Pro.</span>}</footer>
   </section></div>;
-}
-
-const DESCRIPTION_TAGS = new Set(["p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "b", "em", "i", "u", "blockquote", "pre", "code", "a", "table", "thead", "tbody", "tr", "th", "td"]);
-
-function descriptionNode(node, key) {
-  if (node.nodeType === 3) return node.textContent;
-  if (node.nodeType !== 1) return null;
-  const tag = node.tagName.toLowerCase();
-  if (["script", "style", "iframe", "object", "embed", "form", "input", "button", "svg", "math"].includes(tag)) return null;
-  const children = Array.from(node.childNodes, (child, index) => descriptionNode(child, index));
-  if (!DESCRIPTION_TAGS.has(tag)) return children;
-  const props = { key };
-  if (tag === "a") {
-    try {
-      const url = new URL(node.getAttribute("href") || "");
-      if (url.protocol === "https:" || url.protocol === "http:") {
-        props.href = url.href;
-        props.target = "_blank";
-        props.rel = "noopener noreferrer nofollow";
-      }
-    } catch { /* Leave an invalid link as plain text. */ }
-    if (!props.href) return children;
-  }
-  return createElement(tag, props, ...children);
-}
-
-function DescriptionBlock({ description, html }) {
-  if (html && typeof DOMParser !== "undefined") {
-    const body = new DOMParser().parseFromString(html, "text/html").body;
-    const content = Array.from(body.childNodes, (node, index) => descriptionNode(node, index)).filter(Boolean);
-    if (content.length) return <div className="jobs-description-content">{content}</div>;
-  }
-  const paragraphs = String(description || "").split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  return paragraphs.length ? paragraphs.map((paragraph, index) => <p key={`${paragraph.slice(0, 20)}-${index}`}>{paragraph}</p>) : <p> No verified description is available for this job.</p>;
-}
-
-function JobDescription({ job }) {
-  return <section className="jobs-section jobs-description"><h3>Job description</h3><DescriptionBlock description={job.originalPosting?.description_text || job.description} html={job.originalPosting?.description_html} /></section>;
-}
-
-function StructuredDescription({ job }) {
-  const structured = job.structuredDescription || {};
-  const sections = [
-    ["Responsibilities", structured.responsibilities],
-    ["Requirements", structured.requirements],
-    ["Skills", structured.skills],
-    ["Education", structured.education],
-    ["Languages", structured.languages],
-    ["Authorization", structured.authorization],
-    ["Benefits", structured.benefits],
-    ["Salary", structured.salary],
-    ["Workplace arrangement", structured.workplace_arrangement],
-  ];
-  return <section className="jobs-section jobs-structured-description"><div className="jobs-section__heading"><div><h3>Structured Description</h3><p>Generated fields only; unknown means the employer posting did not establish a value.</p></div><span className="jobs-data-badge">Generated</span></div><div className="jobs-structured-grid">{sections.map(([label, value]) => <div key={label}><strong>{label}</strong>{label === "Salary" ? <span>{job.salaryLabel !== "Unknown" ? job.salaryLabel : "Unknown"}</span> : <IntelligenceList items={value} />}</div>)}</div></section>;
-}
-
-function OriginalPosting({ job }) {
-  const original = job.originalPosting || {};
-  return <section className="jobs-section jobs-original-posting jobs-description"><div className="jobs-section__heading"><div><h3>Original Posting</h3><p className="jobs-original-posting__note">Original job text, preserved for this role.</p></div><span className="jobs-data-badge">Original job text</span></div><DescriptionBlock description={original.description_text || original.description} html={original.description_html} /></section>;
-}
-
-function FullPostingPanel({ job }) {
-  return <section className="jobs-full-posting">
-    <div className="jobs-full-posting__metadata"><InfoRow icon="category" label="Category">{job.category}</InfoRow><InfoRow icon="language" label="Languages">{job.languages.length ? job.languages.join(", ") : "Unknown"}</InfoRow><InfoRow icon="verified_user" label="Work authorization">{job.work_authorization || "Unknown"}</InfoRow><InfoRow icon="business_center" label="Sponsorship">{job.sponsorship || "Unknown"}</InfoRow><InfoRow icon="public" label="Source">{job.source || "Unknown"}</InfoRow><InfoRow icon="schedule" label="Lifecycle">{job.lifecycleState}</InfoRow><InfoRow icon="update" label="Last verified">{formatJobDate(job.lastVerifiedAt)}</InfoRow></div>
-    <StructuredDescription job={job} />
-    <OriginalPosting job={job} />
-    <p className="jobs-apply-note">Apply opens a verified application destination when available, or the original job posting where you can apply. View job always opens the original posting.</p>
-  </section>;
-}
-
-function CompanyOverview({ company, job, onOpenNetwork }) {
-  const detail = company || {};
-  const characteristics = unknownCompanyCharacteristics(detail.characteristics || {});
-  const profile = detail.profile || job.companyProfile || {};
-  const field = (name, fallback) => companyProfileField(profile, name, fallback);
-  const website = field("website");
-  const description = field("description");
-  const industry = field("industry");
-  const size = field("company_size", characteristics.size);
-  const headquarters = field("headquarters", characteristics.headquarters);
-  const founded = field("founded_year", characteristics.foundedYear);
-  const fundingStage = field("funding_stage", characteristics.fundingStage);
-  const totalFunding = field("total_funding");
-  const fundingYear = field("funding_year");
-  const leadership = field("leadership_type");
-  const benefits = field("benefits");
-  const sponsorship = field("sponsorship");
-  const unverified = companyProfileIsUnverified(profile);
-  const sourceUrl = website.state === "known" ? website.value : "";
-  const logoUrl = profile.logo_url || profile.fields?.logo?.value || "";
-  return <div className="jobs-company-overview">
-    <div className="jobs-company-overview__hero"><CompanyMark company={detail.name || job.company} large logoUrl={logoUrl} monogram={profile.monogram} /><div><h2>{detail.name || job.company}</h2><div className="jobs-company-actions">{sourceUrl ? <a className="jobs-outline-button" href={sourceUrl} rel="noreferrer" target="_blank"><Icon>language</Icon>Website</a> : <span className="jobs-outline-button jobs-outline-button--disabled"><Icon>language</Icon>Website unknown</span>}</div></div><span className="jobs-company-data-status">Verified company data only</span></div>
-    {unverified ? <section aria-label="Company details not verified" className="jobs-company-unverified"><img alt="A diverse generic hiring team reviewing company details" src={unverifiedCompanyTeam} /><div><span className="jobs-eyebrow">Company details</span><h3>We’re still verifying this company</h3><p>No source-backed company facts are available yet. The illustration is a generic hiring-team scene, not contact information.</p></div></section> : null}
-    <p className="jobs-company-description">{description.value}</p>
-    <div className="jobs-company-stats"><div><span>Company size</span><strong>{size.value}</strong></div><div><span>Company stage</span><strong>{characteristics.stage}</strong></div><div><span>Headquarters</span><strong>{headquarters.value}</strong></div><div><span>Founded</span><strong>{founded.value}</strong></div></div>
-    <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Company information</h3><p>Unknown means no verified source-backed value is available yet.</p></div></div><div className="jobs-company-catalog-facts"><span>Industry: {industry.value}</span><span>Funding stage: {fundingStage.value}</span><span>Total funding: {totalFunding.value}</span><span>Funding year: {fundingYear.value}</span><span>Leadership: {leadership.value}</span><span>Benefits: {benefits.value}</span><span>Sponsorship: {sponsorship.value}</span><span>Jobs in catalog: {detail.job_count ?? "Unknown"}</span></div></section>
-    <ReferralSection onOpenNetwork={onOpenNetwork} />
-    <section className="jobs-section"><h3>Benefits</h3><IntelligenceList items={benefits.value === "Unknown" ? [] : benefits.value} /></section>
-  </div>;
-}
-
-function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprove, rightPanelTab, setRightPanelTab }) {
-  const arrangement = job.workArrangement === "onsite" ? "On-site" : job.workArrangement;
-  const skills = Array.isArray(job.skills) ? job.skills.filter(Boolean) : [];
-  return <div className="jobs-overview-grid">
-    <main className="jobs-overview-main">
-      <div className="jobs-detail-heading"><span className="jobs-season-pill">{formatJobDate(job.postedAt)}</span><h1>{job.title}</h1><p>{job.company}</p><div className="jobs-detail-heading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button aria-label="Share job" className="jobs-round-button" onClick={() => navigator.clipboard?.writeText(window.location.href)} type="button"><Icon>share</Icon></button><button aria-label="Report job" className="jobs-round-button" onClick={onReport} type="button"><Icon>flag</Icon></button><button aria-label={job.userState === "hidden" ? "Restore job" : "Hide job"} className={["jobs-round-button", job.userState === "hidden" ? "is-selected" : ""].join(" ")} onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon></button></div></div>
-      <div className="jobs-company-inline"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram || job.companyProfile?.monogram} /><div><h2>{job.company}</h2><p>{job.companyDetail?.entity_kind || "Employer"} · {job.location}</p></div></div>
-      <p className="jobs-role-summary">{job.descriptionSummary}</p>
-      <div className="jobs-info-grid"><InfoRow icon="payments" label="Salary">{job.salaryLabel}</InfoRow><InfoRow icon="work_history" label="Job type">{job.employmentType}</InfoRow><InfoRow icon="location_on" label="Location">{job.location}</InfoRow><InfoRow icon={job.workArrangement === "remote" ? "wifi" : "business"} label="Workplace">{arrangement}</InfoRow></div>
-      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Category</h3><p>How this role is grouped</p></div></div><div className="jobs-category-card"><Icon>category</Icon><div><strong>{job.category}</strong><span>Role category</span></div><small>Verified</small></div></section>
-      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Required skills</h3><p>Skills explicitly listed for this role</p></div></div><div className="jobs-skill-list">{skills.length ? skills.map((skill) => <span key={skill}><Icon>check_circle</Icon>{skill}</span>) : <span><Icon>help</Icon>Unknown</span>}</div></section>
-      <ReferralSection onOpenNetwork={onOpenNetwork} />
-      <JobDescription job={job} />
-    </main>
-    <aside className="jobs-overview-side"><div className="jobs-segmented-control"><button className={rightPanelTab === "summary" ? "is-active" : ""} onClick={() => setRightPanelTab("summary")} type="button">Runr at a glance</button><button className={rightPanelTab === "posting" ? "is-active" : ""} onClick={() => setRightPanelTab("posting")} type="button">Employer job description</button></div>{rightPanelTab === "summary" ? <><RunrSummary job={job} /><CompetitionPanel job={job} /><EvaluationPanel job={job} onImprove={onImprove} /><section className="jobs-side-network"><h3>Get referred to {job.company}</h3><p>Connections can help your application get noticed.</p><ReferralSection onOpenNetwork={onOpenNetwork} /></section></> : <FullPostingPanel job={job} />}</aside>
-  </div>;
 }
 
 function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHide, onReport, onImprove }) {
@@ -352,7 +216,7 @@ function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHi
   const list = (items) => <ul className="jobs-reading__list">{descriptionLines(items).map((line, index) => <li key={index}>{line}</li>)}</ul>;
   const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
   const postingAge = formatPostingAge(job.publishedAt);
-  return <article className="jobs-reading">
+  return <article className="jobs-reading"><aside className="jobs-reading__match"><EvaluationPanel job={job} /></aside>
     <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value, className]) => <span className={className} key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
     <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
     {available ? <>
@@ -363,14 +227,7 @@ function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHi
       {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
     </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{placeholder.title}</h2><p>{placeholder.text}</p></div></section>}
     <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
-    <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
   </article>;
-}
-
-function OriginalJob({ job }) {
-  const original = job.originalPosting || {};
-  const description = original.description_text || original.description || job.description;
-  return <article className="jobs-reading jobs-reading--original"><header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong><small>Employer’s original wording</small></span></div><h1>{original.title || job.title}</h1></header><div className="jobs-reading__original-content">{description || original.description_html ? <DescriptionBlock description={description} html={original.description_html} /> : <p>This employer posting has no description text available.</p>}</div></article>;
 }
 
 function DrawerFilterControl({ filter, value, onChange }) {
@@ -445,10 +302,11 @@ function useIsMobile() {
 export default function JobsWorkspace({ initialJobId = "" }) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { isConnected, request } = useSession();
   const routeJobId = initialJobId || searchParams.get("job") || "";
   const isMobile = useIsMobile();
-  const [filters, setFilters] = useState(INITIAL_PERSONALIZED_JOB_FILTERS);
+  const [filters, setFilters] = useState(() => location.state?.jobFilters || INITIAL_PERSONALIZED_JOB_FILTERS);
   const hasJobFunction = hasSelectedJobFunction(filters);
   const [feed, setFeed] = useState(null);
   const [detailJob, setDetailJob] = useState(null);
@@ -502,7 +360,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
-  const cardJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId)) || (!routeJobId ? rawJobs[0] : null);
+  const cardJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId));
   const detailsLoaded = Boolean(detailJob && String(detailJob.canonical_job_id || detailJob.posting_id) === String(selectedJobId));
   const selectedRawJob = detailsLoaded ? {
     ...cardJob,
@@ -521,7 +379,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     apply_url: detailJob.apply_url || cardJob?.apply_url,
     direct_apply_url: detailJob.direct_apply_url || cardJob?.direct_apply_url,
   } : cardJob;
-  const selectedJob = selectedRawJob ? toPersonalizedJobView(selectedRawJob) : null;
+  const selectedJob = routeJobId && selectedRawJob ? toPersonalizedJobView(selectedRawJob) : null;
   const personalizedDataMode = selectedJob?.dataMode || feed?.data_mode || "real";
   const activeFilterCount = countPersonalizedJobFilters(filters);
   const showMobileList = isMobile && !routeJobId;
@@ -650,11 +508,6 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       }
     };
   }, [isConnected, rawJobs, request, routeJobId, selectedJobId]);
-
-  useEffect(() => {
-    if (!routeJobId && !selectedJobId && jobs[0]) setSelectedJobId(jobs[0].id);
-    if (!routeJobId && selectedJobId && rawJobs.length && !rawJobs.some((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId))) setSelectedJobId(jobs[0]?.id || "");
-  }, [jobs, rawJobs, routeJobId, selectedJobId]);
 
   // First useful Jobs render: a verified card page, a truthful empty state,
   // or a retryable failure state. Document `load` is not useful readiness.
@@ -864,7 +717,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     setDetailJob(null);
     setActiveTab("runr");
     setRightPanelTab("summary");
-    if (isMobile) navigate(`/jobs/${encodeURIComponent(job.id)}`);
+    navigate(`/jobs/${encodeURIComponent(job.id)}`, { state: { jobFilters: filters } });
   }
 
   function applyToJob() {
@@ -880,9 +733,9 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   const detailContent = selectedJob ? <>
-    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "runr" ? "is-active" : ""} onClick={() => setActiveTab("runr")} type="button">Runr description</button><button className={activeTab === "original" ? "is-active" : ""} onClick={() => setActiveTab("original")} type="button">Original job post</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View job</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View job</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
+    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><span>Job overview</span></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link" onClick={() => navigate("/jobs", { state: { jobFilters: filters } })} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View employer posting</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View employer posting</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
     <div className="jobs-detail-scroll">
-      {activeTab === "original" ? <OriginalJob job={selectedJob} /> : <ReadableJob company={companyDetail?.requestedCompanyId === selectedJob.company_id ? companyDetail : null} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />}
+      <ReadableJob company={companyDetail?.requestedCompanyId === selectedJob.company_id ? companyDetail : null} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
       {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
       {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
     </div>
@@ -908,9 +761,9 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     {hasJobFunction ? <CatalogStateBanner error={feedError} feed={feed} loading={loading} /> : null}
     {hasJobFunction && feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
-    <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{hasJobFunction ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} matching jobs` : "Matching jobs") : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!hasJobFunction ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
-      {!isMobile || !showMobileList ? <section className="jobs-detail-panel">{detailContent}</section> : null}
+    <div className={["jobs-workspace", routeJobId ? "jobs-workspace--detail-only" : "jobs-workspace--cards-only", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
+      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{hasJobFunction ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} matching jobs` : "Matching jobs") : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!hasJobFunction ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+      {routeJobId ? <section className="jobs-detail-panel">{detailContent}</section> : null}
     </div>
     {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}
     {reportOpen ? <ReportDialog onClose={() => setReportOpen(false)} onSubmit={reportJob} /> : null}

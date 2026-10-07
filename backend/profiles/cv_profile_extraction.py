@@ -678,16 +678,24 @@ def _normalize_experience_list(raw_value: Any) -> list[dict[str, Any]]:
         title = compact_whitespace(str(item.get("title") or item.get("role") or item.get("role_title") or ""))
         company = compact_whitespace(str(item.get("company") or ""))
         period = compact_whitespace(str(item.get("period") or ""))
+        start_date = compact_whitespace(str(item.get("start_date") or item.get("start") or ""))
+        end_date = compact_whitespace(str(item.get("end_date") or item.get("end") or ""))
+        industry = compact_whitespace(str(item.get("industry") or ""))
+        description = str(item.get("description") or item.get("summary") or "").strip()
         bullets = _normalize_multiline_notes(item.get("bullets"), limit=6)
         if not bullets:
             bullets = _normalize_multiline_notes(item.get("bulletsText") or "", limit=6)
-        if title or company or period or bullets:
+        if title or company or period or bullets or description:
             entries.append(
                 {
                     "title": title,
                     "role": title,
                     "company": company,
                     "period": period,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "industry": industry,
+                    "description": description,
                     "bullets": bullets,
                     "bulletsText": "\n".join(bullets),
                 }

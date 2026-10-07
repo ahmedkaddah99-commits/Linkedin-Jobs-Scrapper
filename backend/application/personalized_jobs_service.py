@@ -31,9 +31,10 @@ from backend.acquisition.phase_g import build_applicant_competition, build_prior
 from backend.acquisition.quality import DIRECT_APPLICATION_CLASSIFICATIONS, classify_job_url, posted_age_hours
 from backend.acquisition.job_publication_completeness import is_linkedin_job_detail_url
 from backend.acquisition.public_contract import serialize_public_contract
+from backend.application.profile_job_matching import VERSION as PROFILE_MATCH_VERSION, evaluate_profile_match, profile_snapshot
 
 
-EVALUATOR_VERSION = MATCH_V2_VERSION
+EVALUATOR_VERSION = PROFILE_MATCH_VERSION
 EVALUATION_STATES = {"loading", "pending", "available", "stale", "partial", "unavailable"}
 _MISSING = object()
 _PUBLIC_INTERNAL_KEYS = {
@@ -897,6 +898,12 @@ class PersonalizedJobsService:
         if not catalog_user_access(getattr(self.repositories, "config_store", None), user_id):
             raise PermissionError("jobs_catalog_rollout_not_available")
 
+    def _saved_matching_profile(self, user_id: str) -> dict[str, Any]:
+        try:
+            return profile_snapshot(self.repositories.auth_repository.get_user(user_id))
+        except KeyError:
+            return {"data": {}, "version_id": "", "source": "saved_profile"}
+
     def _company_profile(self, row: Mapping[str, Any]) -> dict[str, Any]:
         fields = _company_profile_fields(row)
         stored_profile = _parse_json(row.get("company_profile_json"))
@@ -1004,17 +1011,6 @@ class PersonalizedJobsService:
             preferences,
             getattr(self.repositories, "career_profile_store", None),
         )
-        keys.extend(
-            build_intelligence_cache_key(
-                row,
-                intelligence_kind="match",
-                user_id=user_id,
-                profile=profile,
-                evaluator_version=evaluator_version,
-                description={"prompt_version": SUMMARY_PROMPT_VERSION},
-            )
-            for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION)
-        )
         queued: list[str] = []
         available: list[str] = []
         for key in keys:
@@ -1044,70 +1040,9 @@ class PersonalizedJobsService:
         cache_entries: Iterable[Mapping[str, Any]] | None = None,
         evaluation_record: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        evaluation_payload = evaluation_record.get("payload") if isinstance(evaluation_record, Mapping) else None
-        if isinstance(evaluation_payload, str):
-            evaluation_payload = _parse_json(evaluation_payload)
-        cached_match = evaluation_payload.get("match_intelligence") if isinstance(evaluation_payload, Mapping) else None
-        if isinstance(cached_match, Mapping):
-            result = dict(cached_match)
-            result["state"] = _text(evaluation_record.get("state")) or state
-            return _public_clean(result)
-        profile = _profile_context(
-            user_id,
-            preferences_record,
-            getattr(self.repositories, "career_profile_store", None),
-        )
-        cached_versions: dict[str, Mapping[str, Any]] = {}
-        for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION):
-            key = build_intelligence_cache_key(
-                row,
-                intelligence_kind="match",
-                user_id=user_id,
-                profile=profile,
-                evaluator_version=evaluator_version,
-                description=description_intelligence,
-            )
-            cached = self._cache_entry_for_key(key, cache_entries or ()) if cache_entries is not None else (self.store.get_intelligence_cache(key) if self.store is not None else None)
-            if cached is not None and _text(cached.get("state")) == "available":
-                cached_intelligence = (cached.get("payload") or {}).get("match_intelligence")
-                if isinstance(cached_intelligence, Mapping):
-                    cached_versions[evaluator_version] = cached_intelligence
-
-        if len(cached_versions) == 2:
-            match = dict(cached_versions[MATCH_V2_VERSION])
-            match["state"] = state
-            return match
-        job_version = {
-            "canonical_job_id": _text(row.get("canonical_job_id")),
-            "id": _text(row.get("current_version_id")),
-            "number": int(row.get("version_number") or 0) or None,
-            "content_hash": _text(row.get("content_hash")),
-        }
-        pending_score = lambda evaluator: {
-            "score": None,
-            "score_scale": "0-100",
-            "status": "pending",
-            "evaluator": {"name": "runr_match_intelligence", "version": evaluator},
-            "job_version": job_version,
-            "profile_version": {
-                "id": _text(profile.get("version_id")),
-                "profile_id": _text(profile.get("profile_id")),
-                "cv_version_id": _text(profile.get("cv_version_id")),
-                "evidence_version_id": _text(profile.get("evidence_version_id")),
-            },
-            "formula": "pending",
-        }
-        return {
-            "state": "pending",
-            "v1": dict(cached_versions.get(MATCH_V1_VERSION) or pending_score(MATCH_V1_VERSION)),
-            "v2": dict(cached_versions.get(MATCH_V2_VERSION) or pending_score(MATCH_V2_VERSION)),
-            "difference": {"score_delta": None, "summary": "Scores are being precomputed from this job version and your current evidence."},
-            "evaluator": {"name": "runr_match_intelligence", "versions": [MATCH_V1_VERSION, MATCH_V2_VERSION]},
-            "profile_version": {"id": _text(profile.get("version_id")), "cv_version_id": _text(profile.get("cv_version_id")), "evidence_version_id": _text(profile.get("evidence_version_id"))},
-            "job_version": job_version,
-            "evaluated_at": None,
-            "improve_resume": {"free_explanations": [], "rewriting_available": False, "tailored_documents_available": False},
-        }
+        snapshot = self._saved_matching_profile(user_id)
+        facts = self.store.list_profile_job_facts([row.get("current_version_id")]) if self.store is not None else {}
+        return evaluate_profile_match(facts.get(_text(row.get("current_version_id"))), snapshot)
 
     def process_next_intelligence(
         self,
@@ -1225,7 +1160,7 @@ class PersonalizedJobsService:
                 description = (description_cache or {}).get("payload") if description_cache else None
                 if not isinstance(description, Mapping):
                     description = build_description_intelligence(row)
-                match = build_match_intelligence(row, description, profile)
+                match = self._match_intelligence(user_id, row, description, preferences, state="available")
                 return response(finish(state="available", payload={"match_intelligence": match}))
             elif kind == "tailored_document":
                 description_key = build_intelligence_cache_key(row, intelligence_kind="description", evaluator_version=SUMMARY_PROMPT_VERSION)
@@ -1266,14 +1201,10 @@ class PersonalizedJobsService:
             raise KeyError("job_not_found")
         match = detail.get("match_intelligence") if isinstance(detail.get("match_intelligence"), Mapping) else {}
         evidence = {
-            "matched_keywords": list((match.get("v2") or {}).get("matched_keywords") or []),
-            "missing_keywords": list((match.get("v2") or {}).get("missing_keywords") or []),
-            "matched_requirements": list((match.get("v2") or {}).get("matched_requirements") or []),
-            "unproven_requirements": list((match.get("v2") or {}).get("unproven_requirements") or []),
-            "apparent_non_matches": list((match.get("v2") or {}).get("apparent_non_matches") or []),
-            "v1_v2_difference": dict(match.get("difference") or {}),
-            "matched_evidence": list((match.get("v2") or {}).get("matched_evidence") or []),
-            "missing_evidence": list((match.get("v2") or {}).get("missing_evidence") or []),
+            "matched_keywords": list(match.get("matched_keywords") or []),
+            "missing_keywords": list(match.get("missing_keywords") or []),
+            "dimensions": dict(match.get("dimensions") or {}),
+            "profile_source": "saved_profile",
         }
         if _text(mode).casefold() in {"rewrite", "generate", "tailored"}:
             if normalize_plan_id(plan_id) == DEFAULT_PLAN_ID:
@@ -1440,6 +1371,8 @@ class PersonalizedJobsService:
                 "total_ms": round((time.perf_counter() - store_started) * 1000, 1),
             }
 
+        matching_profile = self._saved_matching_profile(user_id)
+        matching_facts = self.store.list_profile_job_facts(row.get("current_version_id") for row in page)
         if card_view:
             jobs = [
                 _job_card_projection(
@@ -1454,6 +1387,11 @@ class PersonalizedJobsService:
                 )
                 for row in page
             ]
+            for row, job in zip(page, jobs):
+                match = evaluate_profile_match(matching_facts.get(_text(row.get("current_version_id"))), matching_profile)
+                job["match_intelligence"] = {
+                    key: match.get(key) for key in ("state", "score", "label", "coverage", "evaluator_version")
+                }
             return {
                 "jobs": jobs,
                 "total": result.get("total") if require_role_selection else int(result.get("total") or 0),
@@ -1477,25 +1415,11 @@ class PersonalizedJobsService:
             }
         cache_entries = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
         shared_entries = self.store.list_cached_descriptions(_text(row.get("current_version_id")) for row in page)
-        match_entries = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
-        evaluation_records = self.store.list_evaluations_for_jobs(
-            user_id,
-            job_ids,
-            preferences_revision=int((preferences_record or {}).get("revision") or 0),
-            evaluator_version=MATCH_V2_VERSION,
-        )
         jobs: list[dict[str, Any]] = []
         for row in page:
             description_intelligence = self._description_intelligence(row, cache_entries=cache_entries, shared_entries=shared_entries)
-            match_intelligence = self._match_intelligence(
-                user_id,
-                row,
-                description_intelligence,
-                preferences_record,
-                state=state,
-                cache_entries=match_entries,
-                evaluation_record=evaluation_records.get(str(row.get("canonical_job_id"))),
-            )
+            match_intelligence = evaluate_profile_match(
+                matching_facts.get(_text(row.get("current_version_id"))), matching_profile)
             evaluation_status = "not_evaluated" if not preferences_record and not effective_filters else ("pending" if _text(match_intelligence.get("state")) == "pending" else "eligible")
             evaluation = {
                 "state": state,
@@ -1550,23 +1474,8 @@ class PersonalizedJobsService:
         publication = self.store.get_current_publication()
         catalog_state = self._publication_state(publication) if publication is not None else "unavailable"
         cache_entries = self.store.list_intelligence_cache_entries([posting_id], intelligence_kind="description")
-        match_entries = self.store.list_intelligence_cache_entries([posting_id], user_id=user_id, intelligence_kind="match")
         description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)
-        match_intelligence = self._match_intelligence(
-            user_id,
-            row,
-            description_intelligence,
-            preferences,
-            state=catalog_state if catalog_state in EVALUATION_STATES else "partial",
-            cache_entries=match_entries,
-            evaluation_record=self.store.get_evaluation(
-                user_id,
-                posting_id,
-                job_version_id=_text(row.get("current_version_id")),
-                preferences_revision=int((preferences or {}).get("revision") or 0),
-                evaluator_version=MATCH_V2_VERSION,
-            ),
-        )
+        match_intelligence = self._match_intelligence(user_id, row, description_intelligence, preferences, state=catalog_state)
         match_intelligence = self._apply_plan_entitlements(match_intelligence, plan_id)
         evaluation_payload = {
             "state": catalog_state if catalog_state in EVALUATION_STATES else "partial",
@@ -1754,10 +1663,12 @@ class PersonalizedJobsService:
         rows = list(result.get("rows") or [])[:25]
         if company is None:
             return None
+        matching_profile = self._saved_matching_profile(user_id)
+        facts = self.store.list_profile_job_facts(_text(row.get("current_version_id")) for row in rows)
         jobs: list[dict[str, Any]] = []
         for row in rows:
             description_intelligence = _pending_description()
-            match_intelligence = _pending_match()
+            match_intelligence = evaluate_profile_match(facts.get(_text(row.get("current_version_id"))), matching_profile)
             jobs.append(_job_projection(
                 row,
                 {"state": _text(row.get("user_state")) or "none"},
@@ -1843,12 +1754,13 @@ class PersonalizedJobsService:
         job_ids = [str(row.get("canonical_job_id") or "") for row in page]
         descriptions = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
         shared_entries = self.store.list_cached_descriptions(_text(row.get("current_version_id")) for row in page)
-        matches = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
+        matching_profile = self._saved_matching_profile(user_id)
+        facts = self.store.list_profile_job_facts(_text(row.get("current_version_id")) for row in page)
         preferences = self.get_preferences(user_id)
         jobs = []
         for row in page:
             description = self._description_intelligence(row, cache_entries=descriptions, shared_entries=shared_entries)
-            match = self._match_intelligence(user_id, row, description, preferences, state="available", cache_entries=matches)
+            match = evaluate_profile_match(facts.get(_text(row.get("current_version_id"))), matching_profile)
             applicant_intelligence = build_applicant_competition(row, include_pro=False)
             jobs.append(_job_projection(row, {"state": "hidden"}, {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match}, description, match, self._company_profile(row), applicant_intelligence, {"state": "pending", "score": None}))
         return {"jobs": jobs, "total": int(result.get("total") or 0), "next_cursor": next_cursor, "evaluation": {"state": "available", "supported_states": sorted(EVALUATION_STATES)}}

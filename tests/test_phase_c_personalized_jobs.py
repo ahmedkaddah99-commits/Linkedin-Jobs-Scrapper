@@ -230,7 +230,8 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
 
         self.assertEqual(len(result["jobs"]), 2)
         self.assertNotIn("description", result["jobs"][0])
-        self.assertNotIn("match_intelligence", result["jobs"][0])
+        self.assertIn("match_intelligence", result["jobs"][0])
+        self.assertNotIn("dimensions", result["jobs"][0]["match_intelligence"])
         self.assertEqual(result["jobs"][0]["title"], "Finance Analyst")
         self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["description"], "operations role")
 

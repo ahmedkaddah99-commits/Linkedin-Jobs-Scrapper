@@ -1,0 +1,23 @@
+[Unit]
+Description=Runr acquisition profile matching facts
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr-profile-matching/current
+User=runr-acquisition
+Group=runr-acquisition
+EnvironmentFile=/opt/runr/.env.acquisition
+EnvironmentFile=/etc/runr/acquisition-catalog.env
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+ExecStart=/usr/bin/flock -E 75 -n /srv/runr/state/profile-job-facts.lock /opt/runr/.venv/bin/python scripts/process_profile_job_facts.py --max-jobs 4096 --runtime-seconds 180
+SuccessExitStatus=75
+CPUQuota=100%
+MemoryMax=512M
+TimeoutStartSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/runr/state
