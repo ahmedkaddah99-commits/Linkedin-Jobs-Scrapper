@@ -327,6 +327,14 @@ Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows
 
 ### Continuous published-job Nemo enrichment (2026-10-06)
 
+Owner update (2026-10-08): production translation now uses a separate budgeted
+Nemo request before extraction, replacing serialized Argos inference. The local
+usage ledger caches verified English passage translations by source hash across
+restarts. English input bypasses translation. Original quotations and passage IDs
+remain intact; malformed or non-English translations are rejected. Repair inventory
+is durable and resumable, and failed supplemental attempts are eligible for the
+owner-requested retry alongside German output and unattempted descriptions.
+
 Restored English-input workflow (2026-10-07): the description worker detects
 source language and uses local Argos translation before Nemo extraction. English
 passage text and original quotations share passage IDs; employer originals stay

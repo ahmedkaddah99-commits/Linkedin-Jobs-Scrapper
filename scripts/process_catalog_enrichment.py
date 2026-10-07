@@ -100,7 +100,18 @@ class NemoClient:
         self.db = sqlite3.connect(ledger, check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY,day TEXT,reserved REAL,cost REAL,state TEXT)")
         self.db.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
+        self.db.execute('CREATE TABLE IF NOT EXISTS translations(key TEXT PRIMARY KEY, passages_json TEXT NOT NULL)')
         self.db.commit()
+
+    def translation_cache_get(self, key):
+        with self.lock:
+            row = self.db.execute('SELECT passages_json FROM translations WHERE key=?', (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def translation_cache_set(self, key, passages):
+        with self.lock:
+            self.db.execute('INSERT OR REPLACE INTO translations VALUES (?,?)', (key, json.dumps(passages, ensure_ascii=False)))
+            self.db.commit()
 
     def remaining(self) -> float:
         day = datetime.now(timezone.utc).date().isoformat()
@@ -272,7 +283,7 @@ def complete_if_ready(row,token):
     return bool(saved)
 
 def process(row: dict, token: str, generate) -> str:
-    row = {**row, '_translate_before_nemo': True}
+    row = {**row, '_translate_before_nemo': True, '_translation_generate': generate}
     try:
         if not row.get("version_is_current", True):
             execute("UPDATE job_enrichment_queue SET state='superseded',lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?",

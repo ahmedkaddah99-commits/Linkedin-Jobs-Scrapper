@@ -1,5 +1,23 @@
 from unittest.mock import patch
 
+def test_ai_translates_all_passages_in_one_call_preserving_originals():
+    from backend.application.description_translation import english_passages
+    from unittest.mock import Mock
+    original = [{'id': 'p1', 'text': 'Berichte erstellen.'}, {'id': 'p2', 'text': 'Daten prüfen.'}]
+    generate = Mock(spec=[], return_value={'passages': [{'id': 'p1', 'text': 'Create reports.'}, {'id': 'p2', 'text': 'Check data.'}]})
+    with patch('backend.application.description_translation.source_language', return_value='de'):
+        result = english_passages(original, generate=generate)
+    assert generate.call_count == 1
+    assert result[0]['original_text'] == original[0]['text']
+    assert result[1]['text'] == 'Check data.'
+
+def test_ai_translation_rejects_missing_or_reordered_passages():
+    import pytest
+    from backend.application.description_translation import english_passages
+    with patch('backend.application.description_translation.source_language', return_value='de'):
+        with pytest.raises(ValueError, match='translation_passage_mismatch'):
+            english_passages([{'id': 'p1', 'text': 'Berichte erstellen.'}], generate=lambda _: {'passages': []})
+
 def test_translation_preserves_passage_ids_and_original_evidence():
     from backend.application.description_translation import english_passages
     passages = [{'id': 'p1', 'text': 'Erstellen Sie Berichte.'}]

@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--audit', type=Path, required=True)
     args = parser.parse_args()
     load_project_dotenv()
-    query = """SELECT q.version_id,q.state,q.gap_pass_attempted,d.summary_json
+    query = """SELECT q.version_id,q.state,q.gap_pass_attempted,q.gap_pass_error_code,d.summary_json
         FROM acquisition_publication_head h
         JOIN acquisition_publication_jobs p ON p.publication_id=h.publication_id
         JOIN canonical_jobs j ON j.canonical_job_id=p.canonical_job_id
@@ -27,6 +27,11 @@ def main():
         WHERE h.head_id=1 AND q.version_id>? ORDER BY q.version_id LIMIT 200"""
     rows = []
     cursor = ''
+    args.audit.parent.mkdir(parents=True, exist_ok=True)
+    inventory = args.audit.with_suffix('.inventory.jsonl')
+    if inventory.exists():
+        rows = [json.loads(line) for line in inventory.read_text(encoding='utf-8').splitlines()]
+        cursor = rows[-1]['version_id'] if rows else ''
     while True:
         for attempt in range(3):
             try:
@@ -39,6 +44,9 @@ def main():
         if not page:
             break
         rows.extend(page)
+        with inventory.open('a', encoding='utf-8') as output:
+            for row in page:
+                output.write(json.dumps(row, ensure_ascii=False) + '\n')
         cursor = page[-1]['version_id']
         print(json.dumps({'event': 'repair_inventory', 'read': len(rows)}), flush=True)
     targets = []
@@ -47,7 +55,7 @@ def main():
         text = ' '.join(str(item.get('text', '') if isinstance(item, dict) else item)
                         for value in summary.values() for item in (value if isinstance(value, list) else [value]))
         german = len(text) >= 80 and bool(re.search(r'\b(?:und|für|Ihre|Sie|Aufgaben|Erfahrung|Kenntnisse|mit|Wir)\b', text)) and source_language(text) == 'de'
-        if german or row['gap_pass_attempted'] == 0:
+        if german or row['gap_pass_attempted'] == 0 or row.get('gap_pass_error_code'):
             targets.append({**row, 'german': german})
     args.audit.parent.mkdir(parents=True, exist_ok=True)
     args.audit.write_text(json.dumps(targets, ensure_ascii=False), encoding='utf-8')
