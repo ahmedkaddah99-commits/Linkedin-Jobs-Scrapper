@@ -7,8 +7,13 @@ TRANSLATION_LOCK = Lock()
 
 def source_language(text):
     from langdetect import DetectorFactory, detect
-    DetectorFactory.seed = 0
-    return detect(text)
+    if not any(character.isalpha() for character in text):
+        return 'en'  # No language-bearing text; retain numbers for source validation.
+    with TRANSLATION_LOCK:
+        # langdetect lazily initializes a shared factory; protect first use
+        # when the 32-worker window starts concurrently.
+        DetectorFactory.seed = 0
+        return detect(text)
 
 
 @lru_cache(maxsize=4096)
