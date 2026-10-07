@@ -1,3 +1,2 @@
-# VPS description worker only; install CPU-only torch first on Linux.
-argostranslate==1.11.0
+# Lightweight language detection only. Translation uses OpenRouter, not local models.
 langdetect==1.0.9

@@ -346,7 +346,7 @@ def build_pilot_description(
         rejected.append("missing_header_candidates")
     structured: dict[str, Any] = {"source_passages": passages, "rejected_fields": rejected}
     if row.get('_translate_before_nemo'):
-        structured['translation_pipeline'] = 'nemo_english_v1' if row.get('_translation_generate') else 'argos_english_v1'
+        structured['translation_pipeline'] = 'nemo_english_v1' if row.get('_translation_generate') else 'english_input_v1'
         structured['english_source_passages'] = prompt_passages
     for field in ("location", "work_arrangement", "employment_type", "seniority", "experience_years_min", "experience_years_max", "salary"):
         raw = candidates.get(field)

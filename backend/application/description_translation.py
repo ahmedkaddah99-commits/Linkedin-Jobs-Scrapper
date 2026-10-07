@@ -1,5 +1,4 @@
-"""Local Argos translation before Nemo; original evidence is never replaced."""
-from functools import lru_cache
+"""Budgeted AI translation before Nemo extraction; preserve original evidence."""
 from threading import Lock
 import hashlib
 import json
@@ -16,19 +15,6 @@ def source_language(text):
         # when the 32-worker window starts concurrently.
         DetectorFactory.seed = 0
         return detect(text)
-
-
-@lru_cache(maxsize=4096)
-def translate_text(text, language):
-    from argostranslate import translate
-    with TRANSLATION_LOCK:
-        languages = {item.code: item for item in translate.get_installed_languages()}
-        if language not in languages or 'en' not in languages:
-            raise ValueError('translation_model_missing_' + language)
-        translator = languages[language].get_translation(languages['en'])
-        if translator is None:
-            raise ValueError('translation_model_missing_' + language)
-        return translator.translate(text)
 
 
 def english_passages(passages, generate=None):
@@ -59,4 +45,4 @@ def english_passages(passages, generate=None):
         if hasattr(generate, 'translation_cache_set'):
             generate.translation_cache_set(key, result)
         return result
-    return [{**p, 'original_text': p['text'], 'text': translate_text(p['text'], language)} for p in passages]
+    raise ValueError('translation_generator_missing')

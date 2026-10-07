@@ -21,16 +21,18 @@ def test_ai_translation_rejects_missing_or_reordered_passages():
 def test_translation_preserves_passage_ids_and_original_evidence():
     from backend.application.description_translation import english_passages
     passages = [{'id': 'p1', 'text': 'Erstellen Sie Berichte.'}]
-    with patch('backend.application.description_translation.source_language', return_value='de'), patch('backend.application.description_translation.translate_text', return_value='Create reports.'):
-        result = english_passages(passages)
+    with patch('backend.application.description_translation.source_language', return_value='de'):
+        result = english_passages(passages, generate=lambda _: {'passages': [{'id': 'p1', 'text': 'Create reports.'}]})
     assert result == [{'id': 'p1', 'text': 'Create reports.', 'original_text': 'Erstellen Sie Berichte.'}]
     assert passages[0]['text'] == 'Erstellen Sie Berichte.'
 
 def test_english_passages_do_not_call_translation():
     from backend.application.description_translation import english_passages
     passages = [{'id': 'p1', 'text': 'Create reports.'}]
-    with patch('backend.application.description_translation.source_language', return_value='en'), patch('backend.application.description_translation.translate_text') as translate:
-        assert english_passages(passages) == passages
+    from unittest.mock import Mock
+    translate = Mock(spec=[])
+    with patch('backend.application.description_translation.source_language', return_value='en'):
+        assert english_passages(passages, generate=translate) == passages
         translate.assert_not_called()
 
 def test_nemo_gets_english_input_and_original_quotes_remain_valid():
@@ -47,4 +49,4 @@ def test_nemo_gets_english_input_and_original_quotes_remain_valid():
     assert 'Create monthly reports and analyze business data.' in prompts[0]
     assert result['summary']['responsibilities'][0]['source_quote'] == source
     assert result['structured_description']['source_passages'][0]['text'] == source
-    assert result['structured_description']['translation_pipeline'] == 'argos_english_v1'
+    assert result['structured_description']['translation_pipeline'] == 'english_input_v1'

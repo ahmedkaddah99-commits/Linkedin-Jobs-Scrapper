@@ -334,6 +334,8 @@ restarts. English input bypasses translation. Original quotations and passage ID
 remain intact; malformed or non-English translations are rejected. Repair inventory
 is durable and resumable, and failed supplemental attempts are eligible for the
 owner-requested retry alongside German output and unattempted descriptions.
+Argos fallback and model installer were removed at the owner's request. Only
+lightweight language detection remains local; no translation models run on the VPS.
 
 Restored English-input workflow (2026-10-07): the description worker detects
 source language and uses local Argos translation before Nemo extraction. English
