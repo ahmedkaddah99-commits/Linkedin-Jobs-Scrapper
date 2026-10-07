@@ -10,7 +10,7 @@ application details, make the description displayable. Existing overview text
 remains visible after a supplemental Nemo pass. Previously the reader accepted
 only Nemo v2 and hid stored v3 descriptions behind its pending message.
 Backend enrichment gap flags remain outside the customer payload.
-Catalog status and feed error banners appear only after a Job Function is selected; the empty selection state uses its existing Job Function prompt.
+Catalog status appears only after a Job Function is selected; the empty selection state uses its existing Job Function prompt. Failed refreshes keep existing results visible without timeout or last-verified-page banners. An initial load failure without a cached feed still offers Retry.
 The list header shows only the total matching the selected filters. When the total is unavailable, it shows "Matching jobs" without a partial loaded count.
 The first page computes `COUNT(*)` over the indexed role scope and already
 materialized matching IDs; later pages reuse the count. A bounded process cache
