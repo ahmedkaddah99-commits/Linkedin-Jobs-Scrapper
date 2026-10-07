@@ -2,48 +2,110 @@
   "Software/Internet/AI": {
     "Backend Engineering": [
       "Backend Engineer",
-      "Full Stack Engineer"
+      "Full Stack Engineer",
+      "Python Engineer",
+      "Java Engineer",
+      "C/C++ Engineer",
+      ".Net Engineer",
+      "Golang Engineer",
+      "Salesforce Developer",
+      "Blockchain Engineer"
     ],
     "Data & Analytics": [
       "Data Analyst",
       "Data Scientist",
       "Data Engineer",
-      "Business/BI Analyst"
+      "Business/BI Analyst",
+      "Power BI Developer",
+      "ETL Developer",
+      "Data Warehouse Engineer"
     ],
     "Machine Learning & AI": [
       "Machine Learning Engineer",
-      "AI Engineer"
+      "AI Engineer",
+      "Machine Learning/AI Researcher",
+      "Machine Learning, Deep Learning",
+      "LLM Engineer",
+      "Machine Learning, Model Training and Inference",
+      "Machine Learning, Computer Vision",
+      "Machine Learning, Operations (ML Ops)",
+      "Machine Learning, Search System",
+      "Machine Learning, Infrastructure",
+      "Data Annotation/AI Tutor",
+      "Machine Learning, Ads"
     ],
     "Frontend/Mobile/Game": [
-      "Frontend Software Engineer"
+      "Frontend Software Engineer",
+      "React Developer",
+      "UI/UX Developer",
+      "Android Developer",
+      "Game Developer",
+      "iOS/Swift Developer",
+      "Flutter Developer",
+      "Unity Developer",
+      "Unreal Engine Developer",
+      "AR/VR Developer"
     ],
     "System Reliability & Security": [
       "DevOps",
-      "Cyber Security Analyst"
+      "Cyber Security Analyst",
+      "Cyber Security Engineer",
+      "Cloud Security Engineer",
+      "Systems Engineer",
+      "Network Security Engineer",
+      "Network Engineer",
+      "Site Reliability Engineer (SRE)",
+      "SoC Analyst"
     ],
     "Testing": [
-      "Software Testing/Quality Assurance Engineer"
+      "Software Testing/Quality Assurance Engineer",
+      "Automation Test Engineer",
+      "QA Manager"
     ],
     "Project Management": [
-      "Project/Program Manager"
+      "Project/Program Manager",
+      "Technical Project Manager",
+      "Scrum Master"
     ],
     "Technical Leadership": [
-      "Engineering Manager"
+      "Engineering Manager",
+      "Software Architect",
+      "Engineering Director/VP",
+      "CTO"
+    ],
+    "Technical Support": [
+      "IT Support Specialist",
+      "Help Desk Technician/Desktop Support Technician",
+      "Database Administrator",
+      "System Administrator",
+      "Network Support Specialist",
+      "Salesforce Administrator"
+    ],
+    "Technical Sales": [
+      "Solutions Architect/Forward Deployed Engineer",
+      "Sales Engineer",
+      "Technical Writing",
+      "Developer Relations",
+      "Technical Account Manager"
     ]
   },
   "Consulting": {
     "IT Consulting": [
       "Business Analyst",
       "Data Consultant",
-      "IT Consultant"
+      "IT Consultant",
+      "Cyber Security Consultant"
     ],
     "Business Strategy & Management Consulting": [
       "Business Strategy Consultant",
       "Market Research Analyst",
-      "Operations Consultant"
+      "Operations Consultant",
+      "Change Management Consultant"
     ],
     "Financial Advisory": [
-      "Financial Consultant"
+      "Financial Consultant",
+      "Risk Management Consultant",
+      "Mergers & Acquisitions (M&A) Consultant"
     ]
   },
   "Marketing": {
@@ -54,14 +116,22 @@
       "Copywriter"
     ],
     "Brand and Communications Marketing": [
-      "Brand Manager"
+      "Brand Manager",
+      "Public Relations",
+      "Event Marketing Specialist",
+      "Community Manager"
     ],
     "Growth Marketing": [
       "Growth Marketing",
-      "Performance Marketing"
+      "Performance Marketing",
+      "Advertising Specialist"
     ],
     "Product Marketing": [
       "Product Marketing"
+    ],
+    "Lifecycle and Email Marketing": [
+      "Email Marketing",
+      "Lifecycle Marketing"
     ]
   },
   "Finance": {
@@ -69,18 +139,33 @@
       "Financial Analyst",
       "Risk Analyst",
       "Quantitative Analyst/Researcher",
-      "Portfolio Manager"
+      "Portfolio Manager",
+      "Equity Analyst",
+      "Asset Manager",
+      "Investment Manager",
+      "Securities Trader"
     ],
     "Banking": [
       "Investment Banker",
-      "Credit Analyst"
+      "Credit Analyst",
+      "Commercial Banker",
+      "Loan Officer"
     ],
     "Corporate Finance": [
-      "Corporate Finance Analyst"
+      "Corporate Finance Analyst",
+      "Treasury"
     ],
     "Insurance": [
       "Underwriter",
       "Actuary"
+    ],
+    "VC/PE": [
+      "Investment Analyst/Associate",
+      "Portfolio Operations Manager",
+      "Investor Relations Manager",
+      "Investment Direct/VP",
+      "Investment Partner",
+      "Fundraising Manager"
     ]
   },
   "Product": {
@@ -89,60 +174,118 @@
       "Product Analyst",
       "Technical Product Manager",
       "AI Product Manager",
-      "Game Designer"
+      "Game Designer",
+      "Product Manager, B2B/SaaS",
+      "Product Manager, Consumer Software",
+      "Product Manager, Hardware/Robotics/IoT"
     ]
   },
   "Healthcare": {
     "Healthcare IT": [
-      "Healthcare Data Analyst"
+      "Healthcare Data Analyst",
+      "Healthcare Data Scientist",
+      "Healthcare IT Specialist",
+      "EHR (Electronic Health Records) System Administrator"
     ],
     "Health Product & Operations Management": [
-      "Health Product Manager"
+      "Health Product Manager",
+      "Healthcare Quality Improvement Specialist",
+      "Clinical Operations Manager",
+      "Healthcare Compliance Manager"
     ],
     "Clinical & Regulatory": [
       "Clinical Research Associate",
       "Clinical Research Scientist",
       "Biostatistician",
-      "Medical Writer"
+      "Medical Writer",
+      "Regulatory Affairs Specialist"
     ],
     "Biomedical Engineering & Technology": [
-      "Biomedical Engineer"
+      "Biomedical Engineer",
+      "Clinical Engineer",
+      "Biomedical Equipment Technician"
     ],
     "Clinical Practice": [
       "Medical Professional",
       "Nursing Professional",
       "Therapist"
+    ],
+    "Drug Discovery & Development": [
+      "Biologist",
+      "Biochemist",
+      "Chemist",
+      "Pharmacologist",
+      "Formulation Scientist",
+      "Toxicologist",
+      "DMPK Scientist"
     ]
   },
   "Electrical Engineering": {
     "Electronics & Hardware": [
       "Embedded Software Engineer",
       "Electronics Engineer",
-      "Hardware Engineer"
+      "Hardware Engineer",
+      "Systems Integration Engineer",
+      "FPGA Engineer",
+      "PCB Engineer",
+      "ASIC Engineer",
+      "RF (Radio Frequency) Engineer"
     ],
     "Electrical & Automation": [
       "Electrical Engineer",
-      "Robotics Engineer"
+      "Robotics Engineer",
+      "Automation Engineer",
+      "Controls Engineer",
+      "Electromechanical Engineer"
     ],
     "Telecommunications": [
-      "Network Engineer"
+      "Network Engineer",
+      "Telecommunications Engineer",
+      "Wireless/Antenna Engineer"
     ],
     "Electrical Vehicles": [
-      "Battery Engineer"
+      "Battery Engineer",
+      "Motor Engineer"
     ],
     "General Engineering": [
       "Engineering Specialist"
+    ],
+    "Semiconductors & Chips": [
+      "IC Design Engineer",
+      "Digital IC Verification Engineer",
+      "Analog IC Design Engineer"
+    ],
+    "Testing": [
+      "Hardware Test Engineer",
+      "Electrical Test Engineer"
+    ],
+    "Technical Project Management": [
+      "Project/Program Manager"
+    ],
+    "Sales & Technical Support": [
+      "Solutions Architect",
+      "Sales Engineer"
+    ],
+    "Aerospace Engineering": [
+      "Aerospace Engineer"
     ]
   },
   "Human Resource/Administrative/Legal": {
     "Executive and Administrative": [
       "Administrative Assistant",
       "Executive Assistant",
-      "Office Manager"
+      "Office Manager",
+      "Data Entry Clerk",
+      "Receptionist",
+      "Chief of Staff"
     ],
     "Human Resource": [
       "Human Resource Specialist",
-      "Recruiter/Sourcer"
+      "Recruiter/Sourcer",
+      "Recruiting Coordinator",
+      "HR Business Partner",
+      "Human Resource Manager/Director",
+      "Payroll Specialist"
     ],
     "Legal": [
       "Paralegal",
@@ -151,39 +294,78 @@
   },
   "Sales": {
     "Business Development": [
-      "Business Development"
+      "Business Development",
+      "Partnership"
     ],
     "Inside Sales": [
       "Sales Development Representative",
-      "Account Executive"
+      "Account Executive",
+      "Inside Sales Representative",
+      "Account Executive, SMB"
     ],
     "Sales Management": [
-      "Sales Manager"
+      "Sales Manager",
+      "Regional Sales Manager",
+      "Sales Director/VP"
     ],
     "Outside Sales": [
-      "Enterprise Sales"
+      "Enterprise Sales",
+      "Field Sales Representative",
+      "Channel Sales"
     ],
     "Retail Sales": [
-      "Retail Sales"
+      "Retail Sales",
+      "Store Manager"
     ],
     "Medical Sales": [
-      "Medical Sales"
+      "Medical Sales",
+      "Medical Device Sales"
+    ],
+    "Sales Operations": [
+      "Sales Operations Specialist",
+      "Sales Support"
+    ],
+    "Financial Sales": [
+      "Financial Advisor",
+      "Insurance Sales"
+    ],
+    "Real Estate Sales/Leasing": [
+      "Real Estate Sales",
+      "Leasing Manager"
+    ],
+    "Automotive Sales": [
+      "Automotive Sales"
     ]
   },
   "Production/Manufacturing": {
     "Mechanical Design & Manufacturing": [
       "Mechanical Engineer",
       "Manufacturing Engineer",
-      "Process Engineer"
+      "Process Engineer",
+      "Industrial Engineer",
+      "Mechatronics Engineer"
     ],
     "Operations & Safety": [
-      "Operations Manager/Director"
+      "Operations Manager/Director",
+      "Safety Engineer"
     ],
     "Quality Management": [
       "Quality Assurance Specialist"
     ],
     "Automotive R&D & Manufacturing": [
-      "Automotive Engineer"
+      "Automotive Engineer",
+      "Autonomous Driving System Engineer",
+      "Powertrain Engineer"
+    ],
+    "Technical Project Management": [
+      "Project/Program Manager"
+    ],
+    "Chemical Engineering": [
+      "Chemical Engineer",
+      "Laboratory Technician"
+    ],
+    "Environmental Protection": [
+      "EHS (Environment, Health, Safety) Engineer"
     ]
   },
   "Customer Service": {
@@ -208,10 +390,17 @@
     "Art/3D/Animation": [
       "Video Editor",
       "Illustrator",
-      "3D Designer"
+      "3D Designer",
+      "Creative/Art Director",
+      "Motion Designer",
+      "Animator"
     ],
     "Industrial Design": [
       "Industrial Designer"
+    ],
+    "Environmental Design": [
+      "Interior Designer",
+      "Landscape Designer"
     ]
   },
   "Logistics/Supply Chain": {
@@ -221,15 +410,19 @@
     ],
     "Logistics Operations": [
       "Logistics Manager",
-      "Warehouse Manager"
+      "Warehouse Manager",
+      "Distribution Center Manager"
     ],
     "Procurement and Facilities": [
-      "Procurement Manager"
+      "Procurement Manager",
+      "Facilities Manager"
     ]
   },
   "Public Sector and Government": {
     "Non-profit": [
-      "Program Manager"
+      "Program Manager",
+      "Volunteer Coordinator",
+      "Fundraising Coordinator"
     ],
     "Policy and Planning": [
       "Policy Analyst"
@@ -240,17 +433,25 @@
   },
   "Legal Services": {
     "Compliance & Risk Management": [
-      "Compliance Specialist"
+      "Compliance Specialist",
+      "Risk Analyst"
     ],
     "Paralegals & Legal Support": [
       "Legal Assistant",
       "Paralegal"
     ],
     "Legal Operations & Administration": [
-      "Legal Operations Manager"
+      "Legal Operations Manager",
+      "Case Manager",
+      "Court Clerk"
     ],
     "Legal Practice": [
-      "Lawyer"
+      "Lawyer",
+      "Intellectual Property Lawyer",
+      "Litigation Lawyer",
+      "Immigration Lawyer",
+      "Criminal Lawyer",
+      "Family Lawyer"
     ]
   },
   "Education and Training": {
@@ -262,7 +463,8 @@
       "Corporate Training and Development"
     ],
     "Educational Administration": [
-      "Educational Administration"
+      "Educational Administration",
+      "Academic Dean"
     ],
     "Early Childhood and Care Education": [
       "Early Childhood Educator",
@@ -282,20 +484,25 @@
   "Real Estate/Architecture": {
     "Construction": [
       "Construction Project Manager",
-      "Civil Engineer"
+      "Civil Engineer",
+      "Structural Engineer"
     ],
     "Real Estate": [
-      "Property Manager"
+      "Property Manager",
+      "Leasing Consultant"
     ],
     "Architecture": [
       "Architect",
-      "Urban Planner"
+      "Urban Planner",
+      "Landscape Architect"
     ]
   },
   "Energy/Environmental": {
     "Energy Engineering": [
       "Renewable Energy Engineer",
-      "Energy Engineer"
+      "Energy Engineer",
+      "Power Systems Engineer",
+      "Nuclear Engineer"
     ],
     "Environmental Engineering": [
       "Environmental Scientist",
