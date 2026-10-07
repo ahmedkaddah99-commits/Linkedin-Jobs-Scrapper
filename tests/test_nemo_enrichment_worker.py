@@ -7,6 +7,35 @@ from tests import test_jobs_role_scoped_feed as fixtures
 from scripts import process_catalog_enrichment as worker
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_claim_timeout_recovers_without_terminating_worker(self):
+  import tempfile
+  from unittest.mock import Mock
+  client=Mock();client.remaining.return_value=10
+  with tempfile.TemporaryDirectory() as directory:
+   with patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker,'claim',side_effect=[TimeoutError('private detail'),('lease',[])] ) as claim,patch.object(worker.time,'sleep'),patch.object(worker.time,'monotonic',side_effect=range(0,1000,10)),patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test','TURSO_DATABASE_URL':'test','TURSO_AUTH_TOKEN':'test'}),patch('sys.argv',['worker','--ledger',str(Path(directory)/'ledger.sqlite3')]),patch('builtins.print') as log:
+    self.assertEqual(worker.main(),0)
+    self.assertEqual(claim.call_count,2)
+    messages=[json.loads(call.args[0]) for call in log.call_args_list]
+    self.assertEqual(messages[-1]['claim_failed'],1)
+    self.assertNotIn('private detail',str(messages))
+
+ def test_provider_routes_for_speed_with_existing_spend_limits(self):
+  import tempfile
+  from unittest.mock import MagicMock
+  response=MagicMock()
+  response.__enter__.return_value.read.return_value=json.dumps({'model':'mistralai/mistral-nemo','usage':{'cost':0.0001},'choices':[{'message':{'content':'{}'}}]}).encode()
+  with tempfile.TemporaryDirectory() as directory:
+   client=worker.NemoClient(Path(directory)/'ledger.sqlite3',10)
+   try:
+    with patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test'}),patch.object(worker,'urlopen',return_value=response) as send:
+     client('test prompt')
+     body=json.loads(send.call_args.args[0].data)
+     self.assertEqual(body['provider']['sort'],'throughput')
+     self.assertNotIn('order',body['provider'])
+     self.assertEqual(body['provider']['max_price'],{'prompt':0.03,'completion':0.03})
+   finally:
+    client.db.close()
+
  def test_failure_to_record_a_job_error_does_not_stop_other_jobs(self):
   row={'current_version_id':'test-version'}
   with patch.object(worker,'process',side_effect=[TimeoutError('private connection detail'),'completed']),patch('builtins.print') as log:

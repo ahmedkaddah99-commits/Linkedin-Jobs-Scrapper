@@ -26,6 +26,9 @@ from backend.application.vps_job_descriptions import NEMO_MODEL
 from backend.config import load_project_dotenv
 from backend.database.connection import validate_release_provenance
 
+# AI requests remain concurrent; bound the separate remote persistence lane.
+DATABASE_SLOTS = threading.BoundedSemaphore(4)
+
 
 FILTER_ACCEPTABLE_SQL = """CASE WHEN json_valid(f.filters_json) THEN
     json_type(f.filters_json)='object' AND (
@@ -62,8 +65,9 @@ def execute(sql: str, args=()) -> list[dict]:
     url = os.environ["TURSO_DATABASE_URL"].replace("libsql://", "https://").rstrip("/") + "/v2/pipeline"
     request = Request(url, data=json.dumps(body).encode(), headers={
         "Authorization": "Bearer " + os.environ["TURSO_AUTH_TOKEN"], "Content-Type": "application/json"})
-    with urlopen(request, timeout=30) as response:
-        result = json.load(response)["results"][0]
+    with DATABASE_SLOTS:
+        with urlopen(request, timeout=30) as response:
+            result = json.load(response)["results"][0]
     if result["type"] != "ok":
         raise RuntimeError("turso_" + str(result.get("error", {}).get("code", "unknown")))
     value = result["response"]["result"]
@@ -107,7 +111,7 @@ class NemoClient:
             self.db.commit()
         body = {"model": NEMO_MODEL, "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0, "max_tokens": 8192, "response_format": {"type": "json_object"},
-                "provider": {"order": ["Parasail", "DeepInfra", "DekaLLM"], "require_parameters": True,
+                "provider": {"sort": "throughput", "require_parameters": True,
                              "max_price": {"prompt": 0.03, "completion": 0.03}}}
         request = Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps(body).encode(),
                           headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"], "Content-Type": "application/json"})
@@ -311,6 +315,7 @@ def main() -> int:
     attempted = 0
     last_report = started
     exhausted = False
+    next_claim = started
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = set()
         while True:
@@ -318,21 +323,32 @@ def main() -> int:
                              or time.monotonic() - started >= args.runtime_seconds
                              or counts.get("daily_budget_exhausted", 0))
             slots = args.workers - len(pending)
-            if not stop_claiming and slots >= max(1, args.workers // 2):
+            if not stop_claiming and slots and time.monotonic() >= next_claim:
                 if generate.remaining() < 0.005:
                     counts["daily_budget_exhausted"] = counts.get("daily_budget_exhausted", 0) + 1
                     stop_claiming = True
                 else:
-                    token, rows = claim(min(slots, args.max_jobs - attempted - len(pending)))
-                    if not rows:
-                        exhausted = True
-                        stop_claiming = True
-                    pending.update(pool.submit(process_isolated, row, token, generate) for row in rows)
+                    try:
+                        token, rows = claim(min(slots, args.max_jobs - attempted - len(pending)))
+                    except Exception as exc:
+                        # A timed-out claim may have committed. Do not replay it
+                        # blindly; its lease will recover any ambiguous rows.
+                        counts["claim_failed"] = counts.get("claim_failed", 0) + 1
+                        print(json.dumps({"event": "enrichment_claim_failed",
+                                          "error_code": type(exc).__name__}), flush=True)
+                        next_claim = time.monotonic() + 5
+                    else:
+                        next_claim = time.monotonic() + 1
+                        if not rows:
+                            exhausted = True
+                            stop_claiming = True
+                        pending.update(pool.submit(process_isolated, row, token, generate) for row in rows)
             if not pending:
                 if stop_claiming:
                     break
+                time.sleep(min(1, max(0, next_claim - time.monotonic())))
                 continue
-            done, pending = wait(pending, timeout=30, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
             for future in done:
                 status = future.result()
                 attempted += 1

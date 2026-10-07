@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "./jobReadingPresentation.js";
+import { alternativeSeniority, descriptionLines, descriptionPlaceholder, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "./jobReadingPresentation.js";
+
+test("compact cards and failed detail loads never claim employer text is missing", () => {
+  assert.equal(descriptionPlaceholder({}, false).title, "Loading job description");
+  assert.equal(descriptionPlaceholder({}, false, "timeout").title, "Job description could not be loaded");
+  assert.equal(descriptionPlaceholder({ originalPosting: { description_text: "Employer source" } }, true).title, "Runr description is being prepared");
+  assert.equal(descriptionPlaceholder({}, true).title, "Employer description unavailable");
+});
 
 test("published Nemo v3 facts and preserved summaries are displayable", () => {
   for (const prompt_version of ["runr_description_v1", "runr_description_nemo_v2", "runr_description_nemo_v3"]) {

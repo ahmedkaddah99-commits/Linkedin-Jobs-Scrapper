@@ -19,7 +19,7 @@ import {
 import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
-import { alternativeSeniority, descriptionLines, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
+import { alternativeSeniority, descriptionLines, descriptionPlaceholder, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
 import AllJobFilters from "./AllJobFilters";
 
 const NETWORK_ITEMS = [
@@ -316,7 +316,7 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
   </div>;
 }
 
-function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
+function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHide, onReport, onImprove }) {
   const summary = job.runrSummary || {};
   const structured = job.structuredDescription || {};
   const extracted = (name) => structured[name]?.value;
@@ -341,7 +341,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
     ["calendar_month", years],
     ["payments", scrapedSalary || salaryText],
     ];
-  const hasOriginalDescription = Boolean(job.originalPosting?.description_text || job.originalPosting?.description || job.description);
+  const placeholder = descriptionPlaceholder(job, detailsLoaded, detailError);
   const available = hasRunrDescription(job);
   const itemsFor = (key) => Array.isArray(summary[key]) ? summary[key].filter((item) => typeof (typeof item === "string" ? item : item?.text) === "string" && (typeof item === "string" ? item : item.text).trim()) : [];
   const responsibilities = itemsFor("responsibilities");
@@ -361,7 +361,7 @@ function ReadableJob({ job, company, onPrepare, onHide, onReport, onImprove }) {
       {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
       {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
       {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
-    </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{hasOriginalDescription ? "Runr description is being prepared" : "Employer description unavailable"}</h2><p>{hasOriginalDescription ? "The original employer posting is available in the next tab." : "This posting does not include job description text. Runr cannot organize details the employer did not provide."}</p></div></section>}
+    </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{placeholder.title}</h2><p>{placeholder.text}</p></div></section>}
     <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
     <details className="jobs-reading__tools"><summary>Match and application tools</summary><EvaluationPanel job={job} onImprove={onImprove} /><CompetitionPanel job={job} /></details>
   </article>;
@@ -452,6 +452,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const hasJobFunction = hasSelectedJobFunction(filters);
   const [feed, setFeed] = useState(null);
   const [detailJob, setDetailJob] = useState(null);
+  const [detailError, setDetailError] = useState("");
   const [selectedJobId, setSelectedJobId] = useState(routeJobId);
   const [activeTab, setActiveTab] = useState("runr");
   const [rightPanelTab, setRightPanelTab] = useState("summary");
@@ -502,7 +503,8 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
   const cardJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId)) || (!routeJobId ? rawJobs[0] : null);
-  const selectedRawJob = detailJob ? {
+  const detailsLoaded = Boolean(detailJob && String(detailJob.canonical_job_id || detailJob.posting_id) === String(selectedJobId));
+  const selectedRawJob = detailsLoaded ? {
     ...cardJob,
     ...detailJob,
     company_detail: {
@@ -613,6 +615,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     const detailKey = String(selectedJobId);
     if (fetchedDetailIdRef.current === detailKey) return undefined;
     fetchedDetailIdRef.current = detailKey;
+    setDetailError("");
     let active = true;
     let settled = false;
     const controller = typeof AbortController === "function" ? new AbortController() : null;
@@ -633,6 +636,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
         settled = true;
         if (active) {
           fetchedDetailIdRef.current = "";
+          setDetailError(error?.message || "Job details could not be loaded.");
           setFeedError(error?.message || "This job is not available in the shared catalog.");
         }
       });
@@ -680,12 +684,13 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }, [feedError, jobs.length, loading]);
 
   useEffect(() => {
+    setCompanyDetail(null);
     if (activeTab !== "runr" || !selectedJob?.company_id) return undefined;
     let active = true;
     setCompanyLoading(true);
     setCompanyError("");
     request(`/personalized-jobs/companies/${encodeURIComponent(selectedJob.company_id)}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS })
-      .then((payload) => { if (active) setCompanyDetail(payload); })
+      .then((payload) => { if (active) setCompanyDetail({ ...payload, requestedCompanyId: selectedJob.company_id }); })
       .catch((error) => { if (active) setCompanyError(error?.message || "Company details are unavailable."); })
       .finally(() => { if (active) setCompanyLoading(false); });
     return () => { active = false; };
@@ -877,7 +882,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const detailContent = selectedJob ? <>
     <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "runr" ? "is-active" : ""} onClick={() => setActiveTab("runr")} type="button">Runr description</button><button className={activeTab === "original" ? "is-active" : ""} onClick={() => setActiveTab("original")} type="button">Original job post</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View job</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View job</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
     <div className="jobs-detail-scroll">
-      {activeTab === "original" ? <OriginalJob job={selectedJob} /> : <ReadableJob company={companyDetail} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />}
+      {activeTab === "original" ? <OriginalJob job={selectedJob} /> : <ReadableJob company={companyDetail?.requestedCompanyId === selectedJob.company_id ? companyDetail : null} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />}
       {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
       {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
     </div>

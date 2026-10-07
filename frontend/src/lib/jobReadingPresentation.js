@@ -1,3 +1,12 @@
+export function descriptionPlaceholder(job, detailsLoaded, error = "") {
+  if (error) return { title: "Job description could not be loaded", text: "Please reopen this job to retry loading its details." };
+  if (!detailsLoaded) return { title: "Loading job description", text: "Loading the saved job details." };
+  const source = job.originalPosting?.description_text || job.originalPosting?.description || job.description;
+  return String(source || "").trim()
+    ? { title: "Runr description is being prepared", text: "Use View employer posting to read the complete description on the source site." }
+    : { title: "Employer description unavailable", text: "This posting does not include job description text. Runr cannot organize details the employer did not provide." };
+}
+
 export function hasRunrDescription(job) {
   const supported = ["runr_description_v1", "runr_description_nemo_v2", "runr_description_nemo_v3"];
   if (!supported.includes(job.descriptionIntelligence?.prompt_version)) return false;
