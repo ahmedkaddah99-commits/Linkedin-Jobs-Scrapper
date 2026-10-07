@@ -300,7 +300,7 @@ def evaluate_profile_match(facts, snapshot, *, today=None):
     known = [d["score"] for d in dimensions.values() if d["score"] is not None]
     overall = round(sum(known) / len(known)) if known else None
     return {"state": "available" if len(known) == 3 else "partial" if known else "insufficient_information",
-            "score": overall, "label": "Strong match" if overall is not None and overall >= 80 else "Good match" if overall is not None and overall >= 60 else "Partial match" if overall is not None else "Insufficient information",
+            "score": overall, "label": "Partial assessment" if known and len(known) < 3 else "Strong match" if overall is not None and overall >= 80 else "Good match" if overall is not None and overall >= 60 else "Partial match" if overall is not None else "Insufficient information",
             "dimensions": dimensions, "coverage": len(known), "evaluator_version": VERSION,
             "profile_version": snapshot.get("version_id"), "profile_source": "saved_profile",
             "posting_version": facts.get("posting_version"),

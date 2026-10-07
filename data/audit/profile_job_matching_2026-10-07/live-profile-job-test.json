@@ -1,0 +1,50 @@
+[
+  {
+    "job": "Senior Management Consultant Healthcare (all genders)",
+    "state": "partial",
+    "score": 100,
+    "dimensions": {
+      "experience_level": null,
+      "skill": 100,
+      "industry_experience": null
+    },
+    "profile_source": "saved_profile",
+    "milliseconds": 8090.7
+  },
+  {
+    "job": "Travel and Expense PCard Analyst",
+    "state": "partial",
+    "score": 50,
+    "dimensions": {
+      "experience_level": null,
+      "skill": 50,
+      "industry_experience": null
+    },
+    "profile_source": "saved_profile",
+    "milliseconds": 5427.2
+  },
+  {
+    "job": "Senior Pricing Analyst",
+    "state": "partial",
+    "score": 14,
+    "dimensions": {
+      "experience_level": null,
+      "skill": 14,
+      "industry_experience": null
+    },
+    "profile_source": "saved_profile",
+    "milliseconds": 6025.1
+  },
+  {
+    "job": "Senior Presales Consultant – UK",
+    "state": "partial",
+    "score": 0,
+    "dimensions": {
+      "experience_level": null,
+      "skill": 0,
+      "industry_experience": null
+    },
+    "profile_source": "saved_profile",
+    "milliseconds": 4957.7
+  }
+]

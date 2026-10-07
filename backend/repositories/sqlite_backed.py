@@ -1326,7 +1326,8 @@ class SqliteAuthRepository(_SqliteStore):
     def get_saved_profile(self, user_id: str) -> dict[str, Any]:
         """Read professional account profile without hydrating CV assets/documents."""
         with self._connect() as connection:
-            row = connection.execute("SELECT json_extract(payload_json, '$.metadata.profile') AS profile FROM users WHERE user_id=?", (user_id,)).fetchone()
+            rows = self._fetch_read_rows(connection, "SELECT json_extract(payload_json, '$.metadata.profile') AS profile FROM users WHERE user_id=?", (user_id,))
+            row = rows[0] if rows else None
         if row is None:
             raise KeyError(user_id)
         return dict(_deserialize(row["profile"], {}) or {})

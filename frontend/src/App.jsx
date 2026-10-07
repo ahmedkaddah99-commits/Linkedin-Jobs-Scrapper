@@ -223,7 +223,7 @@ function AuthenticatedApp() {
     <AppShell muteSidebar={!hasSession}>
       <UpgradeModalHost />
       {hasSession ? (
-        <RouteErrorBoundary key={`${location.pathname}${location.search}`}>
+        <RouteErrorBoundary key={location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<HomePage />} />

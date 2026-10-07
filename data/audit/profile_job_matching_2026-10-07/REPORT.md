@@ -29,8 +29,17 @@ Synthetic 25-job scoring benchmark, 100 samples: median 36.24 ms, 95th percentil
 
 ## Validation and operating limits
 
-Focused tests cover profile/CV independence, separate users, alias boundaries and negation, required/preferred skills, overlapping dates, unknown fields, settings round trips, stale versions and concurrent queue revisions. Desktop/mobile Playwright covers card-only loading, lazy detail requests, breakdown/evidence, employer links, absence of embedded originals, back navigation and viewport overflow. Validation passed: 31 focused backend tests, 173 frontend unit tests, two Playwright projects and a production build. A further 14 feed performance/security checks passed after legacy-sort fallback was retired.
+Focused tests cover profile/CV independence, separate users, alias boundaries and negation, required/preferred skills, overlapping dates, unknown fields, settings round trips, stale versions and concurrent queue revisions. Desktop/mobile Playwright covers card-only loading, lazy detail requests, breakdown/evidence, employer links, absence of embedded originals, back navigation and viewport overflow. Validation passed: 32 focused backend tests, 173 frontend unit tests, two Playwright projects and a production build. A further 14 feed performance/security checks passed after legacy-sort fallback was retired.
 
 Reliability here means deterministic, reproducible, source-linked and conservative handling of unknowns. Human-labelled calibration has not been completed. The reviewed skill/industry ontology has finite coverage; unsupported extraction can yield partial assessments. Seniority bands and related-industry credit are explicit product rules, not a learned model. Education, licence and legal eligibility are not included in this three-dimension percentage. Original sources remain available through the employer link.
 
 Deployment verification is recorded in `deployment-verification.json` beside this report after the release and VPS backfill are checked.
+
+
+## Filled-profile checks
+
+The owner requested population from the selected uploaded CV. The saved profile now contains 22 competencies, four work experiences with converted source periods as month dates, and two education entries. Existing parsed CV data was reused; no extra AI call was needed. The CV did not establish an explicit industry, which remains unknown. Only the account profile JSON was changed; uploaded files and other account metadata were preserved. The previous profile was backed up locally outside Git.
+
+A browser regression fills a fictional QA profile with Power BI and three dated years of analyst work in Insurance. The actual Python evaluator produces Experience 100%, Skill 67%, Industry 50%, Overall 72%. Saving Python as another skill changes Skill to 100% and Overall to 83%. Both desktop and mobile pass. This test exposed and fixed loss of unsaved profile fields when switching tabs. Source-backed production job checks are recorded in `live-profile-job-test.json`; incomplete assessments are labelled Partial assessment rather than Strong match.
+
+During rollout, competing enrichment/publication writes produced 30-second Turso write timeouts. A controlled matching batch completed 100 jobs in 3.86 seconds after quiescing competing writes. Initial backfill is coordinated with a temporary four-worker description cap; normal description concurrency is restored after coverage is verified. This is separate from the evaluator CPU benchmark. Live end-to-end detail reads in the first production sample took approximately 5?8 seconds, so that sample does not establish a sub-second HTTP latency claim.
