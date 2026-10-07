@@ -7,6 +7,17 @@ from tests import test_jobs_role_scoped_feed as fixtures
 from scripts import process_catalog_enrichment as worker
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_empty_maintenance_does_not_issue_remote_writes(self):
+  queries=[]
+  def sql(query,args=()):
+   queries.append(query)
+   return []
+  with patch.object(worker,'execute',sql):
+   self.assertEqual(worker.claim(32)[1],[])
+  writes=[q for q in queries if q.startswith('UPDATE')]
+  self.assertEqual(len(writes),1)
+  self.assertIn("SET state='processing'",writes[0])
+
  def test_claim_uses_selected_version_lookups_and_can_skip_maintenance(self):
   app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:

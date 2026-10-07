@@ -144,10 +144,22 @@ class NemoClient:
 def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
     timestamp = now()
     if maintain:
-        execute("UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 SET state='pending',next_attempt_at='' WHERE version_id IN ("
-            "SELECT version_id FROM job_enrichment_queue WHERE state IN ('completed','review_required','source_missing','source_incomplete') AND gap_pass_attempted=0 LIMIT ?)", (limit,))
-        execute("UPDATE job_enrichment_queue SET state='pending',lease_token='',lease_expires_at='' "
-            "WHERE state='processing' AND lease_expires_at<?", (timestamp,))
+        terminal = execute("SELECT version_id FROM job_enrichment_queue WHERE state IN "
+                           "('completed','review_required','source_missing','source_incomplete') "
+                           "AND gap_pass_attempted=0 LIMIT ?", (limit,))
+        expired = execute("SELECT version_id FROM job_enrichment_queue WHERE state='processing' "
+                          "AND lease_expires_at<? LIMIT ?", (timestamp, limit))
+        if terminal:
+            ids = [r['version_id'] for r in terminal]
+            execute("UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 "
+                    "SET state='pending',next_attempt_at='' WHERE version_id IN (" + ','.join('?' for _ in ids) + ") "
+                    "AND state IN ('completed','review_required','source_missing','source_incomplete') "
+                    "AND gap_pass_attempted=0", tuple(ids))
+        if expired:
+            ids = [r['version_id'] for r in expired]
+            execute("UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 "
+                    "SET state='pending',lease_token='',lease_expires_at='' WHERE version_id IN (" +
+                    ','.join('?' for _ in ids) + ") AND state='processing' AND lease_expires_at<?", (*ids, timestamp))
     token = uuid4().hex
     lease = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     rows = execute("""UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 SET state='processing',attempts=attempts+1,
