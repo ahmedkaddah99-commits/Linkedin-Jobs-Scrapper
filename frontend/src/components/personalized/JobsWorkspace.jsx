@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
 import { markJobsPhase } from "../../lib/api";
@@ -312,11 +312,6 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [detailJob, setDetailJob] = useState(null);
   const [detailError, setDetailError] = useState("");
   const [selectedJobId, setSelectedJobId] = useState(routeJobId);
-  const [activeTab, setActiveTab] = useState("runr");
-  const [rightPanelTab, setRightPanelTab] = useState("summary");
-  const [companyDetail, setCompanyDetail] = useState(null);
-  const [companyLoading, setCompanyLoading] = useState(false);
-  const [companyError, setCompanyError] = useState("");
   const [feedError, setFeedError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -334,6 +329,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [busyAction, setBusyAction] = useState("");
   const [feedAttempt, setFeedAttempt] = useState(0);
   const listBodyRef = useRef(null);
+  const listScrollTopRef = useRef(0);
   const loadMoreSentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const relevantJobEventRef = useRef("");
@@ -370,6 +366,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       ...detailJob.company_detail,
       profile: {
         ...cardJob?.company_profile,
+        ...detailJob.company_profile,
         ...detailJob.company_detail?.profile,
         logo_url: detailJob.company_detail?.profile?.logo_url || cardJob?.company_profile?.logo_url,
       },
@@ -387,8 +384,20 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   useEffect(() => {
     setSelectedJobId(routeJobId);
     setDetailJob(null);
+    fetchedDetailIdRef.current = "";
+  }, [routeJobId]);
+
+  useEffect(() => {
     setPreparing(searchParams.get("prepare") === "1");
-  }, [routeJobId, searchParams]);
+  }, [searchParams]);
+
+  useLayoutEffect(() => {
+    const list = listBodyRef.current;
+    if (!routeJobId && list) list.scrollTop = listScrollTopRef.current;
+    return () => {
+      if (list) listScrollTopRef.current = list.scrollTop;
+    };
+  }, [routeJobId]);
 
   useEffect(() => {
     if (!isConnected) return undefined;
@@ -458,7 +467,8 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       void runFeedRequest();
     }
     return () => { active = false; if (timer) window.clearTimeout(timer); controller?.abort(); };
-  }, [feedAttempt, filters, hasJobFunction, isConnected, request, routeJobId]);
+  // Opening or closing a posting retains this feed and must not query it again.
+  }, [feedAttempt, filters, hasJobFunction, isConnected, request]);
 
   function retryFeed() {
     setFeedAttempt((attempt) => attempt + 1);
@@ -535,19 +545,6 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }
     return undefined;
   }, [feedError, jobs.length, loading]);
-
-  useEffect(() => {
-    setCompanyDetail(null);
-    if (activeTab !== "runr" || !selectedJob?.company_id) return undefined;
-    let active = true;
-    setCompanyLoading(true);
-    setCompanyError("");
-    request(`/personalized-jobs/companies/${encodeURIComponent(selectedJob.company_id)}`, { timeoutMs: JOBS_FEED_TIMEOUT_MS })
-      .then((payload) => { if (active) setCompanyDetail({ ...payload, requestedCompanyId: selectedJob.company_id }); })
-      .catch((error) => { if (active) setCompanyError(error?.message || "Company details are unavailable."); })
-      .finally(() => { if (active) setCompanyLoading(false); });
-    return () => { active = false; };
-  }, [activeTab, request, selectedJob?.company_id]);
 
   function updateFilter(name, value) {
     loadMoreAbortRef.current?.abort();
@@ -710,13 +707,11 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }, { root, rootMargin: "0px 0px 150px 0px" });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [feed?.next_cursor, loadingMore, jobs.length, showMobileList]);
+  }, [feed?.next_cursor, loadingMore, jobs.length, showMobileList, routeJobId]);
 
   function selectJob(job) {
     setSelectedJobId(job.id);
     setDetailJob(null);
-    setActiveTab("runr");
-    setRightPanelTab("summary");
     navigate(`/jobs/${encodeURIComponent(job.id)}`, { state: { jobFilters: filters } });
   }
 
@@ -735,7 +730,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const detailContent = selectedJob ? <>
     <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><span>Job overview</span></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link" onClick={() => navigate("/jobs", { state: { jobFilters: filters } })} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View employer posting</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View employer posting</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
     <div className="jobs-detail-scroll">
-      <ReadableJob company={companyDetail?.requestedCompanyId === selectedJob.company_id ? companyDetail : null} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
+      <ReadableJob company={{ name: selectedJob.company, profile: selectedJob.companyProfile }} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
       {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
       {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
     </div>

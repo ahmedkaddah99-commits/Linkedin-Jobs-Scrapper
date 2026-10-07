@@ -2,6 +2,24 @@
 
 # Customer web frontend (WS-8)
 
+## Jobs navigation retention (2026-10-07)
+
+The posting reader uses the company profile included in the job-detail payload.
+It no longer calls the company endpoint on opening a posting, avoiding the extra
+company count, up to 25 employer jobs and their profile matches. Direct links
+preserve company description fields even without a logo or list card.
+
+The list and posting detail use one optional `/jobs/:jobId?` route and a stable
+Jobs error-boundary key, keeping `JobsWorkspace` mounted during posting navigation.
+Loaded cards, pagination, filters and save changes remain in memory; returning
+restores the list scroll position. The feed effect depends on filters, connection
+and explicit Retry, not the posting ID. Opening a posting requests its details
+without fetching the feed again. Direct posting links still work without selecting
+a Job Function. Leaving Jobs or reloading the browser creates a new workspace.
+Desktop/mobile Playwright coverage checks request counts, pagination, save changes,
+browser Back, repeated posting opens, changed sort and direct links. This local
+correction requires frontend deployment and live navigation verification.
+
 ## Description display correction (2026-10-07)
 
 The Jobs reader accepts `runr_description_v1`, `runr_description_nemo_v2` and

@@ -39,7 +39,6 @@ const TrackerAtsPage = lazy(() => import("./pages/TrackerAtsPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
 const PersonalizedJobsPage = lazy(() => import("./pages/PersonalizedJobsPage"));
 const HiddenJobsPage = lazy(() => import("./pages/HiddenJobsPage"));
-const PersonalizedJobDetailPage = lazy(() => import("./pages/PersonalizedJobDetailPage"));
 const PersonalizedOnboardingPage = lazy(() => import("./pages/PersonalizedOnboardingPage"));
 const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
 
@@ -187,7 +186,6 @@ function AuthenticatedApp() {
         void import("./pages/PersonalizedOnboardingPage");
       }
       void import("./pages/HiddenJobsPage");
-      void import("./pages/PersonalizedJobDetailPage");
     };
     const idleId = window.requestIdleCallback?.(preload, { timeout: 2000 });
     const timeoutId = idleId === undefined ? window.setTimeout(preload, 1200) : undefined;
@@ -223,16 +221,15 @@ function AuthenticatedApp() {
     <AppShell muteSidebar={!hasSession}>
       <UpgradeModalHost />
       {hasSession ? (
-        <RouteErrorBoundary key={location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
+        <RouteErrorBoundary key={/^\/jobs(?:\/[^/]+)?$/.test(location.pathname) && location.pathname !== "/jobs/hidden" ? "/jobs" : location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/home" element={<Navigate replace to="/" />} />
               <Route path="/onboarding" element={personalizedJobsExperienceEnabled && personalizedJobsDataMode !== "real" ? <PersonalizedOnboardingPage /> : <Navigate replace to="/jobs" />} />
-              <Route path="/jobs" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
+              <Route path="/jobs/:jobId?" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/matches" element={<Navigate replace to="/jobs" />} />
               <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
-              <Route path="/jobs/:jobId" element={personalizedJobsExperienceEnabled ? <PersonalizedJobDetailPage /> : <Navigate replace to="/" />} />
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/dashboard" element={<Navigate replace to="/jobs" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
