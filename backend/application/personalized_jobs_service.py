@@ -32,6 +32,7 @@ from backend.acquisition.quality import DIRECT_APPLICATION_CLASSIFICATIONS, clas
 from backend.acquisition.job_publication_completeness import is_linkedin_job_detail_url
 from backend.acquisition.public_contract import serialize_public_contract
 from backend.application.profile_job_matching import VERSION as PROFILE_MATCH_VERSION, evaluate_profile_match, profile_snapshot
+from types import SimpleNamespace
 
 
 EVALUATOR_VERSION = PROFILE_MATCH_VERSION
@@ -900,7 +901,11 @@ class PersonalizedJobsService:
 
     def _saved_matching_profile(self, user_id: str) -> dict[str, Any]:
         try:
-            return profile_snapshot(self.repositories.auth_repository.get_user(user_id))
+            repository = self.repositories.auth_repository
+            getter = getattr(repository, "get_saved_profile", None)
+            if callable(getter):
+                return profile_snapshot(SimpleNamespace(metadata={"profile": getter(user_id)}))
+            return profile_snapshot(repository.get_user(user_id))
         except KeyError:
             return {"data": {}, "version_id": "", "source": "saved_profile"}
 

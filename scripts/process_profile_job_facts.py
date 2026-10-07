@@ -33,6 +33,7 @@ def write_batch(rows):
     inputs = [{**{key: row[key] for key in ('version_id', 'canonical_job_id', 'content_hash', 'input_signature', 'queued_revision')},
                'facts_json': json.dumps(build_job_facts(row), ensure_ascii=False)} for row in rows]
     payload = json.dumps(inputs, ensure_ascii=False)
+    receipts = json.dumps([{key: item[key] for key in ("version_id", "queued_revision", "input_signature")} for item in inputs])
     joins = JOINS.replace('FROM canonical_jobs j',
         "FROM json_each(?) i CROSS JOIN canonical_jobs j ON j.canonical_job_id=json_extract(i.value,'$.canonical_job_id')")
     insert = f"""INSERT INTO profile_job_facts
@@ -55,7 +56,7 @@ def write_batch(rows):
     def statement(sql, args=()):
         return {'type': 'execute', 'stmt': {'sql': sql, 'args': [{'type': 'text', 'value': str(v)} for v in args], 'want_rows': False}}
     requests = [statement('BEGIN IMMEDIATE'), statement(insert, [FEATURE_VERSION, now(), payload]),
-                statement(acknowledge, [payload, payload]), statement('COMMIT'), {'type': 'close'}]
+                statement(acknowledge, [receipts, receipts]), statement('COMMIT'), {'type': 'close'}]
     url = os.environ['TURSO_DATABASE_URL'].replace('libsql://', 'https://').rstrip('/') + '/v2/pipeline'
     request = Request(url, data=json.dumps({'requests': requests}).encode(), headers={
         'Authorization': 'Bearer ' + os.environ['TURSO_AUTH_TOKEN'], 'Content-Type': 'application/json'})
@@ -83,7 +84,7 @@ def main():
     started, processed, written = time.monotonic(), 0, 0
     # Superseded or unpublished versions cannot block current queue work.
     execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
-        SELECT q.version_id FROM profile_job_fact_queue q
+        SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 100) q
         LEFT JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id
         WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")

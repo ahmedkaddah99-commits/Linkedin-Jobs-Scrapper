@@ -1323,6 +1323,14 @@ class SqliteAuthRepository(_SqliteStore):
                 for row in rows
             ]
 
+    def get_saved_profile(self, user_id: str) -> dict[str, Any]:
+        """Read professional account profile without hydrating CV assets/documents."""
+        with self._connect() as connection:
+            row = connection.execute("SELECT json_extract(payload_json, '$.metadata.profile') AS profile FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        return dict(_deserialize(row["profile"], {}) or {})
+
     def get_user(self, user_id: str) -> UserRecord:
         with self._connect() as connection:
             row = connection.execute("SELECT payload_json FROM users WHERE user_id = ?", (user_id,)).fetchone()

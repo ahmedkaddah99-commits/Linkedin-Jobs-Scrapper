@@ -146,3 +146,15 @@ def test_acquisition_queue_races_cannot_publish_or_acknowledge_old_facts(monkeyp
         assert store.list_profile_job_facts(['version-job-a']) == {}
         with store._connect() as connection:
             assert connection.execute("SELECT revision FROM profile_job_fact_queue WHERE version_id='version-job-a'").fetchone() is not None
+
+
+def test_matching_profile_read_does_not_hydrate_uploaded_documents(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        app = create_backend(Path(directory), storage_backend='sqlite', test_mode=True)
+        repository = app.repositories.auth_repository
+        repository.upsert_user(UserRecord(user_id='profile-only', email='profile@example.test', metadata={'profile': {'competencies': ['SQL']}}))
+        def forbidden(*args, **kwargs):
+            raise AssertionError('CV hydration is forbidden for matching')
+        monkeypatch.setattr(repository, 'get_user', forbidden)
+        snapshot = app._personalized_jobs_service._saved_matching_profile('profile-only')
+        assert snapshot['data']['competencies'] == ['SQL']

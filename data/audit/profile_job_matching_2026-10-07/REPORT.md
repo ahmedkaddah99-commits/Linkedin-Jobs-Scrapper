@@ -4,7 +4,7 @@ Runr now shows full-width job cards with a percentage, opens a dedicated overvie
 
 ## Source of truth
 
-Matching reads the authenticated account's saved `metadata.profile` through the account repository. A whitelist contains professional skills, competencies, role, work history, industries, projects, education and languages. Identity/contact data, uploaded CVs, tailored documents and search preferences do not enter the scoring snapshot. Settings normalization now preserves work descriptions, industries and dates. Each request reads the current profile; a saved profile edit affects the next response without a background user/job recomputation.
+Matching reads the authenticated account's saved `metadata.profile` through a dedicated account repository query that does not hydrate CV assets or documents. A whitelist contains professional skills, competencies, role, work history, industries, projects, education and languages. Identity/contact data, uploaded CVs, tailored documents and search preferences do not enter the scoring snapshot. Settings normalization now preserves work descriptions, industries and dates. Each request reads the current profile; a saved profile edit affects the next response without a background user/job recomputation.
 
 ## Exact calculation
 
