@@ -2,6 +2,14 @@
 
 # Customer web frontend (WS-8)
 
+## Profile preview removal (2026-10-08)
+
+The Profile page no longer offers Preview profile or calls `window.print()`.
+Preview placeholder wording is removed from its identity, headline hint and
+unsaved-change message. Save changes, profile editing and job matching continue
+to use their existing APIs. The removed action had no backend route or service;
+document `preview_profile` payloads belong to CV import/rendering and remain in use.
+
 ## Company autocomplete and saved-filter sidebar (2026-10-08)
 
 The Jobs search sits above the filter row. `CompanySearch.jsx` requests mapped

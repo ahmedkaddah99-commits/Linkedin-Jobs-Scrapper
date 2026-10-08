@@ -262,6 +262,7 @@ subsystems:
       - npm --prefix frontend run check
     key_invariants:
       - No restoring admin routes/pages (retired).
+      - The Profile page has no profile preview or print action.
       - Opening a posting retains the jobs feed and uses its embedded company profile without fetching employer jobs.
         - Authenticated landing opens Jobs; account setup stays compact beside desktop jobs and expands without navigating away.
       - frontend/.env.local values are never read or printed.

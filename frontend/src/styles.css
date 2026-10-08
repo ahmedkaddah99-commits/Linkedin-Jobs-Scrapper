@@ -1748,7 +1748,6 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .career-avatar { align-items: center; background: linear-gradient(135deg,#d9f6fa,#bdebf1); border: 3px solid #fff; border-radius: 50%; box-shadow: 0 3px 12px rgba(31,92,111,.12); color: #087f99; display: flex; font-size: 1.05rem; font-weight: 850; height: 3.8rem; justify-content: center; width: 3.8rem; }
 .career-identity h2 { font-size: 1rem; font-weight: 850; margin: 0; }
 .career-identity p { color: #627887; font-size: .7rem; margin: .3rem 0; }
-.career-identity span { color: #9aa8b1; font-size: .59rem; }
 .career-completion { align-items: center; border-left: 1px solid #dce7ec; display: grid; gap: .75rem; grid-template-columns: auto 1fr auto; padding-left: 1rem; }
 .career-completion > div { align-items: center; background: conic-gradient(#14a4b8 var(--completion),#e6edf0 0); border-radius: 50%; display: flex; height: 3.5rem; justify-content: center; position: relative; width: 3.5rem; }
 .career-completion > div::before { background: #fff; border-radius: 50%; content: ""; inset: .42rem; position: absolute; }
