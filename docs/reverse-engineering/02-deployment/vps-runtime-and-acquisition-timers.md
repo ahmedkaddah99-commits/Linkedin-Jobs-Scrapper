@@ -24,6 +24,13 @@ Install `/etc/runr/catalog-storage-release.env` (root:runr-acquisition, 0640) wi
 the installed code revision. Maintenance loads this file last so historical
 acquisition environment files cannot select an older migration or revision.
 Update this release file when changing the maintenance service's code directory.
+Systemd creates the service-owned `runr/observability/catalog-storage` state directory.
+Metrics use readable mode 0644 for the `alloy` account; receipt files remain private
+because the wrapper uses `mktemp`. Install the root-owned symlink
+`/var/lib/runr/observability/catalog-storage.prom` to
+`/var/lib/runr/observability/catalog-storage/catalog-storage.prom` so the existing
+Alloy textfile collector can read the dedicated directory without granting the
+service write access to the root-owned observability directory.
 
 **Current owner instruction (2026-09-26):** read [vps-acquisition-operating-policy.md](vps-acquisition-operating-policy.md) before touching live acquisition. Dedicated collectors and publisher must stay enabled for unattended validation. Historical UNKNOWN statements below describe the original documentary baseline, not the live evidence in that policy.
 

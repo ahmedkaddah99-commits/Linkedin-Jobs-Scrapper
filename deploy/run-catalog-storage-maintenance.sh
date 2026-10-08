@@ -16,7 +16,17 @@ if ! flock -n 9; then
 fi
 receipt="$receipt_root/catalog-storage-maintenance-latest.json"
 temporary="$(mktemp "$receipt_root/catalog-storage-maintenance-XXXXXXXX")"
-trap 'rm -f -- "$temporary"' EXIT
+history_temporary="$(mktemp "$receipt_root/catalog-history-pruning-XXXXXXXX")"
+trap 'rm -f -- "$temporary" "$history_temporary"' EXIT
+history_status=0
+"$python_bin" scripts/prune_catalog_history.py --apply \
+  --checkpoint "$state_root/catalog-history-pruning/checkpoint.json" \
+  --batch-size "${RUNR_CATALOG_HISTORY_BATCH_SIZE:-10000}" \
+  --max-seconds "${RUNR_CATALOG_HISTORY_MAX_SECONDS:-120}" > "$history_temporary" || history_status=$?
+mv -- "$history_temporary" "$receipt_root/catalog-history-pruning-latest.jsonl"
+if [ "$history_status" -ne 0 ]; then
+  echo "History pruning failed ($history_status); continuing other retention phases" >&2
+fi
 "$python_bin" scripts/maintain_catalog_storage.py --apply \
   --data-dir "${RUNR_DATA_DIR:-/var/lib/runr/acquisition-data}" \
   --batch-size "${RUNR_CATALOG_STORAGE_BATCH_SIZE:-1000}" \
@@ -25,3 +35,4 @@ trap 'rm -f -- "$temporary"' EXIT
   --max-batches "${RUNR_CATALOG_STORAGE_MAX_BATCHES:-1000}" > "$temporary"
 mv -- "$temporary" "$receipt"
 cat "$receipt"
+exit "$history_status"
