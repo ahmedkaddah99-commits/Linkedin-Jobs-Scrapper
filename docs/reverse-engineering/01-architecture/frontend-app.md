@@ -665,3 +665,7 @@ handle centers. Both handles still initialize at zero. Moving the minimum right
 from that initial state opens the maximum to 30 so both handles are visible;
 the user can then reduce the maximum independently. Numeric bounds continue
 through the existing saved-filter and feed-query contract.
+
+### Experience handle overlap (2026-10-09)
+
+The experience rail spans 0?10 years. Both handles start at zero. When they overlap below ten, the upper handle receives pointer input, so dragging right expands the interval while the lower bound stays put. At ten the lower handle receives input so dragging left can expand it. Moving a handle no longer jumps the other handle to the end. This supersedes the earlier 30-year rail behavior.

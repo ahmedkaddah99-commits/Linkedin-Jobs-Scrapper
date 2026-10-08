@@ -49,8 +49,15 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   expect(geometry.padding).toBe("0px");
   expect(geometry.border).toBe("0px");
   await page.screenshot({ path: `test-results/experience-alignment-${test.info().project.name}.png` });
+  await expect(slider).toHaveAttribute("max", "10");
+  const bounds = await slider.boundingBox();
+  await page.mouse.move(bounds!.x + 8, bounds!.y + bounds!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(slider).toHaveValue("0");
+  await expect(years.getByLabel("Maximum years", { exact: true })).toHaveValue("5");
   await years.getByLabel("Minimum years", { exact: true }).fill("2.5");
-  await expect(years.getByLabel("Maximum years", { exact: true })).toHaveValue("30");
   await years.getByLabel("Maximum years", { exact: true }).fill("4");
   const interval = await years.locator(".runr-range-track").evaluate((node) => ({
     start: node.style.getPropertyValue("--range-start"),
