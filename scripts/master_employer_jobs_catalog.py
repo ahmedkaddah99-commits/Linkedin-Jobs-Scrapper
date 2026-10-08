@@ -780,7 +780,10 @@ def _annotate_job(
         }
     )
     row["raw_content_hash"] = _content_hash(row)
-    return row
+    from backend.acquisition.quality import resolve_application_destination
+    from backend.acquisition.storage_payload import compact_job_payload
+    destination = resolve_application_destination(job, {"connector": provider or "career_site", "display_name": company.company_name})
+    return compact_job_payload(row, normalized={"application_destination": destination})
 
 
 def _candidate_rows(discovery: Any, limits: CollectorLimits) -> list[Any]:

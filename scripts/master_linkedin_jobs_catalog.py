@@ -2739,6 +2739,11 @@ class StateStore:
     ) -> str:
         attempt_id = attempt_id or uuid.uuid4().hex
         timestamp = attempted_at or _utc_now()
+        if status == "SUCCESS":
+            # The job and company observation already own the parsed detail.
+            # Retry scheduling consumes attempt status/count, never this copy.
+            detail = {key: value for key, value in (detail or {}).items()
+                      if key in {"body_hash", "content_hash", "status_code", "source_endpoint"}}
         with self._write_transaction():
             queue_row = self.connection.execute(
                 "SELECT attempt_count, max_attempts FROM detail_queue WHERE run_id=? AND linkedin_job_id=?",

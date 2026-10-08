@@ -56,6 +56,8 @@ subsystems:
       - No live acquisition network access or provider spending from a worker test.
 
   - id: acquisition
+    # 2026-10-08: compact durable job JSON and bounded storage cleanup CLI;
+    # tests/test_job_storage_payload.py verifies source and apply evidence.
     workstream: WS-3
     linear_project: WS-03 Acquisition and Collectors
     purpose: >

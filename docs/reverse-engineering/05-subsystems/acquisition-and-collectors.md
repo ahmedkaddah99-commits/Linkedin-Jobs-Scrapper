@@ -2,6 +2,27 @@
 
 # Acquisition and collectors (WS-3 primary)
 
+## Compact durable job payloads (2026-10-08)
+
+`backend/acquisition/storage_payload.py` compacts job JSON at staged ingestion,
+observation, and posting-version write boundaries after extraction. It removes
+the unused fingerprint object, exact duplicate provenance and source fields,
+and repeated contract mappings. Original source values that differ from the
+projection remain available. Application candidates are revalidated when
+reprocessing compact inputs, preserving link/form evidence without whole page
+HTML. Descriptions, source hashes, identities, publication and matching inputs
+remain intact. Missing duplicate provenance no longer creates repair versions.
+
+Employer annotation resolves destinations from the connector input before
+compaction. LinkedIn successful detail attempts keep diagnostic hashes rather
+than another full description; attempt counts/status still drive retries.
+`scripts/compact_job_storage.py --apply --checkpoint <path>` cleans historical
+catalog JSON in bounded server-side batches. Its checkpoint binds to the target
+database. `--linkedin-state <active-db>` cleans successful producer attempts,
+creating a SQLite backup first. Neither command vacuums the database or deletes
+job/history rows. Focused coverage lives in `tests/test_job_storage_payload.py`
+and the observation-store integration tests.
+
 ## Daily source coverage and closure evidence (2026-10-01 local revision)
 
 Completed LinkedIn company scans become due again after 24 hours. The rotating

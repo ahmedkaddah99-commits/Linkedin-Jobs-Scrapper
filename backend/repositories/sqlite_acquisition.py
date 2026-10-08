@@ -50,6 +50,7 @@ from backend.acquisition.publication import (
     StalePublicationHeadError,
     get_publication_policy,
 )
+from backend.acquisition.storage_payload import compact_job_payload
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_target_info
 from backend.domain.job_identity import canonicalize_url
@@ -1666,8 +1667,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                         payload_hash,
                         hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest(),
                         observed_at,
-                        _json(job),
-                        _json(raw_job),
+                        _json(compact_job_payload(job)),
+                        _json(compact_job_payload(raw_job, normalized=job)),
                         _json(list(job.get("quality_warnings") or [])),
                         _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}),
                         hashlib.sha256(
@@ -3085,7 +3086,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(job.get("apply_link") or original_url),
                         str(job.get("source_ats") or ""),
                         payload_hash,
-                        _json(job),
+                        _json(compact_job_payload(job)),
                         now,
                         str(job.get("source_display_name") or target.get("display_name") or ""),
                         str(job.get("source_token") or target.get("source_token") or ""),
@@ -3093,7 +3094,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(job.get("application_url") or ""),
                         str((job.get("application_destination") or {}).get("classification") if isinstance(job.get("application_destination"), Mapping) else "unknown"),
                         _json(list(job.get("quality_warnings") or [])),
-                        _json(raw_job),
+                        _json(compact_job_payload(raw_job, normalized=job)),
                         raw_content_hash,
                         str(job.get("unified_rule_version") or UNIFIED_RULE_VERSION),
                     ),
@@ -9146,7 +9147,6 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "source_timestamps",
                 "application_destination",
                 "unified_mapping",
-                "field_provenance",
                 "unified_rule_version",
             ):
                 new_value = payload.get(key)
@@ -9204,7 +9204,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 location,
                 apply_url,
                 source_observation_id,
-                _json(dict(payload)),
+                _json(compact_job_payload(payload)),
                 now,
             ),
         )

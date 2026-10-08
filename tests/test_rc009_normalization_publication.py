@@ -177,7 +177,7 @@ def test_foreign_label_and_invalid_apply_stay_traceable_and_easy_apply_is_reject
             ("foreign-label-1",),
         ).fetchone()
     raw = json.loads(row["raw_payload_json"])
-    assert raw["source_raw_payload"]["producer_record"]["source_company_name"] == "Foreign Holdings Ltd"
+    assert raw["source_company_name"] == "Foreign Holdings Ltd"
     assert "source_labeled_employer_name_normalized" in json.loads(row["quality_warnings_json"])
 
     policy_result = normalize_phase_b_jobs(

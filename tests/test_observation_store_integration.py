@@ -104,6 +104,18 @@ def test_adapter_transport_publishes_bounded_final_inventory_and_replays_safely(
         ).fetchone()["raw_payload_json"]
     assert observation_count == 26
     assert active_count == 26
+    compact_raw = json.loads(raw_payload)
+    contract = compact_raw["source_raw_payload"]["observation_contract"]
+    assert "source_record" not in contract
+    assert "normalized_mapping" not in contract
+    with store._connect() as connection:
+        payload = json.loads(connection.execute(
+            "SELECT payload_json FROM job_source_observations WHERE cycle_id=? LIMIT 1",
+            (cycle["cycle_id"],),
+        ).fetchone()["payload_json"])
+    assert "content_fingerprint" not in payload
+    assert "field_provenance" not in payload
+    assert payload["description_text"].startswith("Build platform service")
     assert (
         json.loads(raw_payload)["source_raw_payload"]["observation_contract"]["schema_version"]
         == "runr_source_observation_v1"

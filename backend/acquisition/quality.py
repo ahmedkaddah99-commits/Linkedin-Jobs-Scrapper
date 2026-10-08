@@ -362,6 +362,24 @@ def resolve_application_destination(job: Mapping[str, Any], target: Mapping[str,
     candidates: list[UrlCandidate] = []
     seen: set[tuple[str, str]] = set()
 
+    # Persist extracted links instead of whole page HTML. Revalidate them under
+    # the current target while retaining form/link provenance for reprocessing.
+    retained = job.get("application_destination")
+    retained_candidates = retained.get("candidate_urls") if isinstance(retained, Mapping) else None
+    for item in retained_candidates if isinstance(retained_candidates, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        url = canonicalize_url(_text(item.get("url")))
+        if not url:
+            continue
+        classification = classify_job_url(url, target=target, source_ats=source_ats)
+        key = (url, _text(item.get("source_field")))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({**item, "url": url, "classification": classification,
+                           "verified": classification in DIRECT_APPLICATION_CLASSIFICATIONS})
+
     html_values: list[Any] = [
         job.get("source_page_html"), job.get("page_html"), job.get("source_html"), job.get("raw_html"),
     ]
