@@ -2,6 +2,27 @@
 
 # Customer web frontend (WS-8)
 
+## Reference filter interactions (2026-10-08)
+
+`QuickJobFilter.jsx` gives Location, Job Function, Job Type, Experience Level,
+Work Model, Date Posted, Industry and Years of Experience their own Confirm
+menus. These menus and the four-section `AllJobFilters.jsx` drawer share field
+controls and one criteria state. Function search retains the shared category,
+subheading and function taxonomy; multiple levels and workplaces no longer get
+flattened by native single-select controls. Country choices use the backend's
+country-name/ISO map, and multiple cities survive saved-search reloads.
+
+Experience and annual salary have numeric and slider controls plus Open to all
+actions. Selecting Open to all clears the corresponding numeric bounds, including
+jobs with unknown values. Salary currency is optional and retained in saved
+filters. Every selected criterion appears in removable summary chips; fields and
+the complete draft have Clear actions. Confirm blocks reversed experience ranges.
+The drawer traps keyboard focus, closes on Escape, and restores opening focus.
+
+Validation: frontend unit tests, lint/build, and desktop/mobile reference-filter
+and company-search Playwright tests. These are local checks; frontend and API
+deployment plus authenticated live filter verification remain required.
+
 ## Profile completion and feature cards (2026-10-08)
 
 The Jobs setup rail now keeps LinkedIn referrals (blue) and Runr Apply (violet)

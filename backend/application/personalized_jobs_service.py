@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import time
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
@@ -256,15 +257,21 @@ def normalize_filters(payload: Mapping[str, Any] | None) -> dict[str, Any]:
             normalized[key] = _unique_strings(raw_value)
         elif key in {"salary_min", "salary_max", "funding_min", "funding_max", "founded_year_min", "founded_year_max", "funding_year_min", "funding_year_max", "posted_within_days", "required_experience_min", "required_experience_max"}:
             try:
-                normalized[key] = float(raw_value) if key in {"salary_min", "salary_max", "funding_min", "funding_max"} else int(raw_value)
+                number = float(raw_value)
             except (TypeError, ValueError):
-                continue
+                raise ValueError(f"{key} must be a finite nonnegative number") from None
+            if not math.isfinite(number) or number < 0:
+                raise ValueError(f"{key} must be a finite nonnegative number")
+            normalized[key] = number if key in {"salary_min", "salary_max", "funding_min", "funding_max", "required_experience_min", "required_experience_max"} else int(number)
         elif key in {"use_saved_search", "include_hidden", "h1b_sponsorship", "exclude_security_clearance", "exclude_citizenship_required", "exclude_staffing_agency"}:
             normalized[key] = str(raw_value).casefold() in {"1", "true", "yes", "on"} if not isinstance(raw_value, bool) else raw_value
         elif key == "sort":
             normalized[key] = _text(raw_value).casefold() or "newest"
         else:
             normalized[key] = raw_value
+    for lower, upper in (("required_experience_min", "required_experience_max"), ("salary_min", "salary_max")):
+        if lower in normalized and upper in normalized and normalized[lower] > normalized[upper]:
+            raise ValueError(f"{lower} must not exceed {upper}")
     return normalized
 
 

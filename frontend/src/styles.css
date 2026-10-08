@@ -1663,6 +1663,16 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .runr-all-filters > header h2 { color: #172d36; flex: 1; font-size: 1.1rem; font-weight: 800; margin: 0; }
 .runr-all-filters > header > button:first-child { background: #f6f8f8; border: 0; border-radius: .5rem; font-size: 1.5rem; height: 2rem; line-height: 1; width: 2rem; }
 .runr-filter-confirm { background: #06dba3; border: 0; border-radius: 999px; color: #071c1a; cursor: pointer; font-weight: 800; padding: .55rem 1.1rem; }
+.runr-filter-confirm:disabled { cursor: default; opacity: .5; }
+.runr-filter-clear { background: transparent; border: 0; color: #53676d; cursor: pointer; float: right; font-size: .7rem; }
+.runr-filter-layout nav small { color: #6b7e82; display: block; font-size: .65rem; font-weight: 400; margin-top: .3rem; }
+.runr-filter-help { background: #e6fbf3; border-radius: .6rem; color: #29473c; font-size: .75rem; line-height: 1.6; margin-top: 1.5rem; padding: .8rem; }
+.runr-filter-card input[type=range] { accent-color: #06b88a; border: 0; padding: 0; }
+.jobs-quick-filter { position: relative; }
+.jobs-quick-filter__menu { background: white; border: 1px solid #e6ebeb; border-radius: .8rem; box-shadow: 0 8px 24px #172d3626; left: 0; max-height: 65vh; overflow: auto; padding: .75rem; position: absolute; top: calc(100% + .4rem); width: 320px; z-index: 30; }
+.jobs-quick-filter__menu > .runr-filter-confirm { display: block; margin: .6rem 0 0 auto; }
+.jobs-quick-filter__menu--functions { width: min(600px, 85vw); }
+@media (max-width: 700px) { .jobs-quick-filter__menu { left: 1rem; position: fixed; right: 1rem; top: 25vh; width: auto; } .runr-filter-help { display: none; } .runr-filter-layout { grid-template-rows: auto minmax(0, 1fr); } .runr-filter-layout nav { align-items: center; } .runr-filter-layout nav button { white-space: nowrap; } }
 .runr-filter-summary { border-bottom: 1px solid #e9eef0; display: flex; flex-wrap: wrap; gap: .35rem; min-height: 3.5rem; padding: .8rem 1.2rem; }
 .runr-filter-summary button { background: #f3f6f6; border: 0; border-radius: .35rem; color: #24383d; cursor: pointer; font-size: .72rem; padding: .3rem .5rem; }
 .runr-filter-layout { display: grid; flex: 1; grid-template-columns: 238px minmax(0,1fr); min-height: 0; }

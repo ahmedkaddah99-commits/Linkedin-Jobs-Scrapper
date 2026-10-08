@@ -299,6 +299,34 @@ From `git log --oneline 58a96674 -- <WS-4 application files, sqlite_personalized
 **(c) Gap/ticket candidates**: WS4-G1 (ScrapeOps policy naming and writer), WS4-G2 (dead rollout service), WS4-G3 (worker→API import inversion), WS4-G4 (stale specs), WS4-G5 (quota/customer-task tests), WS4-G6 (env_schema coverage). No new Linear tickets created.
 # Job filter contract (2026-10-03)
 
+### Reference filter contract correction (2026-10-08)
+
+Frontend choices and SQL enum allowlists share `backend/domain/job_filter_choices.json`.
+Work model, job type, experience level and role type compare complete normalized
+scalar/array members, preserving source precedence and avoiding substring matches.
+Country names and ISO codes share `job_filter_countries.json`; country predicates
+compare codes exactly and only use full country names in free-text locations.
+Multiple locations remain alternatives within their field and combine with country
+and other fields before pagination. Unknown geography is not inferred from city names.
+Company stage now reads the company profile as well as the posting.
+
+Experience bounds preserve decimals. Numeric filters reject malformed, negative
+or nonfinite values and reversed salary/experience bounds. Annual salary predicates
+accept yearly amounts and monthly amounts multiplied by twelve; hourly and other
+unsupported periods remain unmatched. Legacy salaries without a period retain the
+existing annual interpretation. A single known salary endpoint is usable.
+Optional `salary_currency` is recognized by the HTTP route, saved filters and SQL;
+no currency conversion occurs. Without a currency selection, amount comparisons
+retain their existing cross-currency behavior. Unknown amounts/experience match
+only when the respective numeric bounds are cleared. Source cache schema stays
+unchanged; the new period/currency paths read source payloads when required.
+
+Evidence: `tests/test_job_filter_reference_contract.py`, existing source-cache and
+feed-performance tests, and `frontend/e2e/jobs-reference-filters.spec.ts`.
+No migration or catalog reclassification is required. Local implementation is
+not yet deployed; verify authenticated feed queries, totals, pagination and saved
+filter reloads after deploying both frontend and API.
+
 ## Jobs feed read performance (2026-10-06)
 
 The newest feed fetches page IDs and page hydration through bounded Turso Hrana

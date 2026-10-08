@@ -237,7 +237,7 @@ def _filters_from_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
     recognized = {
         "q", "search", "search_text", "role", "roles", "category", "categories", "location",
         "work_arrangement", "employment_type", "experience", "experience_level", "seniority",
-        "salary_min", "salary_max", "language", "languages", "work_authorization", "sponsorship",
+        "salary_min", "salary_max", "salary_currency", "language", "languages", "work_authorization", "sponsorship",
         "posted_within_days", "company", "company_id", "industry", "company_size", "company_stage", "funding_stage",
         "funding_min", "funding_max", "founded_year_min", "founded_year_max",
         "funding_year_min", "funding_year_max", "hidden_companies", "excluded_companies",
