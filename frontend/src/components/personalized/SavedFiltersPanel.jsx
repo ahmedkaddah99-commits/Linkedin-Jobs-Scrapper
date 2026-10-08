@@ -5,11 +5,11 @@ function summary(filters = {}) {
   return values.flat().filter(Boolean).join(" · ") || "All selected criteria";
 }
 
-export default function SavedFiltersPanel({ items, activeId, modified, busy, error, onSave, onActivate, onEdit, onDelete }) {
+export default function SavedFiltersPanel({ items, activeId, modified, busy, error, onAdd, onSave, onActivate, onEdit, onDelete }) {
   const [editing, setEditing] = useState(null);
   const [name, setName] = useState("");
   return <aside aria-label="Saved filters" className="jobs-saved-panel">
-    <header><h2>Your saved filters</h2><button aria-label="Add saved filter" disabled={busy} onClick={() => { setEditing({}); setName(""); }} type="button"><span aria-hidden="true" className="material-symbols-outlined">add</span></button></header>
+    <header><h2>Your saved filters</h2><button aria-label="Add saved filter" disabled={busy} onClick={onAdd} type="button"><span aria-hidden="true" className="material-symbols-outlined">add</span></button></header>
     <p>Save a search. Pick it up where you left off.</p>
     {error ? <p className="jobs-saved-panel__error" role="alert">{error}</p> : null}
     <div className="jobs-saved-panel__list">{items.map((item) => <div className={`jobs-saved-filter ${item.filter_set_id === activeId ? "is-active" : ""}`} key={item.filter_set_id}>

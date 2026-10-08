@@ -16,10 +16,11 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await expect.poll(() => feeds.length).toBeGreaterThan(0);
   await page.getByRole("button", { name: /Location/ }).click();
   const location = page.getByRole("group", { name: "Location", exact: true });
-  await location.getByRole("combobox").selectOption("Egypt");
-  await location.getByRole("textbox", { name: "Cities or areas" }).fill("cai");
-  await expect(location.getByRole("button", { name: "Cairo", exact: true })).toBeVisible();
-  await location.getByRole("button", { name: "Cairo", exact: true }).click();
+  await location.getByRole("combobox", { name: "Country", exact: true }).selectOption("Egypt");
+  await location.getByRole("combobox", { name: "Cities or areas" }).fill("cai");
+  await expect(location.getByRole("option", { name: "Cairo", exact: true })).toBeVisible();
+  await location.getByRole("combobox", { name: "Cities or areas" }).press("ArrowDown");
+  await location.getByRole("combobox", { name: "Cities or areas" }).press("Enter");
   await location.getByRole("button", { name: "Confirm" }).click();
   await expect.poll(() => feeds.at(-1)?.getAll("location")).toEqual(["Cairo"]);
   await page.getByRole("button", { name: /Job Function/ }).first().click();
@@ -35,6 +36,7 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await expect.poll(() => feeds.at(-1)?.getAll("work_arrangement")).toEqual(["remote", "hybrid"]);
   await page.getByRole("button", { name: /Years of Experience/ }).click();
   const years = page.getByRole("group", { name: "Years of Experience" });
+  await years.getByRole("switch").uncheck();
   await years.getByLabel("Minimum years", { exact: true }).fill("2.5");
   await years.getByLabel("Maximum years", { exact: true }).fill("4");
   await years.getByRole("button", { name: "Confirm" }).click();
@@ -44,9 +46,7 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await expect(drawer.getByLabel("Remote", { exact: true })).toBeChecked();
   await expect(drawer.getByLabel("Hybrid", { exact: true })).toBeChecked();
   await expect(drawer.getByLabel("Minimum years", { exact: true })).toHaveValue("2.5");
-  await drawer.getByLabel("Maximum years", { exact: true }).fill("1");
-  await expect(drawer.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
-  await drawer.getByLabel("Open to all experience requirements").check();
+  await drawer.getByRole("switch", { name: "Open to all experience requirements" }).check();
   await drawer.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => feeds.at(-1)?.has("required_experience_min")).toBe(false);
   await page.getByRole("button", { name: /All Filters/ }).click();
@@ -54,4 +54,31 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await page.keyboard.press("Escape");
   await expect(drawer).toHaveCount(0);
   await expect(page.getByRole("button", { name: /All Filters/ })).toBeFocused();
+});
+
+
+test("saved-filter plus opens the drawer and saves its draft", async ({ page }) => {
+  let saved: any = null;
+  await page.route("**/v1/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/saved-search")) return route.fulfill({ json: {} });
+    if (url.pathname.endsWith("/filter-sets")) {
+      if (route.request().method() === "POST") { saved = route.request().postDataJSON(); return route.fulfill({ json: { ...saved, filter_set_id: "new" } }); }
+      return route.fulfill({ json: { filter_sets: [] } });
+    }
+    return route.fulfill({ json: { jobs: [], total: 0 } });
+  });
+  await page.goto("/jobs");
+  const rail = page.getByRole("button", { name: "Saved filters", exact: true });
+  await expect(rail).toBeVisible();
+  if (await rail.getAttribute("aria-expanded") !== "true") await rail.click();
+  await page.getByRole("button", { name: "Add saved filter" }).click();
+  const drawer = page.getByRole("dialog", { name: "All Filters" });
+  await expect(drawer.getByRole("switch", { name: "Confirm and save" })).toBeChecked();
+  await drawer.getByRole("textbox", { name: "Filter name" }).fill("New remote search");
+  await drawer.getByLabel("Remote", { exact: true }).check();
+  await drawer.getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  expect(saved.name).toBe("New remote search");
+  expect(saved.filters.work_arrangement).toEqual(["remote"]);
 });

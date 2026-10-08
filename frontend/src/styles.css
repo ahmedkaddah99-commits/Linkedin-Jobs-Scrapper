@@ -3221,3 +3221,21 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .runr-filter-suggestions { flex-direction: column; max-height: 12rem; overflow: auto; }
 .runr-filter-suggestions button { background: transparent; color: var(--jobs-ink); padding: .5rem; text-align: left; }
 .runr-filter-suggestions button:hover { background: #e3f8fd; }
+
+.runr-toggle { display: inline-flex; align-items: center; gap: .65rem; font-size: .75rem; position: relative; margin: .4rem 0; }
+.runr-toggle input { position: absolute; opacity: 0; width: 1px; }
+.runr-toggle-track { width: 2.2rem; height: 1.2rem; background: #a8b7c3; border-radius: 1rem; position: relative; flex-shrink: 0; }
+.runr-toggle-track::after { content: ""; position: absolute; width: .9rem; height: .9rem; top: .15rem; left: .15rem; border-radius: 50%; background: white; transition: transform .15s; }
+.runr-toggle input:checked + .runr-toggle-track { background: var(--jobs-cyan); }
+.runr-toggle input:checked + .runr-toggle-track::after { transform: translateX(1rem); }
+.runr-toggle input:focus-visible + .runr-toggle-track { outline: 2px solid var(--jobs-cyan-dark); outline-offset: 3px; }
+.runr-save-name { padding: .7rem 1.2rem; font-size: .75rem; }
+.runr-save-name input { border: 1px solid #dce6ef; border-radius: .45rem; margin-left: .7rem; padding: .45rem; }
+.runr-experience-range { border: 0; padding: .5rem 0; margin: 0; min-width: 0; }
+.runr-experience-range:disabled { opacity: .35; }
+.runr-range-track { position: relative; height: 2rem; margin: .4rem .5rem; background: linear-gradient(#12a4c6,#12a4c6) center / 100% 4px no-repeat; }
+.runr-filter-card .runr-range-track input[type=range] { position: absolute; inset: 0; width: 100%; background: transparent; pointer-events: none; appearance: none; }
+.runr-range-track input::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; background: var(--jobs-cyan); border: 2px solid white; border-radius: 50%; pointer-events: auto; cursor: pointer; }
+.runr-range-track input:disabled::-webkit-slider-thumb { pointer-events: none; cursor: default; }
+.runr-range-labels { display: flex; justify-content: space-between; font-size: .7rem; }
+.runr-filter-suggestions [aria-selected=true] { background: #e3f8fd; }

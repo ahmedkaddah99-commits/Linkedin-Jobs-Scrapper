@@ -636,3 +636,16 @@ the existing Runr cyan button theme. Checkbox/radio choices appear one per row,
 without shaded option blocks, with fixed equal-size controls. Cities suggest
 prefix/text matches from the selected country's lazily loaded city dataset;
 changing country clears prior cities and stale asynchronous suggestions.
+
+## Valid suggestions and drawer saving (owner instruction, 2026-10-08)
+
+Suggestion fields accept canonical options, not raw fragments. Arrow keys move
+through matches; Enter/Add accepts the highlighted option or first valid match.
+Cities use the selected country, industries/skills/functions use supported
+choices, and companies use authenticated employer autocomplete. Excluded-title
+keywords remain intentionally free text. No matching option means no addition.
+Experience uses an Open to all switch and a single two-handle range track;
+Open to all clears bounds, disables and fades the track. All Filters provides a
+Confirm and save switch and filter-name input. The saved-filter plus opens that
+same drawer with saving enabled. Saving submits the drawer draft through the
+existing account-owned API, reports failures, and closes only after success.

@@ -319,6 +319,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [feedError, setFeedError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [saveFilterOnOpen, setSaveFilterOnOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterSection, setFilterSection] = useState("Basic Job Criteria");
   const [savedFilterSets, setSavedFilterSets] = useState([]);
@@ -661,11 +662,11 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }
   }
 
-  async function saveSearch(name, filterSetId) {
+  async function saveSearch(name, filterSetId, criteria = filters) {
     setFilterSetsBusy(true);
     setFilterSetsError("");
     try {
-      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filter_set_id: filterSetId, filters: toPersonalizedJobsFilterPayload(filters) } });
+      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filter_set_id: filterSetId, filters: toPersonalizedJobsFilterPayload(criteria) } });
       setSavedFilterSets((current) => [saved, ...current.filter((item) => item.filter_set_id !== saved.filter_set_id)]);
       setActiveFilterSetId(saved.filter_set_id);
       setFeedback(`Saved ${name}.`);
@@ -817,7 +818,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className="jobs-content-layout">
     <AccountSetupPanel>
-      {!routeJobId && showFilterSets ? <SavedFiltersPanel activeId={activeFilterSetId} busy={filterSetsBusy || !filtersReady} error={filterSetsError} items={savedFilterSets} modified={Boolean(activeFilterSetId && JSON.stringify(toPersonalizedJobsFilterPayload(filters)) !== JSON.stringify(toPersonalizedJobsFilterPayload(filtersFromSavedSearch(savedFilterSets.find((item) => item.filter_set_id === activeFilterSetId)))))} onActivate={activateFilterSet} onDelete={deleteFilterSet} onEdit={(item) => {
+      {!routeJobId && showFilterSets ? <SavedFiltersPanel onAdd={() => { setSaveFilterOnOpen(true); setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} activeId={activeFilterSetId} busy={filterSetsBusy || !filtersReady} error={filterSetsError} items={savedFilterSets} modified={Boolean(activeFilterSetId && JSON.stringify(toPersonalizedJobsFilterPayload(filters)) !== JSON.stringify(toPersonalizedJobsFilterPayload(filtersFromSavedSearch(savedFilterSets.find((item) => item.filter_set_id === activeFilterSetId)))))} onActivate={activateFilterSet} onDelete={deleteFilterSet} onEdit={(item) => {
         filtersTouchedRef.current = true;
         setFilters(filtersFromSavedSearch(item));
       }} onSave={saveSearch} /> : null}
@@ -828,7 +829,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
     </div>
     </div>
-    {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}
+    {filtersOpen ? <AllJobFilters request={request} filters={filters} initialSection={filterSection} initialSave={saveFilterOnOpen} onApply={async (next, name) => { if (name && !await saveSearch(name, undefined, next)) return false; filtersTouchedRef.current = true; setFilters(next); setFiltersOpen(false); setSaveFilterOnOpen(false); return true; }} onClose={() => { setFiltersOpen(false); setSaveFilterOnOpen(false); }} /> : null}
     {reportOpen ? <ReportDialog onClose={() => setReportOpen(false)} onSubmit={reportJob} /> : null}
   </div>;
 }
