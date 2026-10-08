@@ -72,9 +72,13 @@ def restore_catalog_evidence(reference: Mapping[str, Any], storage: ObjectStorag
         raise CatalogEvidenceCorruptError("Catalog evidence is not valid compressed JSON") from None
 
 
-def archive_catalog_evidence(payload: Mapping[str, Any], raw_payload: Mapping[str, Any] | None = None, storage: ObjectStorage | None = None) -> dict[str, Any]:
-    if storage is None and os.getenv('TURSO_DATABASE_URL') and os.getenv('OBJECT_STORAGE_BACKEND', 'local') == 'local':
+def create_catalog_evidence_storage() -> ObjectStorage:
+    if os.getenv('DATABASE_BACKEND', 'sqlite').lower() == 'turso' and os.getenv('OBJECT_STORAGE_BACKEND', 'local').lower() == 'local':
         raise CatalogEvidenceError('Remote catalog evidence requires shared object storage')
+    return create_object_storage()
+
+
+def archive_catalog_evidence(payload: Mapping[str, Any], raw_payload: Mapping[str, Any] | None = None, storage: ObjectStorage | None = None) -> dict[str, Any]:
     if raw_payload is None:
         source = payload.get("source_raw_payload")
         raw_payload = source if isinstance(source, Mapping) else _semantic_payload(payload)
@@ -92,7 +96,7 @@ def archive_catalog_evidence(payload: Mapping[str, Any], raw_payload: Mapping[st
         "storage_evidence_encoding": "gzip",
         "storage_evidence_schema_version": 1,
     }
-    store = storage if storage is not None else create_object_storage()
+    store = storage if storage is not None else create_catalog_evidence_storage()
     key = reference["storage_evidence_key"]
     # Concurrent rows can share a digest. Serialize their existence/write/read
     # sequence without an unbounded cache of object keys.

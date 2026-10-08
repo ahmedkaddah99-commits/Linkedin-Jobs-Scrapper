@@ -69,10 +69,20 @@ def test_collection_metadata_does_not_duplicate_source_evidence(tmp_path):
 def test_remote_catalog_refuses_writer_local_evidence(monkeypatch, tmp_path):
     from backend.acquisition.storage_evidence import archive_catalog_evidence, CatalogEvidenceError
     monkeypatch.setenv('TURSO_DATABASE_URL', 'libsql://test.invalid')
+    monkeypatch.setenv('DATABASE_BACKEND', 'turso')
     monkeypatch.setenv('OBJECT_STORAGE_BACKEND', 'local')
     monkeypatch.setenv('OBJECT_STORAGE_LOCAL_ROOT', str(tmp_path / 'objects'))
     with pytest.raises(CatalogEvidenceError, match='shared object storage'):
         archive_catalog_evidence({'title': 'Engineer'})
+
+
+def test_local_database_can_keep_unused_remote_url(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATABASE_BACKEND', 'sqlite')
+    monkeypatch.setenv('TURSO_DATABASE_URL', 'libsql://test.invalid')
+    monkeypatch.setenv('OBJECT_STORAGE_BACKEND', 'local')
+    monkeypatch.setenv('OBJECT_STORAGE_LOCAL_ROOT', str(tmp_path / 'objects'))
+    reference = archive_catalog_evidence({'title': 'Engineer'})
+    assert restore_catalog_evidence(reference)['payload']['title'] == 'Engineer'
 
 
 

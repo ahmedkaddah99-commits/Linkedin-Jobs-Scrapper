@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dotenv import dotenv_values
-from backend.acquisition.storage_evidence import archive_catalog_evidence, restore_catalog_evidence
+from backend.acquisition.storage_evidence import archive_catalog_evidence, restore_catalog_evidence, create_catalog_evidence_storage
 from backend.acquisition.storage_payload import compact_catalog_payload
 from scripts.compact_job_storage import HttpMaintenanceConnection
 
@@ -155,6 +155,8 @@ def reduce_catalog_storage(connection, *, database_identity, checkpoint, apply=F
     if state.get('database_identity', identity) != identity:
         raise ValueError('Checkpoint belongs to another database')
     state['database_identity'] = identity
+    if apply and storage is None:
+        storage = create_catalog_evidence_storage()
     deadline = time.monotonic() + max_seconds
     totals = {'scanned': 0, 'updated': 0, 'saved_bytes': 0, 'applied': apply, 'tables': {}}
     tables = dict(TABLES)

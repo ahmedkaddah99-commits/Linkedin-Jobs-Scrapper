@@ -105,14 +105,14 @@ def test_bulk_archives_use_bounded_parallel_work(tmp_path, monkeypatch):
     barrier, lock = Barrier(4), Lock()
     original = module._catalog_storage_payloads
     active = peak = 0
-    def tracked(*args):
+    def tracked(*args, **kwargs):
         nonlocal active, peak
         with lock:
             active += 1
             peak = max(peak, active)
         try:
             barrier.wait(timeout=10)
-            return original(*args)
+            return original(*args, **kwargs)
         finally:
             with lock:
                 active -= 1

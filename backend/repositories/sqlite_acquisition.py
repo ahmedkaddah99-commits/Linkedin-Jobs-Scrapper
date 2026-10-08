@@ -52,7 +52,7 @@ from backend.acquisition.publication import (
     get_publication_policy,
 )
 from backend.acquisition.storage_payload import compact_job_payload, compact_catalog_payload, hydrate_description_aliases
-from backend.acquisition.storage_evidence import archive_catalog_evidence, _semantic_payload
+from backend.acquisition.storage_evidence import archive_catalog_evidence, create_catalog_evidence_storage, _semantic_payload
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_target_info
 from backend.domain.job_identity import canonicalize_url
@@ -71,9 +71,9 @@ PUBLICATION_DROP_GUARD_MINIMUM = 100
 PUBLICATION_DROP_GUARD_RETENTION_RATIO = 0.20
 
 
-def _catalog_storage_payloads(job: Mapping[str, Any], raw_job: Mapping[str, Any] | None = None):
+def _catalog_storage_payloads(job: Mapping[str, Any], raw_job: Mapping[str, Any] | None = None, *, storage=None):
     """Archive first, then project; failure cannot discard the only source copy."""
-    reference = archive_catalog_evidence(job, raw_job)
+    reference = archive_catalog_evidence(job, raw_job, storage=storage)
     payload = compact_catalog_payload(job, storage_evidence_key=reference['storage_evidence_key'])
     payload.update(reference)
     payload['catalog_storage_version'] = 1
@@ -1733,8 +1733,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         # Bound archive concurrency and pending work. Verify every source copy
         # before issuing the first staging write.
         with ThreadPoolExecutor(max_workers=4) as executor:
+            evidence_storage = create_catalog_evidence_storage() if archive_inputs else None
             for start in range(0, len(archive_inputs), 64):
-                results = executor.map(lambda pair: _catalog_storage_payloads(*pair), archive_inputs[start:start + 64])
+                results = executor.map(lambda pair: _catalog_storage_payloads(*pair, storage=evidence_storage), archive_inputs[start:start + 64])
                 for index, (durable_payload, raw_reference) in enumerate(results, start):
                     row = staged[index]
                     staged[index] = row[:22] + (_json(durable_payload), _json(raw_reference)) + row[24:]
