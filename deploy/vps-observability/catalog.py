@@ -30,8 +30,8 @@ def check_catalog(env_path):
         tasks = connection.execute('SELECT status,COUNT(*) AS count FROM acquisition_tasks WHERE cycle_id=? GROUP BY status', (cycle['cycle_id'] if cycle else '',)).fetchall()
         queue={}
         if connection.execute("SELECT name FROM sqlite_master WHERE name='acquisition_publication_queue'").fetchone():
-            queue={row['status']:int(row['jobs']) for row in connection.fetch_read_rows('SELECT status,COUNT(*) AS jobs FROM acquisition_publication_queue GROUP BY status')}
-            queue['last_evaluated_at']=connection.fetch_read_rows('SELECT MAX(evaluated_at) AS at FROM acquisition_publication_queue')[0]['at'] or ''
+            queue={row['status']:int(row['jobs']) for row in connection.execute('SELECT status,COUNT(*) AS jobs FROM acquisition_publication_queue GROUP BY status').fetchall()}
+            queue['last_evaluated_at']=connection.execute('SELECT MAX(evaluated_at) AS at FROM acquisition_publication_queue').fetchone()['at'] or ''
         return {"checked_at": checked_at, "access_ok": True, "binding": "vps_configured_turso",
                 "head": dict(head) if head else {}, "head_jobs": int(count['jobs']),
                 "checkpoints": [dict(row) for row in checkpoints],
