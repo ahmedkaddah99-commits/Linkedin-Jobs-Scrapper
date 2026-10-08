@@ -50,6 +50,8 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   expect(geometry.border).toBe("0px");
   await page.screenshot({ path: `test-results/experience-alignment-${test.info().project.name}.png` });
   await expect(slider).toHaveAttribute("max", "10");
+  await expect(slider).toHaveAttribute("step", "1");
+  await expect(years.getByLabel("Maximum years", { exact: true })).toHaveAttribute("step", "1");
   const bounds = await slider.boundingBox();
   await page.mouse.move(bounds!.x + 8, bounds!.y + bounds!.height / 2);
   await page.mouse.down();
@@ -57,7 +59,7 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await page.mouse.up();
   await expect(slider).toHaveValue("0");
   await expect(years.getByLabel("Maximum years", { exact: true })).toHaveValue("5");
-  await years.getByLabel("Minimum years", { exact: true }).fill("2.5");
+  await years.getByLabel("Minimum years", { exact: true }).fill("2");
   await years.getByLabel("Maximum years", { exact: true }).fill("4");
   const interval = await years.locator(".runr-range-track").evaluate((node) => ({
     start: node.style.getPropertyValue("--range-start"),
@@ -69,12 +71,12 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   expect(interval.paint).toContain("198, 209, 220");
   await page.screenshot({ path: `test-results/experience-interval-${test.info().project.name}.png` });
   await years.getByRole("button", { name: "Confirm" }).click();
-  await expect.poll(() => feeds.at(-1)?.get("required_experience_min")).toBe("2.5");
+  await expect.poll(() => feeds.at(-1)?.get("required_experience_min")).toBe("2");
   await page.getByRole("button", { name: /All Filters/ }).click();
   const drawer = page.getByRole("dialog", { name: "All Filters" });
   await expect(drawer.getByLabel("Remote", { exact: true })).toBeChecked();
   await expect(drawer.getByLabel("Hybrid", { exact: true })).toBeChecked();
-  await expect(drawer.getByLabel("Minimum years", { exact: true })).toHaveValue("2.5");
+  await expect(drawer.getByLabel("Minimum years", { exact: true })).toHaveValue("2");
   await drawer.getByRole("switch", { name: "Open to all experience requirements" }).check();
   await drawer.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => feeds.at(-1)?.has("required_experience_min")).toBe(false);

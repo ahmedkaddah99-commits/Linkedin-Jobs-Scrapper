@@ -669,3 +669,5 @@ through the existing saved-filter and feed-query contract.
 ### Experience handle overlap (2026-10-09)
 
 The experience rail spans 0?10 years. Both handles start at zero. When they overlap below ten, the upper handle receives pointer input, so dragging right expands the interval while the lower bound stays put. At ten the lower handle receives input so dragging left can expand it. Moving a handle no longer jumps the other handle to the end. This supersedes the earlier 30-year rail behavior.
+
+The experience slider uses whole-year increments only (step 1); fractional saved values are rounded for display.
