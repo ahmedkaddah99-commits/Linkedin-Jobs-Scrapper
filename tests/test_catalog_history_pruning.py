@@ -15,13 +15,27 @@ def test_single_statement_history_deletion_preserves_all_publication_pins(catalo
 
 def test_head_change_between_batches_protects_new_head_and_rollback(catalog):
     with sqlite3.connect(catalog) as db:
-        prune_batch(db, 'publications', batch_size=2, cutoff='unused')
         db.execute("UPDATE acquisition_publication_head SET publication_id='p0'")
         db.execute("UPDATE acquisition_publications SET previous_publication_id='p3' WHERE publication_id='p0'")
+        original_count = db.execute("SELECT count(*) FROM acquisition_publication_jobs WHERE publication_id='p0'").fetchone()[0]
+        prune_batch(db, 'publications', batch_size=2, cutoff='unused')
+        db.execute("UPDATE acquisition_publication_head SET publication_id='p3'")
+        db.execute("UPDATE acquisition_publications SET previous_publication_id='p0' WHERE publication_id='p3'")
         for _ in range(30):
             prune_batch(db, 'publications', batch_size=2, cutoff='unused')
-        assert db.execute("SELECT count(*) FROM acquisition_publication_jobs WHERE publication_id='p0'").fetchone()[0] == 3
+        assert db.execute("SELECT count(*) FROM acquisition_publication_jobs WHERE publication_id='p0'").fetchone()[0] == original_count
     assert {'p0','p3'} <= ids(catalog)
+
+
+def test_large_snapshot_removed_before_membership_backlog_and_orphans_are_resumable(catalog):
+    with sqlite3.connect(catalog) as db:
+        first = prune_batch(db,'publications',batch_size=1,cutoff='unused')
+        assert first['deleted_publications'] == 1
+        assert first['deleted_memberships'] == 0
+        assert db.execute('SELECT count(*) FROM acquisition_publication_jobs j WHERE NOT EXISTS(SELECT 1 FROM acquisition_publications p WHERE p.publication_id=j.publication_id)').fetchone()[0] > 0
+        for _ in range(50):
+            prune_batch(db,'publications',batch_size=1,cutoff='unused')
+        assert db.execute('SELECT count(*) FROM acquisition_publication_jobs j WHERE NOT EXISTS(SELECT 1 FROM acquisition_publications p WHERE p.publication_id=j.publication_id)').fetchone()[0] == 0
 
 
 def test_rejection_statement_keeps_recent_and_active_cycle_history(catalog):

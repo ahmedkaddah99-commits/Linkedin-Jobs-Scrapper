@@ -17,12 +17,14 @@ from scripts.compact_job_storage import HttpMaintenanceConnection
 
 MEMBERS = f"""DELETE FROM acquisition_publication_jobs WHERE rowid IN (
     SELECT rowid FROM acquisition_publication_jobs
-    WHERE publication_id=({_CANDIDATE}) ORDER BY rowid LIMIT ?)
+    WHERE publication_id NOT IN ({_PINS}) AND NOT EXISTS(
+        SELECT 1 FROM acquisition_publications p
+        WHERE p.publication_id=acquisition_publication_jobs.publication_id)
+    ORDER BY rowid LIMIT ?)
     RETURNING rowid, length(CAST(publication_id AS BLOB))+length(CAST(canonical_job_id AS BLOB))"""
 HEADERS = f"""DELETE FROM acquisition_publications WHERE publication_id IN (
     SELECT p.publication_id FROM acquisition_publications p
     WHERE p.status='valid' AND p.publication_id NOT IN ({_PINS})
-    AND NOT EXISTS(SELECT 1 FROM acquisition_publication_jobs j WHERE j.publication_id=p.publication_id)
     ORDER BY p.published_at,p.publication_id LIMIT 1)
     RETURNING rowid, COALESCE(length(CAST(snapshot_json AS BLOB)),0)"""
 REJECTIONS = f"""DELETE FROM acquisition_job_rejections WHERE rowid IN (
@@ -39,11 +41,13 @@ def prune_batch(db, phase, *, batch_size, cutoff):
     counts = dict(deleted_memberships=0, deleted_publications=0,
                   deleted_rejections=0, logical_bytes_removed=0)
     if phase == 'publications':
-        rows = db.execute(MEMBERS, (batch_size,)).fetchall()
-        counts['deleted_memberships'] = len(rows)
+        # Memberships have no FK to headers. Remove the large unpinned snapshot
+        # first; orphan membership cleanup is restartable and checks pins again.
+        rows = db.execute(HEADERS).fetchall()
+        counts['deleted_publications'] = len(rows)
         if not rows:
-            rows = db.execute(HEADERS).fetchall()
-            counts['deleted_publications'] = len(rows)
+            rows = db.execute(MEMBERS, (batch_size,)).fetchall()
+            counts['deleted_memberships'] = len(rows)
     elif phase == 'rejections':
         rows = db.execute(REJECTIONS, (cutoff, batch_size)).fetchall()
         counts['deleted_rejections'] = len(rows)
@@ -59,6 +63,7 @@ def main():
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--batch-size', type=int, default=10000)
     parser.add_argument('--max-seconds', type=float, default=120)
+    parser.add_argument('--phase', choices=('publications','rejections'), help='Drain one backlog without another phase blocking it')
     args = parser.parse_args()
     if not 1 <= args.batch_size <= 10000 or args.max_seconds <= 0:
         parser.error('Invalid bounded maintenance budget')
@@ -77,9 +82,10 @@ def main():
         return
     deadline = time.monotonic()+args.max_seconds
     finished = set()
+    phases = (args.phase,) if args.phase else ('publications','rejections')
     number = 0
-    while time.monotonic() < deadline and len(finished) < 2:
-        phase = ('publications','rejections')[number % 2]
+    while time.monotonic() < deadline and len(finished) < len(phases):
+        phase = phases[number % len(phases)]
         number += 1
         if phase in finished:
             continue
@@ -97,7 +103,7 @@ def main():
         print(json.dumps({'phase':phase, **changed}), flush=True)
         if not any(changed[key] for key in ('deleted_memberships','deleted_publications','deleted_rejections')):
             finished.add(phase)
-    result['complete'] = len(finished) == 2
+    result['complete'] = len(finished) == len(phases)
     result['logical_bytes_note'] = 'Excludes indexes and other columns; ambiguous requests can undercount committed removals'
     print(json.dumps(result), flush=True)
 

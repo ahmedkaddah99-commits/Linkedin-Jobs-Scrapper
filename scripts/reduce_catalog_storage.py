@@ -157,7 +157,7 @@ def apply_rows(connection, table, rows, columns, prepared):
 
 
 def reduce_catalog_storage(connection, *, database_identity, checkpoint, apply=False, batch_size=10, max_seconds=60, storage=None, archive_workers=4, compact_intelligence=False):
-    if not 1 <= batch_size <= 100 or max_seconds <= 0 or not 1 <= archive_workers <= 8:
+    if not 1 <= batch_size <= 100 or max_seconds <= 0 or not 1 <= archive_workers <= 32:
         raise ValueError('Batch size must be 1..100 and time budget positive')
     checkpoint = Path(checkpoint)
     state = json.loads(checkpoint.read_text(encoding='utf-8')) if checkpoint.exists() else {}
