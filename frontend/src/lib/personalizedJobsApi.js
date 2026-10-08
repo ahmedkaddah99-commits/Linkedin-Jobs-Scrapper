@@ -12,6 +12,8 @@ export const INITIAL_PERSONALIZED_JOB_FILTERS = {
   workAuthorization: "",
   sponsorship: "",
   company: "",
+  companyId: "",
+  companyLabel: "",
   industry: [],
   companySize: "",
   companyStage: "",
@@ -104,6 +106,7 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     work_authorization: filters.workAuthorization,
     sponsorship: filters.sponsorship,
     company: filters.company,
+    company_id: filters.companyId,
     industry: filters.industry,
     company_size: filters.companySize,
     company_stage: filters.companyStage,
@@ -209,7 +212,7 @@ export function countPersonalizedJobFilters(filters = {}) {
     ["liftingRequirement", filters.liftingRequirement],
   ];
   const knownKeys = new Set(known.map(([key]) => key));
-  const extra = Object.entries(filters).filter(([key, value]) => !knownKeys.has(key) && !["query", "sort"].includes(key) && (Array.isArray(value) ? value.length : value === true || (value !== false && text(value))));
+  const extra = Object.entries(filters).filter(([key, value]) => !knownKeys.has(key) && !["query", "sort", "companyLabel"].includes(key) && (Array.isArray(value) ? value.length : value === true || (value !== false && text(value))));
   return [...known.filter(([, value]) => text(value)), ...extra].length;
 }
 
@@ -229,6 +232,9 @@ export function toPersonalizedJobsFilterPayload(filters = {}) {
     sponsorship: filters.sponsorship,
     posted_within_days: DATE_POSTED_DAYS[Array.isArray(filters.datePosted) ? filters.datePosted[0] : filters.datePosted] || "",
     company: filters.company,
+    company_id: filters.companyId,
+    company_label: filters.companyLabel,
+    sort: filters.sort,
     industry: filters.industry,
     company_size: filters.companySize,
     company_stage: filters.companyStage,
@@ -467,6 +473,9 @@ export function filtersFromSavedSearch(payload = {}) {
     workAuthorization: firstValue(saved.work_authorization),
     sponsorship: firstValue(saved.sponsorship),
     company: saved.company || "",
+    companyId: firstValue(saved.company_id),
+    companyLabel: firstValue(saved.company_label),
+    sort: firstValue(saved.sort) || "newest",
     industry: saved.industry || [],
     companySize: firstValue(saved.company_size),
     companyStage: saved.company_stage || "",

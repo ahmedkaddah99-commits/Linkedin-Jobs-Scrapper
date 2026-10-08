@@ -2,6 +2,48 @@
 
 # Customer web frontend (WS-8)
 
+## Profile preview removal (2026-10-08)
+
+The Profile page no longer offers Preview profile or calls `window.print()`.
+Preview placeholder wording is removed from its identity, headline hint and
+unsaved-change message. Save changes, profile editing and job matching continue
+to use their existing APIs. The removed action had no backend route or service;
+document `preview_profile` payloads belong to CV import/rendering and remain in use.
+
+## Company autocomplete and saved-filter sidebar (2026-10-08)
+
+The Jobs search sits above the filter row. `CompanySearch.jsx` requests mapped
+employer suggestions with a 250 ms debounce, aborts obsolete requests, and
+supports arrows, Enter, Escape and pointer selection. Selecting a company resets
+the filter criteria and searches its canonical ID without choosing a Job Function.
+Typing title text continues to narrow a role-selected feed.
+
+`SavedFiltersPanel.jsx` presents named saved searches with an active marker,
+criteria summary, add/edit/delete controls and an unsaved-changes indicator.
+The panel is visible by default on desktop and opens through Saved filters on
+mobile. Saving or activating a search remembers it in the account; the next Jobs
+mount restores it before requesting the feed. Editing criteria stays local until
+saved. The selected sort order is included in the snapshot. The existing single
+Jobs route continues to preserve list state while opening and closing postings.
+See the [backend contract](../05-subsystems/personalized-jobs-and-customer-app-services.md)
+for the authenticated autocomplete and activation routes and snapshot compatibility.
+
+## Jobs account setup (2026-10-08)
+
+The authenticated landing route and `/home` redirect to `/jobs`. The customer
+Home page and its navigation entry, decorative dashboards and styles are removed.
+The public marketing homepage remains a separate route on the marketing host.
+`AccountSetupPanel` keeps the six setup destinations beside the job list and
+posting reader. Desktop list/detail scrolling leaves the panel visible; at widths
+up to 900px it becomes a compact panel above the jobs. It starts with one suggested
+action and expands through a keyboard-accessible button. Descriptions appear on
+hover/focus, and are visible on mobile. Cached settings and job preferences guide
+the suggestion; the old fabricated completion count and checkmarks are removed.
+No extra feed or company requests are made when opening a posting.
+
+Verification: frontend unit tests, lint/build, and desktop/mobile Playwright checks
+for redirects, expansion, link destinations, placement and navigation retention.
+
 ## Jobs navigation retention (2026-10-07)
 
 The posting reader uses the company profile included in the job-detail payload.

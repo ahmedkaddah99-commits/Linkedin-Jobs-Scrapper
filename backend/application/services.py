@@ -1206,6 +1206,12 @@ class BackendApplication:
     def list_personalized_filter_sets(self, user_id: str) -> list[dict[str, Any]]:
         return self._personalized_jobs_service.list_filter_sets(user_id)
 
+    def activate_personalized_filter_set(self, user_id: str, filter_set_id: str) -> dict[str, Any]:
+        return self._personalized_jobs_service.activate_filter_set(user_id, filter_set_id)
+
+    def search_personalized_companies(self, user_id: str, query: str) -> list[dict[str, Any]]:
+        return self._personalized_jobs_service.search_companies(user_id, query)
+
     def save_personalized_filter_set(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._personalized_jobs_service.save_filter_set(user_id, payload)
 

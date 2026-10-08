@@ -2,6 +2,36 @@
 
 # Personalized jobs and customer application services (WS-4, primary)
 
+## Company selection and remembered filters (2026-10-08)
+
+`GET /personalized-jobs/companies?q=...` returns up to ten canonical employers
+with jobs in the current valid publication, ranked by exact name, prefix, then
+substring. Search treats `%` and `_` literally and returns IDs, names and optional
+signed cached logos. It reads the shared catalog and does not trigger acquisition.
+The route uses the existing authenticated catalog access gate.
+
+The feed accepts exact `company_id` selection without a Job Function. Company
+searches bypass saved profile defaults, while explicitly supplied filters still
+apply. Role-selected searches retain their existing indexed role scope, and
+published-job visibility and blue-collar exclusion still apply to company feeds.
+
+Creating or updating a named filter set also activates it. The account-owned
+`POST /personalized-jobs/filter-sets/{id}/activate` route activates an existing
+set; another account cannot activate or update it. Saving and activation write
+the default-search snapshot in the same transaction. The existing default-search
+JSON now supports an envelope containing `filters` and `active_filter_set_id`;
+legacy flat snapshots remain readable. Deleting the active set clears that
+account's remembered snapshot. No schema migration is required.
+
+Jobs loads the saved filter list and remembered snapshot before its initial
+feed request. An explicit navigation filter or edits made during loading take
+precedence. The UI restores the selected company, filter criteria and sort.
+Unsaved edits do not replace the remembered set. Relevant coverage:
+`tests/test_jobs_company_search_and_saved_filters.py`,
+`frontend/src/lib/jobsSavedFilters.test.js`, and
+`frontend/e2e/jobs-company-search.spec.ts`. This change is local; production
+deployment and live verification are separate.
+
 Secondary slice: [career-profiles-and-documents.md](career-profiles-and-documents.md) covers profiles, the Master CV, CV upload, tailored documents, Career Memory, evidence and work experience. The browser-extension side of Assisted Apply belongs to WS-9: [assisted-apply.md](assisted-apply.md). This doc covers only the backend services behind it.
 
 All line numbers refer to `58a96674`. "Static" means read from source at that SHA. Nothing here was run, and no live system was contacted. LIVE PRODUCTION = UNKNOWN.

@@ -1268,6 +1268,25 @@ class PersonalizedJobsService:
     def list_filter_sets(self, user_id: str) -> list[dict[str, Any]]:
         return self.store.list_filter_sets(user_id) if self.store is not None else []
 
+    def activate_filter_set(self, user_id: str, filter_set_id: str) -> dict[str, Any]:
+        return self.store.activate_filter_set(user_id, filter_set_id)
+
+    def search_companies(self, user_id: str, query: str) -> list[dict[str, Any]]:
+        self._assert_catalog_access(user_id)
+        rows = self.store.search_published_companies(query) if self.store is not None else []
+        results = []
+        for row in rows:
+            logo_url = ""
+            key = row.get("company_logo_object_key")
+            signer = getattr(self.object_storage, "signed_download_url", None)
+            if key and callable(signer):
+                try:
+                    logo_url = str(signer(key, expires_in_seconds=900))
+                except Exception:
+                    pass
+            results.append({"company_id": row["company_id"], "name": row["name"], "logo_url": logo_url or None})
+        return results
+
     def save_filter_set(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         name = _text(payload.get("name"))[:80]
         if not name:
@@ -1307,11 +1326,16 @@ class PersonalizedJobsService:
         preferences_record = self.get_preferences(user_id)
         preferences = preferences_record.get("preferences") if preferences_record else None
         saved = self.get_saved_search(user_id)
-        effective_filters = _preference_filters(preferences)
+        # A company selection is an explicit catalog search, independent of
+        # profile defaults such as target function and location.
+        company_search = bool(explicit_filters.get("company_id") or (
+            not explicit_filters and saved and isinstance(saved.get("filters"), Mapping) and saved["filters"].get("company_id")
+        ))
+        effective_filters = {} if company_search else _preference_filters(preferences)
         if not explicit_filters and saved and isinstance(saved.get("filters"), Mapping):
             effective_filters.update(normalize_filters(saved["filters"]))
         effective_filters.update(explicit_filters)
-        if require_role_selection and not effective_filters.get('role'):
+        if require_role_selection and not effective_filters.get('role') and not effective_filters.get('company_id'):
             return {
                 'jobs': [], 'total': None, 'next_cursor': None,
                 'filters': effective_filters, 'selection_required': True,

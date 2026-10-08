@@ -142,7 +142,6 @@ function BrandMark() {
 
 function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme }) {
   const links = [
-    { label: "Home", icon: "home", to: "/" },
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
@@ -152,7 +151,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
 
   return (
     <header className="jobs-top-nav">
-      <NavLink className="jobs-top-nav__brand" to="/">
+      <NavLink className="jobs-top-nav__brand" to="/jobs">
         <BrandMark />
         <span>runr.</span>
       </NavLink>
@@ -160,9 +159,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
         {links.map((link) => {
           const active = link.label === "Jobs"
             ? location.pathname.startsWith("/jobs")
-            : link.label === "Home"
-              ? location.pathname === "/"
-              : link.label === "Documents"
+            : link.label === "Documents"
                 ? location.pathname === "/documents" || location.pathname === "/master-cv"
               : location.pathname.startsWith(link.to);
           return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}{link.label === "Refer" ? <span className="material-symbols-outlined jobs-top-nav__down">expand_more</span> : null}</NavLink>;
