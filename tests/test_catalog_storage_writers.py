@@ -123,6 +123,26 @@ def test_bulk_archives_use_bounded_parallel_work(tmp_path, monkeypatch):
         assert connection.execute('SELECT count(*) FROM job_source_observations').fetchone()[0] == 8
 
 
+def test_new_paid_intelligence_deduplicates_equal_original_descriptions(tmp_path, monkeypatch):
+    from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
+    store = _store(tmp_path, monkeypatch)
+    store.ingest_snapshots_bulk([_snapshot()])
+    with store._connect() as connection:
+        row = connection.execute('SELECT version_id,canonical_job_id,content_hash,description FROM job_posting_versions').fetchone()
+        version, job, content_hash, description = (row[index] for index in range(4))
+    repository = SqlitePersonalizedJobsStore(tmp_path / 'catalog.db')
+    original = {'description': description, 'description_text': description, 'description_html': '<p>different markup</p>', 'unique_source': 'preserved'}
+    saved = repository.save_description_intelligence(version_id=version, canonical_job_id=job, content_hash=content_hash,
+        summary={'paid': 'summary'}, structured_description={'paid': 'structured'}, original_posting=original, provider='existing')
+    assert saved['original_posting'] == original
+    with repository._connect() as connection:
+        row = connection.execute('SELECT original_json,summary_json,structured_json FROM job_description_intelligence').fetchone()
+    stored = json.loads(row[0])
+    assert 'description' not in stored and 'description_text' not in stored
+    assert stored['description_html'] == original['description_html']
+    assert json.loads(row[1]) == {'paid': 'summary'} and json.loads(row[2]) == {'paid': 'structured'}
+
+
 def test_same_title_rejections_without_source_ids_do_not_collide(tmp_path, monkeypatch):
     store = _store(tmp_path, monkeypatch)
     rows = [{'canonical_job_id': job, 'external_job_id': '', 'title': 'Engineer',

@@ -13,6 +13,7 @@ from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.domain.job_filter_source_cache import use_cached_source
 from backend.database.connection import database_read_session, database_target_info
 from backend.repositories.sqlite_core import _SqliteStore
+from backend.acquisition.storage_evidence import archive_catalog_evidence
 
 
 def _json(value: Any) -> str:
@@ -572,6 +573,15 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         now = utc_now_iso()
         generated = str(generated_at or now)
         with self._connect() as connection:
+            original = dict(original_posting)
+            version = connection.execute('SELECT description FROM job_posting_versions WHERE version_id=?', (str(version_id),)).fetchone()
+            aliases = [key for key in ('description', 'description_raw', 'description_html', 'description_text')
+                       if version is not None and isinstance(version[0], str) and key in original and original[key] == version[0]]
+            if aliases:
+                reference = archive_catalog_evidence(original, original)
+                original = {key: value for key, value in original.items() if key not in aliases}
+                original.update(reference)
+                original.update(catalog_storage_version=1, original_description_aliases=aliases)
             connection.execute(
                 """
                 INSERT INTO job_description_intelligence (
@@ -597,7 +607,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     str(content_hash or ""),
                     _json(dict(summary)),
                     _json(dict(structured_description)),
-                    _json(dict(original_posting)),
+                    _json(original),
                     str(provider or ""),
                     str(model or ""),
                     str(prompt_version or ""),
