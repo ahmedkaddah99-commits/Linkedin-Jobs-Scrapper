@@ -37,6 +37,18 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   await page.getByRole("button", { name: /Years of Experience/ }).click();
   const years = page.getByRole("group", { name: "Years of Experience" });
   await years.getByRole("switch").uncheck();
+  await expect(years.getByLabel("Minimum years", { exact: true })).toHaveValue("0");
+  await expect(years.getByLabel("Maximum years", { exact: true })).toHaveValue("0");
+  const slider = years.getByLabel("Minimum years", { exact: true });
+  const geometry = await slider.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const track = getComputedStyle(node, "::-webkit-slider-runnable-track");
+    const thumb = getComputedStyle(node, "::-webkit-slider-thumb");
+    return { padding: style.padding, border: style.borderWidth, height: style.height, trackHeight: track.height, marginTop: thumb.marginTop };
+  });
+  expect(geometry.padding).toBe("0px");
+  expect(geometry.border).toBe("0px");
+  await page.screenshot({ path: `test-results/experience-alignment-${test.info().project.name}.png` });
   await years.getByLabel("Minimum years", { exact: true }).fill("2.5");
   await years.getByLabel("Maximum years", { exact: true }).fill("4");
   await years.getByRole("button", { name: "Confirm" }).click();

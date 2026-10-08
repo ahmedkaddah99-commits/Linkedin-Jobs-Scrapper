@@ -649,3 +649,11 @@ Open to all clears bounds, disables and fades the track. All Filters provides a
 Confirm and save switch and filter-name input. The saved-filter plus opens that
 same drawer with saving enabled. Saving submits the drawer draft through the
 existing account-owned API, reports failures, and closes only after success.
+
+### Experience slider geometry and defaults (2026-10-09)
+
+Range inputs reset generic form padding, borders and minimum height. The rail ends
+at the thumb centers; native track/thumb sizes explicitly center handles vertically.
+Both experience handles initialize at zero. Open to all clears the persisted bounds
+and hides disabled handles. Enabling the range starts at 0/0; moving the minimum
+past the maximum advances the maximum to preserve a valid range.
