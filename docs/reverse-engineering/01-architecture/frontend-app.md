@@ -657,3 +657,11 @@ at the thumb centers; native track/thumb sizes explicitly center handles vertica
 Both experience handles initialize at zero. Open to all clears the persisted bounds
 and hides disabled handles. Enabling the range starts at 0/0; moving the minimum
 past the maximum advances the maximum to preserve a valid range.
+
+### Selected experience interval (2026-10-09)
+
+The experience rail is grey outside the selected bounds and cyan only between
+handle centers. Both handles still initialize at zero. Moving the minimum right
+from that initial state opens the maximum to 30 so both handles are visible;
+the user can then reduce the maximum independently. Numeric bounds continue
+through the existing saved-filter and feed-query contract.

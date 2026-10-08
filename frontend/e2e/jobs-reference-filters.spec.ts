@@ -50,7 +50,17 @@ test("reference quick filters and drawer share multi-select criteria", async ({ 
   expect(geometry.border).toBe("0px");
   await page.screenshot({ path: `test-results/experience-alignment-${test.info().project.name}.png` });
   await years.getByLabel("Minimum years", { exact: true }).fill("2.5");
+  await expect(years.getByLabel("Maximum years", { exact: true })).toHaveValue("30");
   await years.getByLabel("Maximum years", { exact: true }).fill("4");
+  const interval = await years.locator(".runr-range-track").evaluate((node) => ({
+    start: node.style.getPropertyValue("--range-start"),
+    end: node.style.getPropertyValue("--range-end"),
+    paint: getComputedStyle(node, "::before").backgroundImage,
+  }));
+  expect(interval.start).not.toBe("0%");
+  expect(interval.end).not.toBe("100%");
+  expect(interval.paint).toContain("198, 209, 220");
+  await page.screenshot({ path: `test-results/experience-interval-${test.info().project.name}.png` });
   await years.getByRole("button", { name: "Confirm" }).click();
   await expect.poll(() => feeds.at(-1)?.get("required_experience_min")).toBe("2.5");
   await page.getByRole("button", { name: /All Filters/ }).click();
