@@ -2,6 +2,24 @@
 
 # Customer web frontend (WS-8)
 
+## Profile completion and feature cards (2026-10-08)
+
+The Jobs setup rail now keeps LinkedIn referrals (blue) and Runr Apply (violet)
+visible as separate feature cards with descriptions. LinkedIn completion requires
+saved imported connections or a successful sync timestamp from
+`/referrals/import/status`. Apply completion requires the current browser extension
+to return `sync.extension_connected: true`; opening the installation link does not
+complete it. Focus/visibility refreshes statuses after setup in another tab.
+
+The profile card opens a native modal dialog with the existing `ProfilePage`
+editor in completion mode. Personal details, dated experience, education, resume
+upload and preferences appear in one flow with a missing-details summary. Saves
+use the existing settings/preferences APIs, preserve other fields and refresh the
+rail state. Resume upload uses the existing document endpoint and clears its list
+cache. Optional social links and salary are not prerequisites for completion.
+Preferences failures prevent saves until Retry succeeds. The dialog supports
+keyboard focus containment, Escape and return focus to its opening button.
+
 ## Profile preview removal (2026-10-08)
 
 The Profile page no longer offers Preview profile or calls `window.print()`.

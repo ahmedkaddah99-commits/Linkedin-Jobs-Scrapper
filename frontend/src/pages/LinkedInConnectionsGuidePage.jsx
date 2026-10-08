@@ -5,7 +5,7 @@ const LINKEDIN_CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-conn
 
 export default function LinkedInConnectionsGuidePage() {
   return <div className="setup-flow-page">
-    <Link className="setup-flow-back" to="/"><span className="material-symbols-outlined">arrow_back</span>Back to Home</Link>
+    <Link className="setup-flow-back" to="/jobs"><span className="material-symbols-outlined">arrow_back</span>Back to jobs</Link>
     <header><span className="setup-flow-icon material-symbols-outlined">group_add</span><span className="runr-eyebrow">Referrals</span><h1>Connect your LinkedIn network</h1><p>Install the extension, keep LinkedIn open, then sync.</p></header>
     <section className="setup-flow-steps">
       <article><span>1</span><div><h2>Install the Runr extension</h2><p>The extension must be connected before the first sync.</p></div><a href={EXTENSION_URL} rel="noreferrer" target="_blank">Install extension<span className="material-symbols-outlined">open_in_new</span></a></article>
