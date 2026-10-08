@@ -8,6 +8,7 @@ import json
 import os
 import re
 import zlib
+from threading import RLock
 from collections.abc import Mapping
 from typing import Any
 
@@ -15,6 +16,7 @@ from backend.storage.base import ObjectNotFoundError, ObjectStorage
 from backend.storage.factory import create_object_storage
 
 MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
+_ARCHIVE_LOCKS = tuple(RLock() for _ in range(64))
 _COLLECTION_KEYS = frozenset({"observed_at", "observation_timestamp", "source_observation_id", "observation_id", "cycle_id", "task_id"})
 
 
@@ -92,10 +94,13 @@ def archive_catalog_evidence(payload: Mapping[str, Any], raw_payload: Mapping[st
     }
     store = storage if storage is not None else create_object_storage()
     key = reference["storage_evidence_key"]
-    if store.exists(key):
-        restore_catalog_evidence(reference, store)
-    else:
-        store.put(key, compressed, content_type="application/gzip", metadata={"sha256": digest})
-        # A successful write must be durable and readable before SQL compaction.
-        restore_catalog_evidence(reference, store)
+    # Concurrent rows can share a digest. Serialize their existence/write/read
+    # sequence without an unbounded cache of object keys.
+    with _ARCHIVE_LOCKS[int(digest[:2], 16) % len(_ARCHIVE_LOCKS)]:
+        if store.exists(key):
+            restore_catalog_evidence(reference, store)
+        else:
+            store.put(key, compressed, content_type="application/gzip", metadata={"sha256": digest})
+            # A successful write must be durable and readable before SQL compaction.
+            restore_catalog_evidence(reference, store)
     return reference

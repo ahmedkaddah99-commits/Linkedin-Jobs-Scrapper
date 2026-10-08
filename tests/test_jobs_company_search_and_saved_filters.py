@@ -1,6 +1,6 @@
 import unittest
 
-import test_phase_c_personalized_jobs as fixtures
+from tests import test_phase_c_personalized_jobs as fixtures
 
 
 class CompanySearchAndSavedFiltersTests(unittest.TestCase):
