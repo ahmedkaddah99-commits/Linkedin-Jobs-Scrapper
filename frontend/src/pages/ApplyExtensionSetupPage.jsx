@@ -4,7 +4,7 @@ const EXTENSION_URL = "https://chromewebstore.google.com/detail/runr-assisted-ap
 
 export default function ApplyExtensionSetupPage() {
   return <div className="setup-flow-page">
-    <Link className="setup-flow-back" to="/"><span className="material-symbols-outlined">arrow_back</span>Back to Home</Link>
+    <Link className="setup-flow-back" to="/jobs"><span className="material-symbols-outlined">arrow_back</span>Back to jobs</Link>
     <header><span className="setup-flow-icon material-symbols-outlined">extension</span><span className="runr-eyebrow">Runr Apply</span><h1>Set up the Apply extension</h1><p>Install once, then use Runr to fill applications from your profile.</p></header>
     <section className="setup-flow-steps">
       <article><span>1</span><div><h2>Install the extension</h2><p>Add Runr Apply to this browser.</p></div><a href={EXTENSION_URL} rel="noreferrer" target="_blank">Install extension<span className="material-symbols-outlined">open_in_new</span></a></article>

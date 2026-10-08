@@ -3125,3 +3125,41 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
   .jobs-workspace--cards-only .jobs-list-card__save { right: 7.5rem; }
   .jobs-reading__match { float: none; margin: 0 0 1.5rem; max-width: none; width: 100%; }
 }
+.jobs-setup-features { display: grid; gap: .8rem; margin-top: 1rem; }
+.jobs-feature-card { border: 1px solid; border-radius: .8rem; display: block; padding: 1rem; text-decoration: none; }
+.jobs-feature-card--linkedin { background: #eef5ff; border-color: #c8dcf5; color: #174f91; }
+.jobs-feature-card--apply { background: #f4efff; border-color: #ddd0f6; color: #63369c; }
+.jobs-feature-card:hover { filter: brightness(.98); }
+.jobs-feature-card:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.jobs-feature-card > div { align-items: center; display: grid; gap: .5rem; grid-template-columns: auto 1fr auto; }
+.jobs-feature-card strong { font-size: .9rem; }
+.jobs-feature-card .material-symbols-outlined { font-size: 1.25rem; }
+.jobs-feature-card p, .jobs-profile-setup > p { font-size: .8rem; line-height: 1.55; margin: .65rem 0; }
+.jobs-profile-setup > p { color: var(--jobs-muted); }
+.jobs-feature-card > span { display: block; font-size: .75rem; font-weight: 750; margin-top: .75rem; }
+.profile-completion-dialog { background: #fff; border: 1px solid #dce7ec; border-radius: 1rem; color: #173346; margin: auto; max-height: 90dvh; max-width: 58rem; overflow-y: auto; padding: 0; width: calc(100% - 2rem); }
+.profile-completion-dialog::backdrop { background: rgba(15,35,48,.5); }
+.profile-completion-dialog > header { align-items: center; background: #fff; border-bottom: 1px solid #dce7ec; display: flex; gap: 1rem; justify-content: space-between; padding: 1.25rem 1.5rem; position: sticky; top: 0; z-index: 2; }
+.profile-completion-dialog > header h2 { font-size: 1.25rem; font-weight: 800; margin: 0; }
+.profile-completion-dialog > header p { color: #687b8d; font-size: .8rem; margin: .3rem 0 0; }
+.profile-completion-dialog > header button { align-items: center; background: #f3f7f9; border: 0; border-radius: 50%; cursor: pointer; display: flex; flex-shrink: 0; height: 2.75rem; justify-content: center; width: 2.75rem; }
+.career-profile.career-profile--completion { max-width: none; padding: 1.5rem; }
+.career-profile--completion .career-panel { border: 0; padding: 0; }
+.career-profile--completion .career-section-head:not(:first-child) { border-top: 1px solid #dce7ec; margin-top: 2rem; padding-top: 1.5rem; }
+.career-profile--completion .career-savebar { background: #fff; bottom: -1.5rem; margin: 1.5rem -1.5rem -1.5rem; padding: 1rem 1.5rem; position: sticky; z-index: 1; }
+.profile-missing-summary { background: #eef9fc; border-radius: .6rem; font-size: .85rem; line-height: 1.7; margin-bottom: 1.5rem; padding: 1rem; }
+.profile-completion-loading { padding: 2rem; }
+@media (max-width: 600px) {
+  .profile-completion-dialog { max-height: 95dvh; width: calc(100% - 1rem); }
+  .profile-completion-dialog > header { padding: 1rem; }
+  .career-profile.career-profile--completion { padding: 1rem; }
+  .career-profile--completion .career-savebar { bottom: -1rem; margin: 1rem -1rem -1rem; padding: .75rem 1rem; }
+}
+.profile-resume-upload { background: #f7fafb; border: 1px solid #dce7ec; border-radius: .7rem; margin-bottom: 1.5rem; padding: 1rem; }
+.profile-resume-upload h3 { font-weight: 800; margin: 0; }
+.profile-resume-upload p { color: #687b8d; font-size: .8rem; line-height: 1.5; }
+.career-profile--completion .career-savebar > span { display: block; font-size: .75rem; }
+@media (max-width: 600px) { .career-profile--completion .career-savebar { flex-wrap: wrap; }.career-profile--completion .career-savebar > span { flex-basis: 100%; } }
+.career-profile--completion .career-savebar { bottom: 0; }
+.career-profile--completion .career-empty { min-height: 7rem; padding: 1rem; }
+.career-profile--completion .career-section-head > .career-button[href="/jobs"] { display: none; }
