@@ -202,7 +202,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "saved_search_id": str(row["saved_search_id"]),
             "user_id": str(row["user_id"]),
             "name": str(row["name"] or "Default search"),
-            "filters": payload if isinstance(payload, dict) else {},
+            "filters": payload["filters"] if isinstance(payload, dict) and isinstance(payload.get("filters"), dict) else (payload if isinstance(payload, dict) else {}),
+            "active_filter_set_id": str(payload.get("active_filter_set_id") or "") if isinstance(payload, dict) and isinstance(payload.get("filters"), dict) else "",
             "is_default": bool(int(row["is_default"] or 0)),
             "created_at": str(row["created_at"] or ""),
             "updated_at": str(row["updated_at"] or ""),
@@ -233,11 +234,40 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 "name=excluded.name, payload_json=excluded.payload_json, updated_at=excluded.updated_at",
                 (identifier, user_id, name, _json(dict(filters)), str(existing["created_at"]) if existing else now, now),
             )
+            self._activate_filter_set(connection, user_id, identifier)
             return {"filter_set_id": identifier, "name": name, "filters": dict(filters), "updated_at": now}
         return self._run_transaction(write)
 
+    @staticmethod
+    def _activate_filter_set(connection, user_id: str, filter_set_id: str) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT name, payload_json FROM personalized_filter_sets WHERE user_id=? AND filter_set_id=?",
+            (user_id, filter_set_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("filter set not found")
+        filters = _decode(row["payload_json"], {})
+        now = utc_now_iso()
+        payload = {"filters": filters, "active_filter_set_id": filter_set_id}
+        connection.execute(
+            "INSERT INTO personalized_saved_searches "
+            "(saved_search_id, user_id, name, payload_json, is_default, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+            "name=excluded.name, payload_json=excluded.payload_json, is_default=1, updated_at=excluded.updated_at",
+            (f"saved_search_{uuid4().hex}", user_id, row["name"], _json(payload), now, now),
+        )
+        return {"active_filter_set_id": filter_set_id, "name": str(row["name"]), "filters": filters, "is_default": True}
+
+    def activate_filter_set(self, user_id: str, filter_set_id: str) -> dict[str, Any]:
+        return self._run_transaction(lambda c: self._activate_filter_set(c, user_id, filter_set_id))
+
     def delete_filter_set(self, user_id: str, filter_set_id: str) -> bool:
         def write(connection):
+            connection.execute(
+                "DELETE FROM personalized_saved_searches WHERE user_id=? "
+                "AND json_extract(payload_json, '$.active_filter_set_id')=?",
+                (user_id, filter_set_id),
+            )
             return connection.execute(
                 "DELETE FROM personalized_filter_sets WHERE user_id = ? AND filter_set_id = ?",
                 (user_id, filter_set_id),
@@ -1155,6 +1185,27 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             ).fetchone()
         return _row_payload(row) if row is not None else None
 
+    def search_published_companies(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        term = str(query or "").strip().casefold()[:100]
+        if not term:
+            return []
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT c.company_id, c.canonical_name AS name, p.logo_object_key AS company_logo_object_key "
+                "FROM canonical_companies c LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id "
+                "WHERE c.entity_kind='employer' AND lower(c.canonical_name) LIKE ? ESCAPE '\\' "
+                "AND EXISTS (SELECT 1 FROM canonical_jobs j "
+                "JOIN acquisition_publication_jobs pj ON pj.canonical_job_id=j.canonical_job_id "
+                "JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id AND h.head_id=1 "
+                "JOIN acquisition_publications pub ON pub.publication_id=h.publication_id AND pub.status='valid' "
+                "WHERE j.company_id=c.company_id) "
+                "ORDER BY CASE WHEN lower(c.canonical_name)=? THEN 0 "
+                "WHEN lower(c.canonical_name) LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END, c.canonical_name, c.company_id LIMIT ?",
+                (f"%{escaped}%", term, f"{escaped}%", max(1, min(20, int(limit)))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _feed_filter_sql(filters: Mapping[str, Any] | None) -> tuple[list[str], list[Any]]:
         filters = dict(filters or {})
@@ -1222,6 +1273,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                     selected = "CASE " + selected + " " + " ".join(f"WHEN '{original}' THEN '{mapped}'" for original,mapped in synonyms[field].items()) + " ELSE " + selected + " END"
                 predicates.append("(" + " OR ".join(f"{selected} LIKE ?" for _ in values) + ")")
                 params.extend(f"%{value.replace('-', '_').replace(' ', '_')}%" for value in values)
+            elif field == "company_id":
+                predicates.append("catalog.company_id IN (" + ",".join("?" for _ in values) + ")")
+                params.extend(str(item).strip() for item in (requested if isinstance(requested, (list, tuple, set)) else [requested]) if str(item).strip())
             elif field in field_exprs:
                 expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
                 predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
@@ -1444,7 +1498,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
     ) -> dict[str, Any]:
         limit = max(1, min(100, int(limit)))
         roles = None
-        if role_scoped:
+        if role_scoped and not (filters or {}).get("role") and not (filters or {}).get("company_id"):
+            return {'publication': None, 'rows': [], 'total': None, 'selection_required': True}
+        if role_scoped and (filters or {}).get("role"):
             requested = (filters or {}).get('role') or []
             roles = sorted({str(role).strip().casefold() for role in
                             (requested if isinstance(requested, (list, tuple, set)) else [requested])

@@ -16,9 +16,11 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.exact("POST", ("personalized-jobs", "saved-search"), _handle_saved_search, auth_required=True, name="personalized_jobs.saved_search.post")
     registry.exact("GET", ("personalized-jobs", "filter-sets"), _handle_filter_sets, auth_required=True, name="personalized_jobs.filter_sets.list")
     registry.exact("POST", ("personalized-jobs", "filter-sets"), _handle_filter_sets, auth_required=True, name="personalized_jobs.filter_sets.create")
+    registry.prefix("POST", ("personalized-jobs", "filter-sets"), _handle_filter_set_activate, auth_required=True, name="personalized_jobs.filter_sets.activate")
     registry.prefix("DELETE", ("personalized-jobs", "filter-sets"), _handle_filter_set_delete, auth_required=True, name="personalized_jobs.filter_sets.delete")
     registry.exact("GET", ("personalized-jobs", "hidden"), _handle_hidden, auth_required=True, name="personalized_jobs.hidden.read")
     registry.exact("POST", ("personalized-jobs", "report"), _handle_report_without_job, auth_required=True, name="personalized_jobs.report")
+    registry.exact("GET", ("personalized-jobs", "companies"), _handle_company_search, auth_required=True, name="personalized_jobs.company.search")
     registry.prefix("GET", ("personalized-jobs", "companies", "{company_id}"), _handle_company, auth_required=True, name="personalized_jobs.company.read_prefix")
     registry.prefix("GET", ("personalized-jobs",), _handle_job_or_feed, auth_required=True, name="personalized_jobs.job.read")
     registry.prefix("POST", ("personalized-jobs",), _handle_job_action, auth_required=True, name="personalized_jobs.job.action")
@@ -85,6 +87,22 @@ def _handle_filter_set_delete(context: ApiRouteContext) -> bool | None:
         return None
     deleted = context.application.delete_personalized_filter_set(_identity_user_id(context), context.segments[2])
     context.send_json({"deleted": deleted})
+    return True
+
+def _handle_filter_set_activate(context: ApiRouteContext) -> bool | None:
+    if len(context.segments) != 4 or context.segments[3] != "activate":
+        return None
+    try:
+        context.send_json(context.application.activate_personalized_filter_set(_identity_user_id(context), context.segments[2]))
+    except ValueError as error:
+        return _error(context, 404, "filter_set_not_found", str(error))
+    return True
+
+
+def _handle_company_search(context: ApiRouteContext) -> bool:
+    context.send_json({"companies": context.application.search_personalized_companies(
+        _identity_user_id(context), _query_value(context.query, "q"),
+    )})
     return True
 
 
@@ -220,7 +238,7 @@ def _filters_from_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
         "q", "search", "search_text", "role", "roles", "category", "categories", "location",
         "work_arrangement", "employment_type", "experience", "experience_level", "seniority",
         "salary_min", "salary_max", "language", "languages", "work_authorization", "sponsorship",
-        "posted_within_days", "company", "industry", "company_size", "company_stage", "funding_stage",
+        "posted_within_days", "company", "company_id", "industry", "company_size", "company_stage", "funding_stage",
         "funding_min", "funding_max", "founded_year_min", "founded_year_max",
         "funding_year_min", "funding_year_max", "hidden_companies", "excluded_companies",
         "education", "preferred_major", "preferred_majors", "security_clearance",

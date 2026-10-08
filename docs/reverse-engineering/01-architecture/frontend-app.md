@@ -2,6 +2,24 @@
 
 # Customer web frontend (WS-8)
 
+## Company autocomplete and saved-filter sidebar (2026-10-08)
+
+The Jobs search sits above the filter row. `CompanySearch.jsx` requests mapped
+employer suggestions with a 250 ms debounce, aborts obsolete requests, and
+supports arrows, Enter, Escape and pointer selection. Selecting a company resets
+the filter criteria and searches its canonical ID without choosing a Job Function.
+Typing title text continues to narrow a role-selected feed.
+
+`SavedFiltersPanel.jsx` presents named saved searches with an active marker,
+criteria summary, add/edit/delete controls and an unsaved-changes indicator.
+The panel is visible by default on desktop and opens through Saved filters on
+mobile. Saving or activating a search remembers it in the account; the next Jobs
+mount restores it before requesting the feed. Editing criteria stays local until
+saved. The selected sort order is included in the snapshot. The existing single
+Jobs route continues to preserve list state while opening and closing postings.
+See the [backend contract](../05-subsystems/personalized-jobs-and-customer-app-services.md)
+for the authenticated autocomplete and activation routes and snapshot compatibility.
+
 ## Jobs account setup (2026-10-08)
 
 The authenticated landing route and `/home` redirect to `/jobs`. The customer

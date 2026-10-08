@@ -21,6 +21,8 @@ import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxo
 import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
 import { alternativeSeniority, descriptionLines, descriptionPlaceholder, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
 import AllJobFilters from "./AllJobFilters";
+import CompanySearch from "./CompanySearch";
+import SavedFiltersPanel from "./SavedFiltersPanel";
 import EvaluationPanel from "./ProfileMatchPanel";
 import AccountSetupPanel from "./AccountSetupPanel";
 import { matchLabel, matchScore } from "../../lib/profileJobMatch";
@@ -304,11 +306,11 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isConnected, request } = useSession();
+  const { isConnected, request, user } = useSession();
   const routeJobId = initialJobId || searchParams.get("job") || "";
   const isMobile = useIsMobile();
   const [filters, setFilters] = useState(() => location.state?.jobFilters || INITIAL_PERSONALIZED_JOB_FILTERS);
-  const hasJobFunction = hasSelectedJobFunction(filters);
+  const canSearch = hasSelectedJobFunction(filters) || Boolean(filters.companyId);
   const [feed, setFeed] = useState(null);
   const [detailJob, setDetailJob] = useState(null);
   const [detailError, setDetailError] = useState("");
@@ -319,8 +321,13 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterSection, setFilterSection] = useState("Basic Job Criteria");
   const [savedFilterSets, setSavedFilterSets] = useState([]);
-  const [filterSetName, setFilterSetName] = useState("");
-  const [showFilterSets, setShowFilterSets] = useState(false);
+  const [showFilterSets, setShowFilterSets] = useState(!isMobile);
+  const [activeFilterSetId, setActiveFilterSetId] = useState("");
+  const [filterSetsBusy, setFilterSetsBusy] = useState(false);
+  const [filterSetsError, setFilterSetsError] = useState("");
+  const [filtersReady, setFiltersReady] = useState(false);
+  const filtersTouchedRef = useRef(false);
+  const filterOwnerRef = useRef(user?.user_id);
   const [reportOpen, setReportOpen] = useState(false);
   const [improveOpen, setImproveOpen] = useState(false);
   const [improveResult, setImproveResult] = useState(null);
@@ -349,11 +356,29 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   useEffect(() => {
     if (!isConnected) return;
     let active = true;
-    request("/personalized-jobs/filter-sets").then((result) => {
-      if (active) setSavedFilterSets(result.filter_sets || []);
-    }).catch(() => {});
+    if (filterOwnerRef.current !== user?.user_id) {
+      filterOwnerRef.current = user?.user_id;
+      filtersTouchedRef.current = false;
+      setFilters(INITIAL_PERSONALIZED_JOB_FILTERS);
+      setFeed(null);
+      setSavedFilterSets([]);
+      setActiveFilterSetId("");
+    }
+    setFilterSetsError("");
+    setFiltersReady(false);
+    Promise.all([
+      request("/personalized-jobs/filter-sets", { timeoutMs: 10000 }),
+      request("/personalized-jobs/saved-search", { timeoutMs: 10000 }),
+    ]).then(([result, saved]) => {
+      if (!active) return;
+      setSavedFilterSets(result.filter_sets || []);
+      setActiveFilterSetId(saved.active_filter_set_id || "");
+      if (!filtersTouchedRef.current && !location.state?.jobFilters && saved.filters && Object.keys(saved.filters).length) setFilters(filtersFromSavedSearch(saved));
+    }).catch(() => {
+      if (active) setFilterSetsError("Unable to load saved filters. Reload to try again.");
+    }).finally(() => { if (active) setFiltersReady(true); });
     return () => { active = false; };
-  }, [isConnected, request]);
+  }, [isConnected, request, user?.user_id]);
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
@@ -401,8 +426,8 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }, [routeJobId]);
 
   useEffect(() => {
-    if (!isConnected) return undefined;
-    if (!hasJobFunction) {
+    if (!isConnected || !filtersReady) return undefined;
+    if (!canSearch) {
       loadMoreAbortRef.current?.abort();
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -449,7 +474,10 @@ export default function JobsWorkspace({ initialJobId = "" }) {
           });
           if (isInitialFeed && payload?.filters) {
             skipNextFeedRef.current = true;
-            setFilters((current) => ({ ...current, ...filtersFromSavedSearch({ filters: payload.filters }) }));
+            setFilters((current) => {
+              const restored = filtersFromSavedSearch({ filters: payload.filters });
+              return { ...current, ...restored, companyLabel: restored.companyId && restored.companyId === current.companyId ? current.companyLabel : restored.companyLabel };
+            });
           }
         }
       } catch (error) {
@@ -469,7 +497,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }
     return () => { active = false; if (timer) window.clearTimeout(timer); controller?.abort(); };
   // Opening or closing a posting retains this feed and must not query it again.
-  }, [feedAttempt, filters, hasJobFunction, isConnected, request]);
+  }, [feedAttempt, filters, canSearch, filtersReady, isConnected, request]);
 
   function retryFeed() {
     setFeedAttempt((attempt) => attempt + 1);
@@ -548,6 +576,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }, [feedError, jobs.length, loading]);
 
   function updateFilter(name, value) {
+    filtersTouchedRef.current = true;
     loadMoreAbortRef.current?.abort();
     setFeed((current) => current ? { ...current, next_cursor: null } : current);
     setFilters((current) => ({ ...current, [name]: value }));
@@ -556,6 +585,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   function clearFilters() {
+    filtersTouchedRef.current = true;
     loadMoreAbortRef.current?.abort();
     setFeed((current) => current ? { ...current, next_cursor: null } : current);
     setFilters(INITIAL_PERSONALIZED_JOB_FILTERS);
@@ -630,24 +660,49 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }
   }
 
-  async function saveSearch() {
+  async function saveSearch(name, filterSetId) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
     try {
-      const name = filterSetName.trim() || `Filter ${savedFilterSets.length + 1}`;
-      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filters: toPersonalizedJobsFilterPayload(filters) } });
-      setSavedFilterSets((current) => [saved, ...current]);
-      setFilterSetName("");
+      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filter_set_id: filterSetId, filters: toPersonalizedJobsFilterPayload(filters) } });
+      setSavedFilterSets((current) => [saved, ...current.filter((item) => item.filter_set_id !== saved.filter_set_id)]);
+      setActiveFilterSetId(saved.filter_set_id);
       setFeedback(`Saved ${name}.`);
+      return true;
     } catch (error) {
-      setFeedback(error?.message || "Unable to save this search.");
+      setFilterSetsError(error?.message || "Unable to save this search.");
+      return false;
+    } finally {
+      setFilterSetsBusy(false);
+    }
+  }
+
+  async function activateFilterSet(item) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
+    try {
+      const saved = await request(`/personalized-jobs/filter-sets/${encodeURIComponent(item.filter_set_id)}/activate`, { method: "POST", body: {} });
+      filtersTouchedRef.current = true;
+      setFilters(filtersFromSavedSearch(saved));
+      setActiveFilterSetId(item.filter_set_id);
+    } catch (error) {
+      setFilterSetsError(error?.message || "Unable to activate this filter.");
+    } finally {
+      setFilterSetsBusy(false);
     }
   }
 
   async function deleteFilterSet(filterSetId) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
     try {
       await request(`/personalized-jobs/filter-sets/${encodeURIComponent(filterSetId)}`, { method: "DELETE" });
       setSavedFilterSets((current) => current.filter((item) => item.filter_set_id !== filterSetId));
+      if (activeFilterSetId === filterSetId) setActiveFilterSetId("");
     } catch (error) {
-      setFeedback(error?.message || "Unable to delete this filter.");
+      setFilterSetsError(error?.message || "Unable to delete this filter.");
+    } finally {
+      setFilterSetsBusy(false);
     }
   }
 
@@ -679,7 +734,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   }
 
   async function loadMore() {
-    if (!hasJobFunction || !feed?.next_cursor || loading || loadingMoreRef.current) return;
+    if (!canSearch || !feed?.next_cursor || loading || loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     const controller = new AbortController();
     loadMoreAbortRef.current = controller;
@@ -738,8 +793,17 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
 
   return <div className="jobs-experience">
+    <section aria-label="Company and title search" className="jobs-search-heading"><div><h1>Find your next opportunity</h1><p>Explore a company or find roles that fit you.</p></div><CompanySearch connected={isConnected} onClear={() => {
+      filtersTouchedRef.current = true;
+      setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
+    }} onQuery={(value) => {
+      filtersTouchedRef.current = true;
+      setFilters((current) => ({ ...current, query: value, companyId: "", companyLabel: "" }));
+    }} onSelect={(company) => {
+      filtersTouchedRef.current = true;
+      setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} /></section>
     <section className="jobs-search-bar" aria-label="Job search filters">
-      <label className="jobs-search-input"><Icon>search</Icon><input aria-label="Search job title or company" onChange={(event) => updateFilter("query", event.target.value)} placeholder="Search job title or company" type="search" value={filters.query} /></label>
       <FilterPill icon="location_on" label="Location" onChange={(value) => updateFilter("location", value === "all" ? "" : value)} options={[{ label: "All locations", value: "all" }, { label: "Berlin", value: "Berlin" }, { label: "Germany", value: "Germany" }, { label: "Remote in Germany", value: "Remote in Germany" }]} value={filters.location || "all"} />
       <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>badge</Icon><span>Job Function{Array.isArray(filters.role) && filters.role.length ? ` (${filters.role.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
       <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>work_outline</Icon><span>Job Type{Array.isArray(filters.employmentType) && filters.employmentType.length ? ` (${filters.employmentType.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
@@ -750,21 +814,24 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       <button className="jobs-filter-pill" onClick={() => { setFilterSection("Areas of Interests"); setFiltersOpen(true); }} type="button"><Icon>apartment</Icon><span>Industry{Array.isArray(filters.industry) && filters.industry.length ? ` (${filters.industry.length})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
       <button className="jobs-filter-pill" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>timeline</Icon><span>Years of Experience</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
       <button className={["jobs-filter-pill", activeFilterCount ? "is-active" : ""].join(" ")} onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>tune</Icon><span>All Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
-      <button className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>favorite</Icon>Saved filters</button>
+      <button aria-expanded={showFilterSets} aria-label="Saved filters" className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>bookmark</Icon>Saved filters</button>
       {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
     </section>
-    {showFilterSets ? <section aria-label="Saved filters" className="runr-saved-filters"><div><input aria-label="Filter name" maxLength={80} onChange={(event) => setFilterSetName(event.target.value)} placeholder="Name this filter" value={filterSetName} /><button onClick={saveSearch} type="button">Save current filters</button></div><div>{savedFilterSets.map((item) => <span key={item.filter_set_id}><button onClick={() => setFilters(filtersFromSavedSearch(item))} type="button">{item.name}</button><button aria-label={`Delete ${item.name}`} onClick={() => deleteFilterSet(item.filter_set_id)} type="button">Remove</button></span>)}</div></section> : null}
-    {hasJobFunction ? <CatalogStateBanner error={feedError} feed={feed} loading={loading} /> : null}
-    {hasJobFunction && feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
+    {canSearch ? <CatalogStateBanner error={feedError} feed={feed} loading={loading} /> : null}
+    {canSearch && feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className="jobs-content-layout">
     <AccountSetupPanel />
-    <div className={["jobs-workspace", routeJobId ? "jobs-workspace--detail-only" : "jobs-workspace--cards-only", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{hasJobFunction ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} matching jobs` : "Matching jobs") : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!hasJobFunction ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+    <div className={["jobs-workspace", routeJobId ? "jobs-workspace--detail-only" : "jobs-workspace--cards-only", !routeJobId && showFilterSets ? "jobs-workspace--with-saved-filters" : "", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
+      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{canSearch ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} matching jobs` : "Matching jobs") : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!canSearch ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
       {routeJobId ? <section className="jobs-detail-panel">{detailContent}</section> : null}
+      {!routeJobId && showFilterSets ? <SavedFiltersPanel activeId={activeFilterSetId} busy={filterSetsBusy || !filtersReady} error={filterSetsError} items={savedFilterSets} modified={Boolean(activeFilterSetId && JSON.stringify(toPersonalizedJobsFilterPayload(filters)) !== JSON.stringify(toPersonalizedJobsFilterPayload(filtersFromSavedSearch(savedFilterSets.find((item) => item.filter_set_id === activeFilterSetId)))))} onActivate={activateFilterSet} onDelete={deleteFilterSet} onEdit={(item) => {
+        filtersTouchedRef.current = true;
+        setFilters(filtersFromSavedSearch(item));
+      }} onSave={saveSearch} /> : null}
     </div>
     </div>
-    {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}
+    {filtersOpen ? <AllJobFilters filters={filters} initialSection={filterSection} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); setFiltersOpen(false); }} onClose={() => setFiltersOpen(false)} /> : null}
     {reportOpen ? <ReportDialog onClose={() => setReportOpen(false)} onSubmit={reportJob} /> : null}
   </div>;
 }
