@@ -156,3 +156,20 @@ are unavailable. Browser dashboard access was rejected because the
 admin-enforced browser policy could not be verified. Admin visibility is needed
 to diagnose the outstanding write stalls; no browser security workaround was
 attempted.
+
+### Final release verification
+
+Follow-up fix commit `1e88a9b4b26544061006c8d90d1e3be829e4f766` is pushed and
+verified live on both Render API and worker; API health returned HTTP 200.
+The VPS entrypoints now select an isolated copy of that revision. Its changed
+tracked files were installed from an exact Git archive over the verified prior
+release and checked byte-for-byte. Follow-up archive SHA-256:
+`01f128e8f43bd0c9188cdbbd8ab4a6112ad31c97b9123c2055a402167f1ea3f7`.
+The installed helper passed a nested source-envelope compaction canary with no
+provider calls. All four required timers remain enabled and active.
+
+The latest guard check confirmed the original observation and version update
+triggers, with **zero temporary maintenance tables** remaining. The historical
+catalog backlog still needs Turso account/admin visibility. This is a partial
+operating result: prevention is deployed and producer cleanup is complete;
+catalog history cleanup is outstanding.
