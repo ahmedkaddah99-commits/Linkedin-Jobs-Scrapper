@@ -6,7 +6,7 @@
 # Linear owns work status/priority/dependencies/assignment for tickets that reference a subsystem id.
 # Every implementation ticket that touches an owned path must update the matching entry and its doc.
 # Owned path sets are disjoint at the baseline (verified: 0 unowned, 0 double-owned tracked paths,
-# after the WS-11 wording correction in phase-1-delta-audit-2026-09-13.md §4).
+# after the WS-11 wording correction in phase-1-delta-audit-2026-09-13.md Â§4).
 
 subsystems:
   - id: http-api-cli
@@ -269,7 +269,7 @@ subsystems:
       - The Profile page has no profile preview or print action.
       - Opening a posting retains the jobs feed and uses its embedded company profile without fetching employer jobs.
       - Authenticated landing opens Jobs; account setup stays compact beside desktop jobs and expands without navigating away.
-      - LinkedIn and Apply feature cards remain visible with verified connection checkmarks; profile completion uses one modal and existing save APIs.
+      - Compact LinkedIn and Apply tool rows remain visible with verified connection checkmarks; saved filters share their rail, and profile completion uses one modal and existing save APIs.
       - frontend/.env.local values are never read or printed.
       - CV-render files (package.json, package-lock.json, scripts/render-cv-pdf.mjs, lib/cvStudio.js, lib/cvSocialLinks.js) change only with a coordinated WS-4/WS-7 review (they affect the deployed API/worker image filter).
 

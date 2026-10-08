@@ -595,3 +595,13 @@ git grep -n '"/analytics/events"' 58a96674 -- frontend backend/api/routes
 6. Wire frontend Playwright (3 current specs) and `test:production-build` into CI (WS8-G7; WS-7).
 7. Signed-in visual verification of `/jobs` (U10).
 8. Owner decision on the unmerged feature-branch frontend commits (U5).
+
+## Compact Jobs tools rail (2026-10-08)
+
+The supplied compact layout replaces the large setup cards with three small
+profile, LinkedIn and Apply rows inside Quick access & tools. Saved filters share
+the same right-hand column instead of consuming a separate column beside jobs.
+Profile opens the existing unified completion dialog. Connection checkmarks still
+use verified state; profile readiness counts the eleven existing required details,
+never the sample percentage from the design reference. Mobile keeps tools above
+the job list and saved filters available through their existing toggle.

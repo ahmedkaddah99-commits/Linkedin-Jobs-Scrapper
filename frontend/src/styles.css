@@ -3163,3 +3163,39 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .career-profile--completion .career-savebar { bottom: 0; }
 .career-profile--completion .career-empty { min-height: 7rem; padding: 1rem; }
 .career-profile--completion .career-section-head > .career-button[href="/jobs"] { display: none; }
+/* Compact reference sidebar: saved searches and tools share one column. */
+.jobs-setup-rail .jobs-saved-panel { border: 1px solid var(--jobs-line); border-radius: 1rem; margin-bottom: 1rem; max-height: none; overflow: visible; padding: 1rem; }
+.jobs-setup-rail .jobs-saved-panel > p { display: none; }
+.jobs-setup-rail .jobs-saved-panel__empty { background: #f8fafc; border: 1px solid #edf1f5; border-radius: .75rem; font-size: .75rem; margin-top: .75rem; padding: .75rem; }
+.jobs-setup-rail .jobs-saved-panel__empty p { margin: .25rem 0 0; }
+.jobs-setup-rail .jobs-saved-panel__save { font-size: .75rem; padding: .5rem; }
+.jobs-quick-tools { background: #fff; border: 1px solid var(--jobs-line); border-radius: 1rem; padding: .85rem; }
+.jobs-quick-tools__heading { color: #78909d; font-size: .7rem; letter-spacing: .04em; margin: .15rem .15rem .75rem; text-transform: uppercase; }
+.jobs-compact-profile { align-items: center; background: #fff; border: 1px solid var(--jobs-line); border-radius: .75rem; color: var(--jobs-ink); cursor: pointer; display: flex; gap: .6rem; padding: .65rem; text-align: left; width: 100%; }
+.jobs-compact-profile > span:nth-child(2) { flex: 1; min-width: 0; }
+.jobs-compact-profile > .material-symbols-outlined:first-child { background: #ecfbf9; border: 1px solid #ccf0ea; border-radius: .5rem; color: #098f88; font-size: 1.1rem; padding: .4rem; }
+.jobs-compact-profile strong { font-size: .78rem; }
+.jobs-compact-profile > .material-symbols-outlined:last-child { color: #78909d; font-size: 1.1rem; }
+.jobs-compact-description { color: #78909d; display: block; font-size: .68rem; line-height: 1.5; margin-top: .15rem; }
+.jobs-compact-badge { background: #fff8e7; border: 1px solid #f3d698; border-radius: 1rem; color: #a66d06; display: inline-block; font-size: .6rem; margin-left: .35rem; padding: .05rem .3rem; }
+.jobs-quick-tools .jobs-setup-features { gap: .5rem; margin-top: .5rem; }
+.jobs-quick-tools .jobs-feature-card { border-radius: .75rem; display: grid; grid-template-columns: 2rem minmax(0,1fr) auto; column-gap: .6rem; padding: .65rem; }
+.jobs-quick-tools .jobs-feature-card > div { display: contents; }
+.jobs-quick-tools .jobs-feature-card > div > .material-symbols-outlined:first-child { align-self: center; background: #eef7ff; border: 1px solid #d7ebfb; border-radius: .5rem; font-size: 1.1rem; grid-column: 1; grid-row: 1 / 4; padding: .4rem; }
+.jobs-quick-tools .jobs-feature-card strong { font-size: .78rem; grid-column: 2; grid-row: 1; }
+.jobs-quick-tools .jobs-feature-card > div > .material-symbols-outlined:last-child { align-self: center; font-size: 1.1rem; grid-column: 3; grid-row: 1 / 4; }
+.jobs-quick-tools .jobs-feature-card p { font-size: .68rem; grid-column: 2; line-height: 1.5; margin: .15rem 0; }
+.jobs-quick-tools .jobs-feature-card > span { font-size: .6rem; grid-column: 2; justify-self: start; }
+.jobs-quick-tools .jobs-feature-card--linkedin { background: #fff; }
+.jobs-quick-tools .jobs-feature-card--apply { background: #faf7ff; }
+.jobs-quick-tools .jobs-feature-card--apply > div > .material-symbols-outlined:first-child { background: #f1e8ff; border-color: #e3d4fa; }
+.jobs-compact-profile:hover { border-color: #65babf; }
+.jobs-compact-profile:focus-visible { outline: 2px solid #0b9eb9; outline-offset: 2px; }
+.jobs-profile-readiness { border-top: 1px solid #edf1f5; color: #78909d; display: flex; flex-wrap: wrap; font-size: .65rem; justify-content: space-between; margin-top: .75rem; padding-top: .65rem; }
+.jobs-profile-readiness strong { color: #098f88; }
+.jobs-profile-readiness progress { appearance: none; border: 0; border-radius: 1rem; display: block; height: .3rem; margin-top: .4rem; overflow: hidden; width: 100%; }
+.jobs-profile-readiness progress::-webkit-progress-bar { background: #eef2f6; }
+.jobs-profile-readiness progress::-webkit-progress-value { background: #14b8a6; }
+.jobs-profile-readiness progress::-moz-progress-bar { background: #14b8a6; }
+.jobs-quick-tools .jobs-feature-card > span { margin-top: .1rem; }
+.jobs-quick-tools .jobs-feature-card p, .jobs-compact-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
