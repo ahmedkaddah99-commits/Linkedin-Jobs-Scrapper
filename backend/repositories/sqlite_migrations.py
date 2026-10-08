@@ -3676,6 +3676,45 @@ def _apply_profile_matching_industry_invalidation_migration(connection: Database
     """)
 
 
+def _apply_catalog_storage_retention_migration(connection: DatabaseConnection) -> None:
+    """Own daily retention metadata and remove the retired copied FTS bodies."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS runr_catalog_storage_maintenance (
+            name TEXT PRIMARY KEY,
+            last_rowid INTEGER NOT NULL DEFAULT 0,
+            last_run_at TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_publications_retention
+            ON acquisition_publications(status, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_job_rejections_observed_at
+            ON acquisition_job_rejections(observed_at);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_cycles_publication_status
+            ON acquisition_cycles(publication_id, status);
+        CREATE INDEX IF NOT EXISTS idx_job_posting_versions_source_observation
+            ON job_posting_versions(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_field_provenance_source_observation
+            ON acquisition_field_provenance(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_rule_outputs_source_observation
+            ON acquisition_rule_outputs(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_source_relationships_related
+            ON job_source_observation_relationships(related_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_job_source_observations_pair_latest
+            ON job_source_observations(canonical_job_id,target_id,observed_at DESC,observation_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_canonical_company_urls_source_observation
+            ON canonical_company_urls(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_company_identity_evidence_source_observation
+            ON company_identity_evidence(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_company_link_candidates_source_observation
+            ON company_link_candidates(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_company_url_occurrences_source_observation
+            ON canonical_company_url_occurrences(source_observation_id);
+        CREATE INDEX IF NOT EXISTS idx_ingest_staging_observation
+            ON acquisition_ingest_staging(observation_id);
+        DROP TABLE IF EXISTS published_job_search;
+    """)
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -4075,6 +4114,11 @@ MIGRATIONS = (
         "074_profile_matching_industry_invalidation",
         "Index matching invalidation and fence facts to industry rather than unrelated company updates.",
         _apply_profile_matching_industry_invalidation_migration,
+    ),
+    Migration.from_callable(
+        "075_catalog_storage_retention",
+        "Bound catalog history with durable retention checkpoints and remove retired FTS copies.",
+        _apply_catalog_storage_retention_migration,
     ),
 )
 

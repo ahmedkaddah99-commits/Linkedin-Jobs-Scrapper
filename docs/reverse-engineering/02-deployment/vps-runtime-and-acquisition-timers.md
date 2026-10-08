@@ -3,6 +3,16 @@
 
 # VPS runtime and acquisition timers
 
+Catalog storage maintenance uses `runr-catalog-storage-maintenance.service` and its
+daily timer. Pin its working directory and command to the installed committed release.
+Load `/etc/runr/catalog-storage.env` after acquisition catalog configuration so source
+archives use the same private R2 namespace as Render. The wrapper shares the publisher
+lock and emits a durable JSON receipt plus Alloy textfile metrics under
+`/var/lib/runr/observability/catalog-storage.prom`. Capacity warnings start at 8 GB;
+9 GB is the included organization storage allowance, not a server disk limit.
+Complete and verify a private database backup before historical backfill or physical
+reclamation. Scheduled retention never runs VACUUM.
+
 **Current owner instruction (2026-09-26):** read [vps-acquisition-operating-policy.md](vps-acquisition-operating-policy.md) before touching live acquisition. Dedicated collectors and publisher must stay enabled for unattended validation. Historical UNKNOWN statements below describe the original documentary baseline, not the live evidence in that policy.
 
 For exact-revision live ticket testing, use [vps-predeployment-verification.md](vps-predeployment-verification.md). The systemd acquisition units execute `/opt/runr`, so Render branch switching alone does not select VPS code.

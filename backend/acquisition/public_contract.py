@@ -251,19 +251,24 @@ def _field_record(
     metadata_fields = metadata.get("fields") if isinstance(metadata, Mapping) else {}
     if not isinstance(metadata_fields, Mapping):
         metadata_fields = {}
+    empty_record = None
     for candidate in candidates:
         record = fields.get(candidate)
         if isinstance(record, Mapping):
+            if empty_record is None:
+                empty_record = record
             value = _record_value(record)
             if value is not None:
                 return value, record
         record = metadata_fields.get(candidate)
         if isinstance(record, Mapping):
+            if empty_record is None:
+                empty_record = record
             value = _record_value(record)
             if value is not None:
                 return value, record
     direct = _direct_value(payload, *candidates)
-    return direct, None
+    return direct, empty_record if direct is None else None
 
 
 def _state(record: Mapping[str, Any] | None, value: Any) -> str:

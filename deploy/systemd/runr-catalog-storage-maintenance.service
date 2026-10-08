@@ -1,0 +1,31 @@
+[Unit]
+Description=Runr bounded catalog storage maintenance
+After=network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+EnvironmentFile=/etc/runr/acquisition-catalog.env
+EnvironmentFile=/etc/runr/catalog-storage.env
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+ExecStart=/bin/sh /opt/runr/deploy/run-catalog-storage-maintenance.sh
+TimeoutStartSec=15min
+TimeoutStopSec=60
+SuccessExitStatus=75
+CPUQuota=100%
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports
+
+[Install]
+WantedBy=multi-user.target

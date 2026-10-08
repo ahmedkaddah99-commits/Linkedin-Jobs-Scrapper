@@ -50,7 +50,8 @@ from backend.acquisition.publication import (
     StalePublicationHeadError,
     get_publication_policy,
 )
-from backend.acquisition.storage_payload import compact_job_payload
+from backend.acquisition.storage_payload import compact_job_payload, compact_catalog_payload, hydrate_description_aliases
+from backend.acquisition.storage_evidence import archive_catalog_evidence, _semantic_payload
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_target_info
 from backend.domain.job_identity import canonicalize_url
@@ -67,6 +68,38 @@ class CatastrophicPublicationDropError(RuntimeError):
 
 PUBLICATION_DROP_GUARD_MINIMUM = 100
 PUBLICATION_DROP_GUARD_RETENTION_RATIO = 0.20
+
+
+def _catalog_storage_payloads(job: Mapping[str, Any], raw_job: Mapping[str, Any] | None = None):
+    """Archive first, then project; failure cannot discard the only source copy."""
+    reference = archive_catalog_evidence(job, raw_job)
+    payload = compact_catalog_payload(job, storage_evidence_key=reference['storage_evidence_key'])
+    payload.update(reference)
+    payload['catalog_storage_version'] = 1
+    raw = {**reference, 'catalog_storage_version': 1}
+    if isinstance(job.get('application_destination'), Mapping):
+        raw['application_destination'] = dict(job['application_destination'])
+    return payload, raw
+
+
+def _has_field_evidence(record: Mapping[str, Any]) -> bool:
+    """Missing state is in the hot mapping, not an individual empty audit row."""
+    if str(record.get('state') or 'unknown') not in {'missing', 'unknown'}:
+        return True
+    return any(record.get(key) not in (None, '', [], {}) for key in ('raw_value', 'normalized_value', 'evidence'))
+
+
+def _normalization_mapping_hash(mapping: Mapping[str, Any], job: Mapping[str, Any]) -> str:
+    projection = compact_catalog_payload({
+        'unified_mapping': mapping,
+        'description_text': job.get('description_text') or job.get('description') or '',
+    }).get('unified_mapping', {})
+    projection = _semantic_payload(projection)
+    for record in projection.get('company_urls', []):
+        if isinstance(record, dict):
+            record.pop('first_seen_at', None)
+            record.pop('last_seen_at', None)
+    return hashlib.sha256(_json(projection).encode('utf-8')).hexdigest()
 
 
 def _assert_publication_size_is_safe(connection, *, previous_publication_id: str, next_count: int) -> None:
@@ -1642,6 +1675,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 )
                 job["external_id_source"] = "source_field" if source_external_id else "job_url_fallback"
                 payload_hash = self._payload_hash(job)
+                durable_payload, raw_reference = _catalog_storage_payloads(job, raw_job)
                 row_number += 1
                 staged.append(
                     (
@@ -1667,13 +1701,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                         payload_hash,
                         hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest(),
                         observed_at,
-                        _json(compact_job_payload(job)),
-                        _json(compact_job_payload(raw_job, normalized=job)),
+                        _json(durable_payload),
+                        _json(raw_reference),
                         _json(list(job.get("quality_warnings") or [])),
                         _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}),
-                        hashlib.sha256(
-                            _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}).encode("utf-8")
-                        ).hexdigest(),
+                        _normalization_mapping_hash(job.get('unified_mapping') or {}, job),
                         str(job.get("unified_rule_version") or UNIFIED_RULE_VERSION),
                         grace_attempts,
                     )
@@ -2406,9 +2438,18 @@ class SqliteAcquisitionStore(_SqliteStore):
             SELECT 'rule_output_' || lower(hex(randomblob(16))), s.cycle_id, 'job',
                    s.resolved_canonical_job_id, s.observation_id, 'normalization',
                    COALESCE(NULLIF(json_extract(s.unified_mapping_json,'$.rule_version'),''),s.rule_version),
-                   s.unified_mapping_hash, s.unified_mapping_json, s.observed_at
+                   s.unified_mapping_hash,
+                   json_patch(COALESCE(json_extract(s.payload_json,'$.unified_mapping'),'{}'),
+                              (SELECT json_group_object(key,value) FROM json_each(s.payload_json)
+                               WHERE key GLOB 'storage_evidence_*')),
+                   s.observed_at
             FROM acquisition_ingest_staging s
             WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+              AND NOT EXISTS (
+                  SELECT 1 FROM acquisition_rule_outputs previous
+                  WHERE previous.entity_kind='job' AND previous.entity_id=s.resolved_canonical_job_id
+                    AND previous.stage_name='normalization' AND previous.semantic_hash=s.unified_mapping_hash
+              )
             """,
             (batch_id,),
         )
@@ -2439,6 +2480,13 @@ class SqliteAcquisitionStore(_SqliteStore):
             FROM acquisition_ingest_staging s,
                  json_each(COALESCE(json_extract(s.unified_mapping_json,'$.fields'),'{}')) AS field
             WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+              AND EXISTS (SELECT 1 FROM acquisition_rule_outputs output
+                          WHERE output.entity_kind='job' AND output.entity_id=s.resolved_canonical_job_id
+                            AND output.source_observation_id=s.observation_id AND output.stage_name='normalization')
+              AND (COALESCE(json_extract(field.value,'$.state'),'unknown') NOT IN ('missing','unknown')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.raw_value')),'null') NOT IN ('null','[]','{}','""')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.normalized_value')),'null') NOT IN ('null','[]','{}','""')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.evidence')),'null') NOT IN ('null','[]','{}','""'))
             """,
             (batch_id,),
         )
@@ -2469,6 +2517,13 @@ class SqliteAcquisitionStore(_SqliteStore):
             FROM acquisition_ingest_staging s,
                  json_each(COALESCE(json_extract(s.unified_mapping_json,'$.company_fields'),'{}')) AS field
             WHERE s.batch_id=? AND s.projection_action IN ('new','update','unchanged')
+              AND EXISTS (SELECT 1 FROM acquisition_rule_outputs output
+                          WHERE output.entity_kind='job' AND output.entity_id=s.resolved_canonical_job_id
+                            AND output.source_observation_id=s.observation_id AND output.stage_name='normalization')
+              AND (COALESCE(json_extract(field.value,'$.state'),'unknown') NOT IN ('missing','unknown')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.raw_value')),'null') NOT IN ('null','[]','{}','""')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.normalized_value')),'null') NOT IN ('null','[]','{}','""')
+                   OR COALESCE(json_quote(json_extract(field.value,'$.evidence')),'null') NOT IN ('null','[]','{}','""'))
             """,
             (batch_id,),
         )
@@ -3064,6 +3119,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 observation_id = f"observation_{uuid4().hex}"
                 payload_hash = self._payload_hash(job)
                 raw_content_hash = hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest()
+                durable_payload, raw_reference = _catalog_storage_payloads(job, raw_job)
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO job_source_observations (
@@ -3086,7 +3142,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(job.get("apply_link") or original_url),
                         str(job.get("source_ats") or ""),
                         payload_hash,
-                        _json(compact_job_payload(job)),
+                        _json(durable_payload),
                         now,
                         str(job.get("source_display_name") or target.get("display_name") or ""),
                         str(job.get("source_token") or target.get("source_token") or ""),
@@ -3094,7 +3150,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(job.get("application_url") or ""),
                         str((job.get("application_destination") or {}).get("classification") if isinstance(job.get("application_destination"), Mapping) else "unknown"),
                         _json(list(job.get("quality_warnings") or [])),
-                        _json(compact_job_payload(raw_job, normalized=job)),
+                        _json(raw_reference),
                         raw_content_hash,
                         str(job.get("unified_rule_version") or UNIFIED_RULE_VERSION),
                     ),
@@ -3182,7 +3238,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         apply_url=str(job.get("application_url") or ""),
                         content_hash=payload_hash,
                         source_observation_id=observation_id,
-                        payload=job,
+                        payload={**durable_payload, 'quality_completeness': job['quality_completeness']},
                         now=now,
                         force_new_version=reopened_from_closed,
                     )
@@ -3193,7 +3249,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         source_observation_id=observation_id,
                         execution_id=cycle_id,
                         mapping=job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {},
-                        job=job,
+                        job={**job, **{key: value for key, value in durable_payload.items() if key.startswith('storage_evidence_')}},
                         observed_at=now,
                     )
                     applicant_snapshot = normalize_applicant_snapshot(
@@ -3765,8 +3821,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                 reason_code = str((reason or {}).get("code") or "unknown_rejection") if isinstance(reason, Mapping) else "unknown_rejection"
                 external_job_id = str(item.get("external_job_id") or "")
                 title = str(item.get("title") or "")
-                request_id = f"publication:{cycle_id}"
-                rejection_key = f"{request_id}:{external_job_id}:{title}:{reason_code}"
+                # A new acquisition cycle does not require another copy of the
+                # same current rejection. Last seen/cycle are refreshed below.
+                target_id = str(item.get('target_id') or 'publication')
+                identity = str(item.get('canonical_job_id') or external_job_id or item.get('title') or '')
+                request_id = f"publication-current:{target_id}:{identity}"
+                rejection_key = f"{target_id}:{identity}:{reason_code}"
                 rejection_id = f"acq_rejection_{hashlib.sha256(rejection_key.encode('utf-8')).hexdigest()[:32]}"
                 parameters.append(
                     (
@@ -3792,10 +3852,15 @@ class SqliteAcquisitionStore(_SqliteStore):
             values = ",".join("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" for _ in batch)
             connection.execute(
                 f"""
-                INSERT OR IGNORE INTO acquisition_job_rejections (
+                INSERT INTO acquisition_job_rejections (
                     rejection_id, request_id, cycle_id, task_id, target_id,
                     external_job_id, title, reason_code, observed_at, detail_json
                 ) VALUES {values}
+                ON CONFLICT(rejection_id) DO UPDATE SET
+                    cycle_id=excluded.cycle_id, task_id=excluded.task_id,
+                    title=excluded.title, external_job_id=excluded.external_job_id,
+                    observed_at=excluded.observed_at,
+                    detail_json=excluded.detail_json
                 """,
                 tuple(value for row in batch for value in row),
             )
@@ -8507,6 +8572,13 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         rule_version = str(mapping.get("rule_version") or UNIFIED_RULE_VERSION)
         now = str(observed_at or utc_now_iso())
+        semantic_hash = _normalization_mapping_hash(mapping, job)
+        existing_output = connection.execute(
+            "SELECT semantic_hash FROM acquisition_rule_outputs WHERE entity_kind='job' AND entity_id=? "
+            "AND stage_name='normalization' ORDER BY created_at DESC LIMIT 1", (canonical_job_id,))
+        previous = existing_output.fetchone() if existing_output is not None else None
+        if previous is not None and str(previous[0]) == semantic_hash:
+            return
         fields = mapping.get("fields") if isinstance(mapping.get("fields"), Mapping) else {}
         provenance_sql = """
             INSERT OR IGNORE INTO acquisition_field_provenance (
@@ -8528,6 +8600,8 @@ class SqliteAcquisitionStore(_SqliteStore):
         job_provenance_rows = []
         for field_name, record in fields.items():
             if not isinstance(record, Mapping):
+                continue
+            if not _has_field_evidence(record):
                 continue
             selected = int(str(record.get("state") or "unknown") in {"present", "inferred"})
             job_provenance_rows.append(
@@ -8555,6 +8629,8 @@ class SqliteAcquisitionStore(_SqliteStore):
         for field_name, record in mapped_company_fields.items():
             if not isinstance(record, Mapping):
                 continue
+            if not _has_field_evidence(record):
+                continue
             value = record.get("raw_value")
             company_provenance_rows.append(
                 (f"field_provenance_{uuid4().hex}", "company", company_id, str(field_name), source_observation_id,
@@ -8567,6 +8643,8 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
         for field_name, value in company_values.items():
             known = value not in (None, "", [])
+            if not known:
+                continue
             company_provenance_rows.append(
                 (f"field_provenance_{uuid4().hex}", "company", company_id, field_name, source_observation_id,
                  _json(value), _json(value), "present" if known else "unknown",
@@ -8577,7 +8655,12 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
         if company_provenance_rows:
             persist_provenance(company_provenance_rows)
-        output_payload = dict(mapping)
+        output_payload = compact_catalog_payload({
+            'unified_mapping': dict(mapping),
+            'description_text': job.get('description_text') or job.get('description') or '',
+        }).get('unified_mapping', {})
+        if job.get('storage_evidence_key'):
+            output_payload.update({key: value for key, value in job.items() if key.startswith('storage_evidence_')})
         connection.execute(
             """
             INSERT INTO acquisition_rule_outputs (
@@ -8590,7 +8673,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             """,
             (
                 f"rule_output_{uuid4().hex}", str(execution_id or ""), canonical_job_id, source_observation_id,
-                rule_version, hashlib.sha256(_json(output_payload).encode("utf-8")).hexdigest(),
+                rule_version, semantic_hash,
                 _json(output_payload), now,
             ),
         )
@@ -9139,6 +9222,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 return True
             existing_payload = _decode(version_row["payload_json"], {})
             existing_payload = existing_payload if isinstance(existing_payload, Mapping) else {}
+            if existing_payload.get('catalog_storage_version') == 1:
+                existing_payload = hydrate_description_aliases(existing_payload, str(version_row['description'] or ''))
             for key in (
                 "description_raw",
                 "description_html",
@@ -9187,6 +9272,10 @@ class SqliteAcquisitionStore(_SqliteStore):
             return
         version_id = f"posting_version_{uuid4().hex}"
         version_number = int(current["version_number"] or 0) + 1 if current is not None else 1
+        if payload.get('catalog_storage_version') == 1 and payload.get('storage_evidence_key'):
+            durable_payload = compact_catalog_payload(payload)
+        else:
+            durable_payload, _ = _catalog_storage_payloads(payload)
         connection.execute(
             """
             INSERT INTO job_posting_versions (
@@ -9204,7 +9293,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 location,
                 apply_url,
                 source_observation_id,
-                _json(compact_job_payload(payload)),
+                _json(durable_payload),
                 now,
             ),
         )

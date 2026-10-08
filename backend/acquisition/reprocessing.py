@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.acquisition.quality import normalize_job_for_ingestion, stable_content_payload
+from backend.acquisition.storage_evidence import restore_catalog_evidence
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_session, database_target_info
 from backend.database.initialization import initialize_database
@@ -358,15 +359,24 @@ def _store_duplicate_candidates(connection, *, rule_version: str, now: str) -> i
     return created
 
 
-def _process_observation(connection, row: Mapping[str, Any], *, execution_id: str, now: str) -> dict[str, int]:
-    observation_id = str(row["observation_id"])
+def _reprocessing_source_payload(row: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Hydrate private evidence only for explicitly requested rule replay."""
     stored_payload = _decode(row.get("raw_payload_json"), {})
     historical = False
+    if isinstance(stored_payload, Mapping) and stored_payload.get("storage_evidence_key"):
+        return dict(restore_catalog_evidence(stored_payload)["raw_payload"]), False
     if not isinstance(stored_payload, Mapping) or not stored_payload:
         normalized_payload = _decode(row.get("payload_json"), {})
+        if isinstance(normalized_payload, Mapping) and normalized_payload.get("storage_evidence_key"):
+            return dict(restore_catalog_evidence(normalized_payload)["raw_payload"]), False
         stored_payload = normalized_payload.get("source_raw_payload") if isinstance(normalized_payload, Mapping) and isinstance(normalized_payload.get("source_raw_payload"), Mapping) else normalized_payload
         historical = True
-    raw_job = dict(stored_payload) if isinstance(stored_payload, Mapping) else {}
+    return dict(stored_payload) if isinstance(stored_payload, Mapping) else {}, historical
+
+
+def _process_observation(connection, row: Mapping[str, Any], *, execution_id: str, now: str) -> dict[str, int]:
+    observation_id = str(row["observation_id"])
+    raw_job, historical = _reprocessing_source_payload(row)
     target_id = str(row.get("target_id") or "")
     target_row = connection.execute(
         "SELECT display_name, canonical_target_url, provenance_url, config_json, connector, source_token FROM acquisition_targets WHERE target_id=?",

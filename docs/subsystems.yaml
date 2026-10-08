@@ -91,6 +91,8 @@ subsystems:
       - scripts/run_manifested_employer.py
       - scripts/publish_producer_states.py
       - scripts/build_master_jobs_catalog.py
+      - scripts/reduce_catalog_storage.py
+      - scripts/maintain_catalog_storage.py
       - backend/acquisition/producer_adapters.py
     documentation:
       - docs/reverse-engineering/05-subsystems/acquisition-and-collectors.md
@@ -105,6 +107,7 @@ subsystems:
     key_invariants:
       - No NET-OPS script runs against a live provider outside an authorized host or without --dry-run/--help in review.
       - RUNR_ACQUISITION_LIVE_NETWORK_ENABLED is never set true in tests.
+      - Catalog source evidence must be written and verified in shared private object storage before hot JSON is compacted; explicit replay restores evidence, feed readers do not.
       - CompanyEnrich autocomplete is a distinct free, bounded, fail-closed domain-seed path; it never calls paid enrichment and never creates a career URL.
       - Employer collection unions every independent validated career source (distinct host or ATS tenant) within the target/request budget; every discovered source persists in coverage.source_inventory with per-source counts and an explicit deferral reason.
       - Migrations, deploy/**, and admin acquisition surfaces are never edited or restored from this subsystem.
@@ -225,6 +228,7 @@ subsystems:
     exclusions: []
     entry_points:
       - deploy/start.sh
+      - deploy/run-catalog-storage-maintenance.sh
       - deploy/systemd/*.{service,timer}
       - .github/workflows/ci.yml
     documentation:

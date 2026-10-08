@@ -8,7 +8,7 @@ from backend.bootstrap import create_backend
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 from scripts.process_published_job_descriptions import next_batch, run, save_batch
 from scripts.backfill_published_job_descriptions_rules import run_rules_backfill
-from test_phase_c_personalized_jobs import _seed_catalog
+from tests.test_phase_c_personalized_jobs import _seed_catalog
 
 
 def test_pilot_accepts_multiple_sections_per_source_and_hides_invalid_numeric_output():

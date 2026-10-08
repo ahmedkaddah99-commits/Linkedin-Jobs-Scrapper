@@ -4,6 +4,24 @@
 
 ## Compact durable job payloads (2026-10-08)
 
+The catalog storage release additionally archives original source and normalization
+evidence as digest-verified gzip objects in private shared R2 storage before compacting
+hot rows. Equal description aliases and repeated mapping evidence are removed;
+conflicting descriptions, current field states and paid structured outputs remain.
+Explicit reprocessing restores archived source evidence. Ordinary feed reads use SQL.
+Unchanged recollection does not create another normalization output or empty provenance.
+Rejections keep one current record per target, job identity and reason.
+
+`scripts/reduce_catalog_storage.py` is an operator-only, resumable historical backfill.
+It preserves immutable triggers inside each transaction, checks original row values
+before updates, and verifies updated rows before advancing its database-bound checkpoint.
+`scripts/maintain_catalog_storage.py` runs bounded retention: three successful snapshots
+plus active/head/rollback/checkpoint pins, seven days of rejection history, redundant
+empty provenance, and fourteen days of unreferenced archived source observations.
+Nonterminal replay runs block source pruning and appear in the receipt. User jobs,
+paid intelligence, current versions and referenced evidence are retained. Deleted SQL
+rows free pages for reuse; reducing allocated cloud bytes requires separate reclamation.
+
 `backend/acquisition/storage_payload.py` compacts job JSON at staged ingestion,
 observation, and posting-version write boundaries after extraction. It removes
 the unused fingerprint object, exact duplicate provenance and source fields,

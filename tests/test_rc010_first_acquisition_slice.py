@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from backend.acquisition.storage_evidence import restore_catalog_evidence
 from pathlib import Path
 
 from backend.acquisition.producer_adapters import (
@@ -231,7 +232,8 @@ def test_rc010_dual_source_slice_reaches_jobs_and_preserves_public_head_on_failu
     assert {row["target_id"] for row in observations} == {employer["target_id"], linkedin["target_id"]}
     assert {row["source_ats"] for row in observations} == {"greenhouse", "linkedin"}
     contracts = [
-        json.loads(row["raw_payload_json"])["source_raw_payload"]["observation_contract"]
+        restore_catalog_evidence(
+            json.loads(row["raw_payload_json"]))['raw_payload']["source_raw_payload"]["observation_contract"]
         for row in observations
     ]
     assert {contract["canonical_company_id"] for contract in contracts} == {master_row["canonical_company_id"]}

@@ -33,6 +33,23 @@ def _row_payload(row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+def _original_posting(row) -> dict[str, Any]:
+    original = _decode(row["original_json"], {})
+    if not isinstance(original, dict):
+        return {}
+    if original.get('catalog_storage_version') != 1 or not isinstance(original.get('original_description_aliases'), list):
+        return original
+    aliases = original['original_description_aliases']
+    description = row['original_version_description']
+    if not isinstance(description, str) or any(key not in ('description', 'description_raw', 'description_html', 'description_text') for key in aliases):
+        raise ValueError('Original posting description reference is unavailable')
+    result = {key: value for key, value in original.items()
+              if not key.startswith('storage_evidence_') and key not in ('catalog_storage_version', 'original_description_aliases')}
+    for key in aliases:
+        result.setdefault(key, description)
+    return result
+
+
 def _profile_status(profile: Mapping[str, Any]) -> str:
     fields = profile.get("fields") if isinstance(profile, Mapping) else {}
     if not isinstance(fields, Mapping) or not fields:
@@ -486,7 +503,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
     ) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM job_description_intelligence WHERE version_id = ?",
+                "SELECT i.*,v.description AS original_version_description FROM job_description_intelligence i LEFT JOIN job_posting_versions v ON v.version_id=i.version_id WHERE i.version_id = ?",
                 (str(version_id or ""),),
             ).fetchone()
         if row is None:
@@ -499,7 +516,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "content_hash": str(row["content_hash"] or ""),
             "summary": _decode(row["summary_json"], {}),
             "structured_description": _decode(row["structured_json"], {}),
-            "original_posting": _decode(row["original_json"], {}),
+            "original_posting": _original_posting(row),
             "provider": str(row["provider"] or ""),
             "model": str(row["model"] or ""),
             "prompt_version": str(row["prompt_version"] or ""),
@@ -855,7 +872,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         placeholders = ",".join("?" for _ in ids)
         with self._connect() as connection:
             rows = connection.execute(
-                f"SELECT * FROM job_description_intelligence WHERE version_id IN ({placeholders})",
+                f"SELECT i.*,v.description AS original_version_description FROM job_description_intelligence i LEFT JOIN job_posting_versions v ON v.version_id=i.version_id WHERE i.version_id IN ({placeholders})",
                 ids,
             ).fetchall()
         return {
@@ -865,7 +882,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 "content_hash": str(row["content_hash"] or ""),
                 "summary": _decode(row["summary_json"], {}),
                 "structured_description": _decode(row["structured_json"], {}),
-                "original_posting": _decode(row["original_json"], {}),
+                "original_posting": _original_posting(row),
                 "provider": str(row["provider"] or ""),
                 "model": str(row["model"] or ""),
                 "prompt_version": str(row["prompt_version"] or ""),

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from backend.acquisition.phase_b import normalize_phase_b_jobs
+from backend.acquisition.storage_evidence import restore_catalog_evidence
 from backend.acquisition.producer_adapters import (
     SqliteAcquisitionTransport,
     adapt_employer_job,
@@ -177,7 +178,7 @@ def test_foreign_label_and_invalid_apply_stay_traceable_and_easy_apply_is_reject
             ("foreign-label-1",),
         ).fetchone()
     raw = json.loads(row["raw_payload_json"])
-    assert raw["source_company_name"] == "Foreign Holdings Ltd"
+    assert restore_catalog_evidence(raw)["raw_payload"]["source_company_name"] == "Foreign Holdings Ltd"
     assert "source_labeled_employer_name_normalized" in json.loads(row["quality_warnings_json"])
 
     policy_result = normalize_phase_b_jobs(
