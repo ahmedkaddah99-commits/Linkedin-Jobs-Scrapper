@@ -164,7 +164,7 @@ def maintain_catalog_storage(db_path: Path, *, apply: bool = False,
         def batch(db, phase, prepared=None):
             # BEGIN IMMEDIATE prevents a publisher from changing the pins between
             # their read and deletion on SQLite. libSQL also uses a write transaction.
-            db.execute('BEGIN IMMEDIATE' if db.backend == 'sqlite' else 'BEGIN')
+            db.execute('BEGIN IMMEDIATE')
             changed = dict(deleted_memberships=0, deleted_publications=0,
                            deleted_rejections=0, deleted_empty_provenance=0, deleted_source_observations=0, logical_bytes_removed=0, scanned_provenance=0, scanned_sources=0, source_verification_failures=0)
             last_rowid = 0

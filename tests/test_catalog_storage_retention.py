@@ -193,3 +193,19 @@ def test_receipt_reports_replay_pin_backlog(catalog,tmp_path):
     assert receipt['complete'] is False
     with sqlite3.connect(catalog) as db:
         assert {r[0] for r in db.execute('SELECT status FROM acquisition_reprocessing_runs')} == {'failed','incomplete'}
+
+
+def test_remote_retention_reserves_writer_before_reading_candidates(catalog, monkeypatch):
+    from backend.database.connection import DatabaseConnection
+    original = DatabaseConnection.execute
+    begins = []
+
+    def remote_execute(db, sql, parameters=()):
+        db.backend = 'libsql'
+        if sql.startswith('BEGIN'):
+            begins.append(sql)
+        return original(db, sql, parameters)
+
+    monkeypatch.setattr(DatabaseConnection, 'execute', remote_execute)
+    maintain_catalog_storage(catalog, apply=True, batch_size=2, max_seconds=5, max_batches=1)
+    assert begins == ['BEGIN IMMEDIATE']
