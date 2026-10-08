@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.domain.job_filter_source_cache import use_cached_source
+from backend.domain.job_filter_contract import CHOICES, ENUM_FIELDS, COUNTRY_ALIASES
 from backend.database.connection import database_read_session, database_target_info
 from backend.repositories.sqlite_core import _SqliteStore
 from backend.acquisition.storage_evidence import archive_catalog_evidence
@@ -1253,7 +1254,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "language": ["json_extract(catalog.version_payload_json, '$.languages')", "json_extract(catalog.version_payload_json, '$.language_requirements')", "json_extract(catalog.version_payload_json, '$.required_languages')"],
             "work_authorization": ["json_extract(catalog.version_payload_json, '$.work_authorization')", "json_extract(catalog.version_payload_json, '$.authorization')", "json_extract(catalog.version_payload_json, '$.work_permit')"],
             "sponsorship": ["json_extract(catalog.version_payload_json, '$.sponsorship')", "json_extract(catalog.version_payload_json, '$.visa_sponsorship')", "json_extract(catalog.version_payload_json, '$.sponsors_h1b')"],
-            "company_stage": ["json_extract(catalog.version_payload_json, '$.company_stage')"],
+            "company_stage": ["json_extract(catalog.company_profile_json, '$.fields.company_stage.value')", "json_extract(catalog.version_payload_json, '$.company_stage')"],
             "education": ["json_extract(catalog.version_payload_json, '$.education')", "json_extract(catalog.version_payload_json, '$.education_level')", "json_extract(catalog.version_payload_json, '$.degree')", "json_extract(catalog.version_payload_json, '$.required_education')"],
             "preferred_major": ["json_extract(catalog.version_payload_json, '$.preferred_major')", "json_extract(catalog.version_payload_json, '$.preferred_majors')", "json_extract(catalog.version_payload_json, '$.major')", "json_extract(catalog.version_payload_json, '$.majors')"],
             "security_clearance": ["json_extract(catalog.version_payload_json, '$.security_clearance')", "json_extract(catalog.version_payload_json, '$.clearance')"],
@@ -1298,11 +1299,30 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                             "role_type": {"individual_contributor":"ic", "people_manager":"manager"}}
                 if field in synonyms:
                     selected = "CASE " + selected + " " + " ".join(f"WHEN '{original}' THEN '{mapped}'" for original,mapped in synonyms[field].items()) + " ELSE " + selected + " END"
-                predicates.append("(" + " OR ".join(f"{selected} LIKE ?" for _ in values) + ")")
-                params.extend(f"%{value.replace('-', '_').replace(' ', '_')}%" for value in values)
+                # Compare each scalar/array member, never substrings (internship != intern).
+                members = f"CASE WHEN json_valid({selected}) AND json_type({selected})='array' THEN {selected} ELSE json_array({selected}) END"
+                member = "LOWER(REPLACE(REPLACE(CAST(choice.value AS TEXT),'-','_'),' ','_'))"
+                member = "CASE " + member + " " + " ".join(f"WHEN '{original}' THEN '{mapped}'" for original, mapped in synonyms.get(field, {}).items()) + " ELSE " + member + " END"
+                allowed = {item[0] for item in CHOICES[ENUM_FIELDS[field]]} if field in ENUM_FIELDS else {"ic", "manager"}
+                values = [value for value in values if value in allowed]
+                predicates.append(f"EXISTS(SELECT 1 FROM json_each({members}) choice WHERE {member} IN (" + ",".join("?" for _ in values) + "))" if values else "0")
+                params.extend(values)
             elif field == "company_id":
                 predicates.append("catalog.company_id IN (" + ",".join("?" for _ in values) + ")")
                 params.extend(str(item).strip() for item in (requested if isinstance(requested, (list, tuple, set)) else [requested]) if str(item).strip())
+            elif field == "country":
+                clauses = []
+                for value in values:
+                    aliases = COUNTRY_ALIASES.get(value, [value])
+                    for expression in field_exprs["country"][:2]:
+                        clauses.append(f"LOWER(COALESCE({expression}, '')) IN (" + ",".join("?" for _ in aliases) + ")")
+                        params.extend(aliases)
+                    # Only full country names in free-text locations: US must not match Australia.
+                    names = [alias for alias in aliases if len(alias) > 3]
+                    for name in names:
+                        clauses.append("LOWER(COALESCE(catalog.location, '')) LIKE ?")
+                        params.append(f"%{name}%")
+                predicates.append("(" + " OR ".join(clauses) + ")")
             elif field in field_exprs:
                 expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
                 predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
@@ -1322,7 +1342,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                         predicates.append(f"LOWER(COALESCE({expr}, '')) NOT LIKE ?")
                         params.append(f"%{value}%")
             elif field in {"required_experience_min", "required_experience_max"}:
-                paths = ("$.experience_years_min", "$.structured_description.experience_years_min.value")
+                paths = ("$.experience_years_min", "$.required_experience_years", "$.structured_description.experience_years_min.value")
                 amount = "COALESCE(" + ", ".join(f"CASE WHEN json_type(catalog.version_payload_json, '{path}') IN ('integer','real') THEN CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL) END" for path in paths) + ", CASE WHEN json_type(catalog.filter_json, '$.required_experience_years') IN ('integer','real') THEN CAST(json_extract(catalog.filter_json, '$.required_experience_years') AS REAL) END)"
                 operator = ">=" if field.endswith("_min") else "<="
                 predicates.append(f"{amount} {operator} ?")
@@ -1339,10 +1359,16 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 else:
                     predicates.append("LOWER(COALESCE(json_extract(catalog.company_profile_json, '$.fields.company_type.value'), json_extract(catalog.version_payload_json, '$.company_type'), '')) NOT IN ('staffing_agency', 'staffing agency', 'recruiter', 'recruitment agency')")
             elif field in {"salary_min", "salary_max"}:
-                path = "$.salary.max" if field == "salary_min" else "$.salary.min"
+                paths = ("$.salary.max", "$.salary.min") if field == "salary_min" else ("$.salary.min", "$.salary.max")
+                amount = "COALESCE(" + ",".join(f"CASE WHEN json_type(catalog.version_payload_json, '{path}') IN ('integer','real') THEN CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL) END" for path in paths) + ")"
+                period = "LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.salary.period'), 'year'))"
+                annual = f"(CASE WHEN {period} IN ('year','yearly','annual','annually','per_year') THEN {amount} WHEN {period} IN ('month','monthly','per_month') THEN {amount}*12 END)"
                 operator = ">=" if field == "salary_min" else "<="
-                predicates.append(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL) {operator} ?")
+                predicates.append(f"{annual} {operator} ?")
                 params.append(float(values[0]))
+            elif field == "salary_currency":
+                predicates.append("LOWER(COALESCE(json_extract(catalog.version_payload_json, '$.salary.currency'), '')) = ?")
+                params.append(values[0])
             elif field in {"funding_min", "funding_max"}:
                 operator = ">=" if field == "funding_min" else "<="
                 predicates.append(f"CAST(json_extract(catalog.company_profile_json, '$.fields.total_funding.value') AS REAL) {operator} ?")

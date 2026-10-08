@@ -1,0 +1,7 @@
+{
+  "employmentType": [["full_time", "Full-time"], ["contract", "Contract"], ["part_time", "Part-time"], ["internship", "Internship"], ["working_student", "Working student"], ["apprenticeship", "Apprenticeship"]],
+  "workArrangement": [["onsite", "Onsite"], ["hybrid", "Hybrid"], ["remote", "Remote"]],
+  "experienceLevel": [["intern", "Intern/New Grad"], ["entry", "Entry Level"], ["mid", "Mid Level"], ["senior", "Senior Level"], ["lead", "Lead/Staff"], ["director", "Director/Executive"]],
+  "datePosted": [["24h", "Past 24 hours"], ["3d", "Past 3 days"], ["7d", "Past week"], ["30d", "Past month"]],
+  "companyStage": [["early", "Early Stage"], ["growth", "Growth Stage"], ["late", "Late Stage"], ["public", "Public Company"]]
+}
