@@ -27,6 +27,7 @@ def _snapshot(cycle='cycle'):
         'jobs': [{'job_id': 'job', 'title': 'Software Engineer',
                   'url': 'https://acme.example/jobs/1',
                   'description': 'Build Python systems',
+                  'description_text': 'Build Python systems',
                   'source_raw_payload': {'unique_salary_evidence': 12345}}],
     }
 
@@ -54,9 +55,12 @@ def test_bulk_writer_archives_original_and_persists_compact_projection(tmp_path,
 
 def test_unchanged_recollection_does_not_create_a_repair_version(tmp_path, monkeypatch):
     store = _store(tmp_path, monkeypatch)
-    store.ingest_snapshots_bulk([_snapshot('first')])
+    first = _snapshot('first')
+    first['jobs'][0]['last_seen_at'] = first['observed_at']
+    store.ingest_snapshots_bulk([first])
     second = _snapshot('second')
     second['observed_at'] = '2026-10-08T13:00:00+00:00'
+    second['jobs'][0]['last_seen_at'] = second['observed_at']
     store.ingest_snapshots_bulk([second])
     with store._connect() as connection:
         assert connection.execute('SELECT count(*) FROM job_posting_versions').fetchone()[0] == 1
@@ -79,6 +83,19 @@ def test_repeated_publication_rejection_updates_one_current_state(tmp_path, monk
         store._persist_publication_rejections(connection, cycle_id='second', rejected_rows=[rejection])
         assert connection.execute('SELECT count(*) FROM acquisition_job_rejections').fetchone()[0] == 1
         assert connection.execute('SELECT cycle_id FROM acquisition_job_rejections').fetchone()[0] == 'second'
+
+
+def test_changed_description_creates_new_normalization_evidence(tmp_path, monkeypatch):
+    store = _store(tmp_path, monkeypatch)
+    store.ingest_snapshots_bulk([_snapshot('first')])
+    second = _snapshot('second')
+    second['observed_at'] = '2026-10-08T13:00:00+00:00'
+    second['jobs'][0]['description'] = 'Build different systems'
+    second['jobs'][0]['description_text'] = 'Build different systems'
+    store.ingest_snapshots_bulk([second])
+    with store._connect() as connection:
+        assert connection.execute('SELECT count(*) FROM job_posting_versions').fetchone()[0] == 2
+        assert connection.execute('SELECT count(*) FROM acquisition_rule_outputs').fetchone()[0] == 2
 
 
 def test_failed_archive_prevents_catalog_projection(tmp_path, monkeypatch):

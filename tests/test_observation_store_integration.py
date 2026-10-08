@@ -11,6 +11,7 @@ from backend.acquisition.producer_adapters import (
     SqliteAcquisitionTransport,
 )
 from backend.bootstrap import create_backend
+from backend.acquisition.storage_evidence import create_catalog_evidence_storage, restore_catalog_evidence
 
 
 def _target(target_id: str) -> dict[str, object]:
@@ -104,10 +105,10 @@ def test_adapter_transport_publishes_bounded_final_inventory_and_replays_safely(
         ).fetchone()["raw_payload_json"]
     assert observation_count == 26
     assert active_count == 26
-    compact_raw = json.loads(raw_payload)
+    compact_raw = restore_catalog_evidence(json.loads(raw_payload), create_catalog_evidence_storage())["raw_payload"]
     contract = compact_raw["source_raw_payload"]["observation_contract"]
-    assert "source_record" not in contract
-    assert "normalized_mapping" not in contract
+    assert contract["source_job_id"] == observations[0].source_job_id
+    assert "source_raw_payload" not in json.loads(raw_payload)
     with store._connect() as connection:
         payload = json.loads(connection.execute(
             "SELECT payload_json FROM job_source_observations WHERE cycle_id=? LIMIT 1",
@@ -117,7 +118,7 @@ def test_adapter_transport_publishes_bounded_final_inventory_and_replays_safely(
     assert "field_provenance" not in payload
     assert payload["description_text"].startswith("Build platform service")
     assert (
-        json.loads(raw_payload)["source_raw_payload"]["observation_contract"]["schema_version"]
+        compact_raw["source_raw_payload"]["observation_contract"]["schema_version"]
         == "runr_source_observation_v1"
     )
 
@@ -244,4 +245,5 @@ def test_linkedin_observation_uses_the_same_store_contract(tmp_path: Path) -> No
             (cycle["cycle_id"],),
         ).fetchone()
     assert stored["source_ats"] == "linkedin"
-    assert json.loads(stored["raw_payload_json"])["source_raw_payload"]["observation_contract"]["source"] == "linkedin"
+    archived_raw = restore_catalog_evidence(json.loads(stored["raw_payload_json"]), create_catalog_evidence_storage())["raw_payload"]
+    assert archived_raw["source_raw_payload"]["observation_contract"]["source"] == "linkedin"

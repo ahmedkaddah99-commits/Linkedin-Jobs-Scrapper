@@ -96,6 +96,11 @@ def _normalization_mapping_hash(mapping: Mapping[str, Any], job: Mapping[str, An
         'description_text': job.get('description_text') or job.get('description') or '',
     }).get('unified_mapping', {})
     projection = _semantic_payload(projection)
+    liveness = projection.get('timestamps', {}).get('last_seen_at')
+    if isinstance(liveness, dict):
+        liveness.pop('normalized_value', None)
+    description = job.get('description_text') or job.get('description') or ''
+    projection['canonical_description_sha256'] = hashlib.sha256(str(description).encode('utf-8')).hexdigest()
     for record in projection.get('company_urls', []):
         if isinstance(record, dict):
             record.pop('first_seen_at', None)
