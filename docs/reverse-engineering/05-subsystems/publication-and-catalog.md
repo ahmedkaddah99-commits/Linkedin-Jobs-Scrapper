@@ -228,3 +228,39 @@ The search API normalizes a scalar `q` into one search term; previously the repo
 2. WS3-G8: wire or retire `merge_source_records` in the publication path.
 3. WS3-G9: ~~move `acquisition_publisher_checkpoints` into the migration registry (coordinate WS-5).~~ Done by T31 (migration `061_acquisition_publisher_checkpoints`).
 4. WS3-G10: add direct tests for `apply_company_identity_crosswalk`.
+
+
+## Publication recovery ? 2026-10-09
+
+Migration `076_catalog_publication_recovery` records active unpublished jobs in
+`acquisition_publication_queue`, backfills existing gaps, and requeues changed
+versions/lifecycle and jobs dropped by a head change. The bounded
+`scripts/process_catalog_publication.py` worker validates current records under
+the head policy and commits membership, snapshot delta, audit and queue outcome
+in one transaction. Head timestamp, job version, lifecycle and queue revision
+checks fence changes during validation. Failed commits leave work pending.
+Rejected jobs retain reason codes; source/version changes requeue them.
+
+The queue worker shares `publisher.lock` with the producer publisher but does
+not require either collector lock. A thirty-second systemd timer retries bounded
+120-second rounds. The publisher wrapper also drains recovery before source
+locks. Publication policy is preserved; AI enrichment is not introduced as a
+prerequisite. Existing published membership is preserved during recovery.
+
+Producer cycle identity now follows the durable checkpoint window, manifest,
+source version and policy rather than changing collector round IDs. Capped
+rounds resume committed tasks; conservative checkpoint watermarks prevent later
+source updates from being skipped. Empty tasks use set-based bounded updates.
+The observed Hrana connection-close error uses the existing bounded transient
+retry/transaction replay mechanism. Incremental publication projects only gate
+inputs and applies snapshot deltas on the server instead of uploading the full
+snapshot after every batch.
+
+Monitoring exposes pending/rejected queue counts and last evaluation timestamp.
+A separate stalled-backlog alert cannot resolve just because the head advanced.
+Bounded `max_companies` stops are reported as partial rather than unknown.
+
+Verification: `tests/test_publication_recovery.py`, producer delivery, database
+connection/migrations, publication completeness/recovery and observability tests.
+Live before/after evidence is retained under
+`data/audit/publication_recovery_2026-10-09/`.

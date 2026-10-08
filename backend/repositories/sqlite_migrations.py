@@ -4123,6 +4123,78 @@ MIGRATIONS = (
 )
 
 
+def _apply_catalog_publication_recovery(connection):
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS acquisition_publication_queue (
+            canonical_job_id TEXT PRIMARY KEY,
+            version_id TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason_codes_json TEXT NOT NULL DEFAULT '[]',
+            policy_version TEXT NOT NULL DEFAULT '',
+            evaluated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_publication_queue_pending
+            ON acquisition_publication_queue(status,canonical_job_id);
+        CREATE TRIGGER IF NOT EXISTS publication_recovery_new
+        AFTER INSERT ON canonical_jobs WHEN NEW.lifecycle_state='active'
+        BEGIN
+            INSERT INTO acquisition_publication_queue(canonical_job_id,version_id)
+            VALUES(NEW.canonical_job_id,NEW.current_version_id)
+            ON CONFLICT(canonical_job_id) DO UPDATE SET
+                version_id=excluded.version_id,revision=revision+1,status='pending';
+        END;
+        CREATE TRIGGER IF NOT EXISTS publication_recovery_changed
+        AFTER UPDATE OF current_version_id,lifecycle_state,last_seen_at ON canonical_jobs
+        WHEN (NEW.current_version_id!=OLD.current_version_id OR NEW.lifecycle_state!=OLD.lifecycle_state
+              OR NEW.last_seen_at!=OLD.last_seen_at)
+          AND NOT EXISTS(SELECT 1 FROM acquisition_publication_jobs a
+              JOIN acquisition_publication_head h ON h.publication_id=a.publication_id AND h.head_id=1
+              WHERE a.canonical_job_id=NEW.canonical_job_id)
+        BEGIN
+            INSERT INTO acquisition_publication_queue(canonical_job_id,version_id)
+            VALUES(NEW.canonical_job_id,NEW.current_version_id)
+            ON CONFLICT(canonical_job_id) DO UPDATE SET
+                version_id=excluded.version_id,revision=revision+1,status='pending',
+                reason_codes_json='[]',policy_version='',evaluated_at='';
+        END;
+        INSERT OR IGNORE INTO acquisition_publication_queue(canonical_job_id,version_id)
+        SELECT j.canonical_job_id,j.current_version_id FROM canonical_jobs j
+        WHERE j.lifecycle_state='active' AND NOT EXISTS(
+            SELECT 1 FROM acquisition_publication_jobs a JOIN acquisition_publication_head h
+              ON h.publication_id=a.publication_id AND h.head_id=1
+            WHERE a.canonical_job_id=j.canonical_job_id);
+        CREATE TRIGGER IF NOT EXISTS publication_recovery_head_changed
+        AFTER UPDATE OF publication_id ON acquisition_publication_head
+        WHEN NEW.publication_id!=OLD.publication_id
+        BEGIN
+            INSERT INTO acquisition_publication_queue(canonical_job_id,version_id)
+            SELECT j.canonical_job_id,j.current_version_id FROM acquisition_publication_jobs old_jobs
+            JOIN canonical_jobs j ON j.canonical_job_id=old_jobs.canonical_job_id
+            WHERE old_jobs.publication_id=OLD.publication_id AND j.lifecycle_state='active'
+              AND NOT EXISTS(SELECT 1 FROM acquisition_publication_jobs new_jobs
+                WHERE new_jobs.publication_id=NEW.publication_id AND new_jobs.canonical_job_id=j.canonical_job_id)
+            ON CONFLICT(canonical_job_id) DO UPDATE SET version_id=excluded.version_id,
+                revision=revision+1,status='pending',reason_codes_json='[]',evaluated_at='';
+        END;
+        CREATE TRIGGER IF NOT EXISTS publication_recovery_policy_changed
+        AFTER UPDATE OF policy_version ON acquisition_publications
+        WHEN NEW.policy_version!=OLD.policy_version AND EXISTS(
+            SELECT 1 FROM acquisition_publication_head WHERE publication_id=NEW.publication_id)
+        BEGIN
+            UPDATE acquisition_publication_queue SET status='pending',revision=revision+1
+            WHERE status='rejected' AND policy_version!=NEW.policy_version;
+        END;
+    """)
+
+
+MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
+    '076_catalog_publication_recovery',
+    'Durably reconcile active unpublished jobs independently of producer cycles.',
+    _apply_catalog_publication_recovery,
+))
+
+
 def current_migration_head() -> str:
     """Return the registry head used by release compatibility checks."""
 

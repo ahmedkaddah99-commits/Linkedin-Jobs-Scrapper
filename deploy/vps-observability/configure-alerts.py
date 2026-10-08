@@ -35,6 +35,10 @@ RULES = [
      'The shared publication head has not advanced for 30 hours. Inspect publisher phase and checkpoints.'),
     ('runtime', 'VPS publisher running unusually long', 'max(runr_acquisition_running_elapsed_seconds{source="publisher"}) > bool 7200', '5m', 'warning',
      'Publication has run for more than two hours. Inspect its phase; this alert does not stop the process.'),
+    ('backlog', 'VPS publication backlog stalled',
+     '(runr_publication_pending_jobs > bool 0) * (time() - runr_publication_progress_timestamp_seconds > bool 900)',
+     '10m','critical',
+     'Stored jobs remain queued and publication recovery has made no progress for fifteen minutes. A newer head alone does not resolve this backlog.'),
 ]
 
 

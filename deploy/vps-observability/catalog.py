@@ -28,11 +28,15 @@ def check_catalog(env_path):
         checkpoints = connection.execute('SELECT source,source_rowid,source_watermark,bootstrap_complete,updated_at FROM acquisition_publisher_checkpoints ORDER BY source LIMIT 3').fetchall()
         cycle = connection.execute('SELECT cycle_id,status,started_at,completed_at,updated_at,jobs_observed,jobs_new,jobs_rejected,jobs_published,error_code FROM acquisition_cycles ORDER BY scheduled_at DESC LIMIT 1').fetchone()
         tasks = connection.execute('SELECT status,COUNT(*) AS count FROM acquisition_tasks WHERE cycle_id=? GROUP BY status', (cycle['cycle_id'] if cycle else '',)).fetchall()
+        queue={}
+        if connection.execute("SELECT name FROM sqlite_master WHERE name='acquisition_publication_queue'").fetchone():
+            queue={row['status']:int(row['jobs']) for row in connection.fetch_read_rows('SELECT status,COUNT(*) AS jobs FROM acquisition_publication_queue GROUP BY status')}
+            queue['last_evaluated_at']=connection.fetch_read_rows('SELECT MAX(evaluated_at) AS at FROM acquisition_publication_queue')[0]['at'] or ''
         return {"checked_at": checked_at, "access_ok": True, "binding": "vps_configured_turso",
                 "head": dict(head) if head else {}, "head_jobs": int(count['jobs']),
                 "checkpoints": [dict(row) for row in checkpoints],
                 "latest_cycle": dict(cycle) if cycle else {},
-                "tasks": [dict(row) for row in tasks]}
+                "tasks": [dict(row) for row in tasks],"publication_queue":queue}
     except Exception as error:
         # Driver exception text can contain credential URLs; expose class only.
         return {"checked_at": checked_at, "access_ok": False, "error": type(error).__name__}

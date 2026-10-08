@@ -108,6 +108,8 @@ def summarize(objects):
                 outcome = "completed"
             elif status == "degraded":
                 outcome = "partial"
+            elif status == "stopped":
+                outcome = 'partial' if obj.get('stop_reason') in {'max_companies','timeout'} else 'failed'
             elif status in {"failed", "error", "recovery_required"}:
                 outcome = "failed"
             elif status == "already_running":
@@ -232,6 +234,11 @@ def prometheus(data):
         head_at = epoch(catalog.get("head", {}).get("updated_at"))
         if head_at is not None:
             lines.append(f'runr_catalog_head_timestamp_seconds {head_at}')
+        queue=catalog.get('publication_queue')
+        if queue is not None:
+            lines.append(f'runr_publication_pending_jobs {queue.get("pending",0)}')
+            lines.append(f'runr_publication_rejected_jobs {queue.get("rejected",0)}')
+            lines.append(f'runr_publication_progress_timestamp_seconds {epoch(queue.get("last_evaluated_at")) or 0}')
     for source, state in data["sources"].items():
         labels = '{source="' + source + '"}'
         values = {

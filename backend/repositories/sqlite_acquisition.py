@@ -377,6 +377,13 @@ _PUBLICATION_PAYLOAD_MAPPINGS = frozenset(
 )
 
 
+def _publication_payload_sql(alias: str = 'v') -> str:
+    fields=tuple(dict.fromkeys((*_PUBLICATION_PAYLOAD_FIELDS,'job_title','extraction_method','format',
+        'source_provider','source_ats','source_job_url','job_detail_url','apply_url_canonical')))
+    pairs=','.join(f"'{key}',json_extract({alias}.payload_json,'$.{key}')" for key in fields)
+    return f"json_object({pairs},'source_raw_payload',json_object('format',json_extract({alias}.payload_json,'$.source_raw_payload.format')))"
+
+
 def _compact_publication_candidate_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Keep only validator inputs; raw producer payloads can be very large."""
 
@@ -3938,7 +3945,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                                     j.last_verified_at, j.current_version_id,
                                     COALESCE(v.description, '') AS version_description,
                                     COALESCE(v.location, '') AS version_location,
-                                    COALESCE(v.payload_json, '{{}}') AS version_payload_json,
+                                    {_publication_payload_sql()} AS version_payload_json,
                                     latest_o.external_job_id AS source_job_id,
                                     latest_o.source_ats AS source_ats,
                                     latest_o.observed_at AS observation_observed_at,
@@ -4137,9 +4144,15 @@ class SqliteAcquisitionStore(_SqliteStore):
                         canonical_job_ids=sorted(new_ids - old_ids),
                     )
                     connection.execute(
-                        "UPDATE acquisition_publications SET snapshot_json=?, published_at=?, valid_until=?, "
-                        "preflight_json=?, policy_version=? WHERE publication_id=?",
-                        (_json(snapshot), now, str(valid_until or ""), _json(preflight), policy.version, existing_id),
+                        """UPDATE acquisition_publications SET snapshot_json=(
+                            SELECT json_group_array(json(value)) FROM (
+                                SELECT value FROM (
+                                    SELECT value FROM json_each(acquisition_publications.snapshot_json)
+                                    WHERE json_extract(value,'$.canonical_job_id') NOT IN (SELECT value FROM json_each(?))
+                                    UNION ALL SELECT value FROM json_each(?))
+                                ORDER BY json_extract(value,'$.title'),json_extract(value,'$.canonical_job_id')
+                            )),published_at=?,valid_until=?,preflight_json=?,policy_version=? WHERE publication_id=?""",
+                        (_json(sorted(changed_job_ids)),_json(changed_snapshot),now,str(valid_until or ""),_json(preflight),policy.version,existing_id),
                     )
                     changed = connection.execute(
                         "UPDATE acquisition_publication_head SET updated_at=? WHERE head_id=1 AND publication_id=?",
@@ -4298,6 +4311,10 @@ class SqliteAcquisitionStore(_SqliteStore):
             return publication_id
 
         return self._run_transaction(publish)
+
+    def publish_pending_catalog_jobs(self, *, batch_size: int = 200, policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION):
+        from backend.repositories.catalog_publication_recovery import publish_pending
+        return publish_pending(self, batch_size=batch_size, policy_version=policy_version)
 
     def publish_existing_catalog_snapshot(
         self,

@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry durable catalog publication every thirty seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+Unit=runr-catalog-publication.service
+
+[Install]
+WantedBy=timers.target

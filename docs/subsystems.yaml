@@ -82,6 +82,7 @@ subsystems:
       - backend/application/duplicate_decisions.py
       - backend/repositories/sqlite_acquisition.py
       - backend/repositories/sqlite_acquisition_audit.py
+      - backend/repositories/catalog_publication_recovery.py
       - scripts/**
       - data/**
     exclusions:
@@ -90,6 +91,7 @@ subsystems:
       - scripts/run_manifested_linkedin.py
       - scripts/run_manifested_employer.py
       - scripts/publish_producer_states.py
+      - scripts/process_catalog_publication.py
       - scripts/build_master_jobs_catalog.py
       - scripts/reduce_catalog_storage.py
       - scripts/maintain_catalog_storage.py
