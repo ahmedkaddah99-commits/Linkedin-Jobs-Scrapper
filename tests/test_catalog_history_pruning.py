@@ -38,6 +38,35 @@ def test_large_snapshot_removed_before_membership_backlog_and_orphans_are_resuma
         assert db.execute('SELECT count(*) FROM acquisition_publication_jobs j WHERE NOT EXISTS(SELECT 1 FROM acquisition_publications p WHERE p.publication_id=j.publication_id)').fetchone()[0] == 0
 
 
+def test_windowed_orphan_scan_advances_past_pinned_rows_and_recovers_after_restart(catalog):
+    with sqlite3.connect(catalog) as db:
+        progress = {}
+        for _ in range(100):
+            prune_batch(db,'publications',batch_size=1,cutoff='unused',membership_progress=progress)
+            # Simulate reading the persisted checkpoint in a new process.
+            progress = dict(progress)
+            if progress.get('membership_scan_complete'):
+                break
+        assert progress['membership_scan_complete'] is True
+        assert progress['membership_scan_rowid'] == 0
+        assert db.execute('SELECT count(*) FROM acquisition_publication_jobs j WHERE NOT EXISTS(SELECT 1 FROM acquisition_publications p WHERE p.publication_id=j.publication_id)').fetchone()[0] == 0
+    assert ids(catalog) == {'p1','p2','p5','p6','p7'}
+
+
+def test_empty_history_work_does_not_send_zero_row_writes(catalog):
+    with sqlite3.connect(catalog) as db:
+        progress = {}
+        for _ in range(100):
+            prune_batch(db,'publications',batch_size=1,cutoff='unused',membership_progress=progress)
+            if progress.get('membership_scan_complete'):
+                break
+        statements = []
+        db.set_trace_callback(statements.append)
+        prune_batch(db,'publications',batch_size=1,cutoff='unused',membership_progress=progress)
+        prune_batch(db,'rejections',batch_size=1,cutoff='0000')
+        assert not any(sql.lstrip().upper().startswith(('DELETE','UPDATE','INSERT')) for sql in statements)
+
+
 def test_rejection_statement_keeps_recent_and_active_cycle_history(catalog):
     now = datetime(2026,10,8,tzinfo=timezone.utc)
     with sqlite3.connect(catalog) as db:

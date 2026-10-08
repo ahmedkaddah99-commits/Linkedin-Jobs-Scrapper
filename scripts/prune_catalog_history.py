@@ -17,10 +17,12 @@ from scripts.compact_job_storage import HttpMaintenanceConnection
 
 MEMBERS = f"""DELETE FROM acquisition_publication_jobs WHERE rowid IN (
     SELECT rowid FROM acquisition_publication_jobs
-    WHERE publication_id NOT IN ({_PINS}) AND NOT EXISTS(
-        SELECT 1 FROM acquisition_publications p
-        WHERE p.publication_id=acquisition_publication_jobs.publication_id)
-    ORDER BY rowid LIMIT ?)
+    WHERE publication_id=(SELECT DISTINCT j.publication_id
+        FROM acquisition_publication_jobs j
+        WHERE j.publication_id NOT IN ({_PINS}) AND NOT EXISTS(
+            SELECT 1 FROM acquisition_publications p WHERE p.publication_id=j.publication_id)
+        ORDER BY j.publication_id LIMIT 1)
+    ORDER BY canonical_job_id LIMIT ?)
     RETURNING rowid, length(CAST(publication_id AS BLOB))+length(CAST(canonical_job_id AS BLOB))"""
 HEADERS = f"""DELETE FROM acquisition_publications WHERE publication_id IN (
     SELECT p.publication_id FROM acquisition_publications p
@@ -35,7 +37,7 @@ REJECTIONS = f"""DELETE FROM acquisition_job_rejections WHERE rowid IN (
     RETURNING rowid, COALESCE(length(CAST(detail_json AS BLOB)),0)"""
 
 
-def prune_batch(db, phase, *, batch_size, cutoff):
+def prune_batch(db, phase, *, batch_size, cutoff, membership_progress=None):
     if not 1 <= batch_size <= 10000:
         raise ValueError('Batch size must be 1..10000')
     counts = dict(deleted_memberships=0, deleted_publications=0,
@@ -43,13 +45,40 @@ def prune_batch(db, phase, *, batch_size, cutoff):
     if phase == 'publications':
         # Memberships have no FK to headers. Remove the large unpinned snapshot
         # first; orphan membership cleanup is restartable and checks pins again.
-        rows = db.execute(HEADERS).fetchall()
+        # Some live zero-row write requests stall. A read-only eligibility
+        # precheck avoids that path; the DELETE still rechecks all pins itself.
+        candidate = db.execute(_CANDIDATE).fetchone()
+        rows = db.execute(HEADERS).fetchall() if candidate else []
         counts['deleted_publications'] = len(rows)
         if not rows:
-            rows = db.execute(MEMBERS, (batch_size,)).fetchall()
+            if membership_progress is None:
+                rows = db.execute(MEMBERS, (batch_size,)).fetchall()
+            else:
+                # An explicit rowid window bounds reads even when the first
+                # surviving publications are pinned. Never rescan millions of
+                # retained memberships for every deletion batch.
+                after = membership_progress.get('membership_scan_rowid', 0)
+                window = db.execute('SELECT rowid FROM acquisition_publication_jobs WHERE rowid>? ORDER BY rowid LIMIT ?', (after,batch_size)).fetchall()
+                rows = []
+                if window:
+                    ids = [row[0] for row in window]
+                    marks = ','.join('?' for _ in ids)
+                    eligible = f'''rowid IN ({marks}) AND publication_id NOT IN ({_PINS})
+                        AND NOT EXISTS(SELECT 1 FROM acquisition_publications p
+                            WHERE p.publication_id=acquisition_publication_jobs.publication_id)'''
+                    if db.execute(f'SELECT 1 FROM acquisition_publication_jobs WHERE {eligible} LIMIT 1', ids).fetchone():
+                        rows = db.execute(f'''DELETE FROM acquisition_publication_jobs
+                            WHERE {eligible}
+                            RETURNING rowid,length(CAST(publication_id AS BLOB))+length(CAST(canonical_job_id AS BLOB))''', ids).fetchall()
+                    membership_progress['membership_scan_rowid'] = ids[-1]
+                else:
+                    membership_progress['membership_scan_rowid'] = 0
+                membership_progress['membership_scan_complete'] = not window
             counts['deleted_memberships'] = len(rows)
     elif phase == 'rejections':
-        rows = db.execute(REJECTIONS, (cutoff, batch_size)).fetchall()
+        from backend.acquisition.storage_retention import _REJECTIONS
+        candidate = db.execute(_REJECTIONS, (cutoff,1)).fetchone()
+        rows = db.execute(REJECTIONS, (cutoff, batch_size)).fetchall() if candidate else []
         counts['deleted_rejections'] = len(rows)
     else:
         raise ValueError('Unsupported history phase')
@@ -89,7 +118,7 @@ def main():
         number += 1
         if phase in finished:
             continue
-        changed = prune_batch(db, phase, batch_size=args.batch_size, cutoff=cutoff)
+        changed = prune_batch(db, phase, batch_size=args.batch_size, cutoff=cutoff, membership_progress=state)
         result['batches'] += 1
         for key, count in changed.items():
             result[key] += count
@@ -102,6 +131,8 @@ def main():
         temporary.replace(args.checkpoint)
         print(json.dumps({'phase':phase, **changed}), flush=True)
         if not any(changed[key] for key in ('deleted_memberships','deleted_publications','deleted_rejections')):
+            if phase == 'publications' and not state.get('membership_scan_complete',False):
+                continue
             finished.add(phase)
     result['complete'] = len(finished) == len(phases)
     result['logical_bytes_note'] = 'Excludes indexes and other columns; ambiguous requests can undercount committed removals'
