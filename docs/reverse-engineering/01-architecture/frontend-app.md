@@ -2,6 +2,22 @@
 
 # Customer web frontend (WS-8)
 
+## Jobs account setup (2026-10-08)
+
+The authenticated landing route and `/home` redirect to `/jobs`. The customer
+Home page and its navigation entry, decorative dashboards and styles are removed.
+The public marketing homepage remains a separate route on the marketing host.
+`AccountSetupPanel` keeps the six setup destinations beside the job list and
+posting reader. Desktop list/detail scrolling leaves the panel visible; at widths
+up to 900px it becomes a compact panel above the jobs. It starts with one suggested
+action and expands through a keyboard-accessible button. Descriptions appear on
+hover/focus, and are visible on mobile. Cached settings and job preferences guide
+the suggestion; the old fabricated completion count and checkmarks are removed.
+No extra feed or company requests are made when opening a posting.
+
+Verification: frontend unit tests, lint/build, and desktop/mobile Playwright checks
+for redirects, expansion, link destinations, placement and navigation retention.
+
 ## Jobs navigation retention (2026-10-07)
 
 The posting reader uses the company profile included in the job-detail payload.

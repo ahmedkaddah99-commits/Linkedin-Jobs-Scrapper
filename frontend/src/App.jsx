@@ -17,7 +17,6 @@ const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
 const appSubdomain = typeof window !== "undefined" && window.location.hostname === "app.userunr.com";
 
-const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
@@ -224,10 +223,10 @@ function AuthenticatedApp() {
         <RouteErrorBoundary key={/^\/jobs(?:\/[^/]+)?$/.test(location.pathname) && location.pathname !== "/jobs/hidden" ? "/jobs" : location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/home" element={<Navigate replace to="/" />} />
+              <Route path="/" element={<Navigate replace to="/jobs" />} />
+              <Route path="/home" element={<Navigate replace to="/jobs" />} />
               <Route path="/onboarding" element={personalizedJobsExperienceEnabled && personalizedJobsDataMode !== "real" ? <PersonalizedOnboardingPage /> : <Navigate replace to="/jobs" />} />
-              <Route path="/jobs/:jobId?" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
+              <Route path="/jobs/:jobId?" element={<PersonalizedJobsPage />} />
               <Route path="/matches" element={<Navigate replace to="/jobs" />} />
               <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
