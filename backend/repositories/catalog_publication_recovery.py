@@ -83,6 +83,7 @@ def publish_pending(store, *, batch_size, policy_version):
                     (publication_id,'recovery_'+uuid4().hex,now,policy.version))
                 conn.execute('INSERT INTO acquisition_publication_head(head_id,publication_id,updated_at) VALUES(1,?,?)',(publication_id,now))
             _insert_publication_jobs_batched(conn,publication_id=publication_id,canonical_job_ids=sorted(accepted))
+            trace('membership_written')
             # Append on the server. Do not download/re-upload the entire 36k-job
             # snapshot for each bounded batch. Old membership is preserved.
             conn.execute("""UPDATE acquisition_publications SET snapshot_json=(
@@ -90,12 +91,14 @@ def publish_pending(store, *, batch_size, policy_version):
                     SELECT value FROM json_each(acquisition_publications.snapshot_json)
                     UNION ALL SELECT value FROM json_each(?))),published_at=?
                 WHERE publication_id=?""",(json.dumps(snapshot,separators=(',',':')),now,publication_id))
+            trace('snapshot_written')
             conn.execute('UPDATE acquisition_publication_head SET updated_at=? WHERE head_id=1 AND publication_id=?',(now,publication_id))
             conn.execute("""UPDATE acquisition_cycles SET jobs_published=(SELECT COUNT(*) FROM acquisition_publication_jobs WHERE publication_id=?),
                 updated_at=? WHERE cycle_id=(SELECT cycle_id FROM acquisition_publications WHERE publication_id=?)""",(publication_id,now,publication_id))
             store._record_publication_audit(conn,publication_id=publication_id,event_type='publication_recovered',
                 actor_user_id='catalog_recovery',previous_publication_id=head.get('publication_id',''),
                 payload={'added':len(snapshot),'policy_version':policy.version},created_at=now)
+            trace('head_and_audit_written')
         if rejections:
             trace('gate_records_start')
             store._persist_publication_rejections(conn,cycle_id='catalog_recovery',rejected_rows=rejections)
