@@ -8,7 +8,7 @@ import { profileMissingFields } from "../../lib/profileCompletion";
 const ProfilePage = lazy(() => import("../../pages/ProfilePage"));
 function Icon({ children }) { return <span className="material-symbols-outlined" aria-hidden="true">{children}</span>; }
 
-export default function AccountSetupPanel() {
+export default function AccountSetupPanel({ children }) {
   const { request, user } = useSession();
   const [profileOpen, setProfileOpen] = useState(false);
   const [extension, setExtension] = useState("checking");
@@ -47,23 +47,26 @@ export default function AccountSetupPanel() {
   }, [profileOpen]);
 
   return <aside aria-label="Account setup" className="jobs-setup-rail">
-    <section className="jobs-setup-card jobs-profile-setup">
-      <header><Icon>person</Icon><h2>Your profile</h2></header>
-      <p>{profileKnown ? (missing.length ? `${missing.length} details left for better matches` : "Profile and preferences complete") : "Complete your profile and job preferences in one place."}</p>
-      <button ref={opener} onClick={() => setProfileOpen(true)} type="button">{profileKnown && !missing.length ? "Review your profile" : "Finish your profile"}<Icon>{profileKnown && !missing.length ? "check_circle" : "arrow_forward"}</Icon></button>
-    </section>
+    {children}
+    <section className="jobs-quick-tools">
+    <h2 className="jobs-quick-tools__heading">Quick access &amp; tools</h2>
+    <button aria-label={profileKnown && !missing.length ? "Review your profile" : "Finish your profile"} className="jobs-compact-profile" ref={opener} onClick={() => setProfileOpen(true)} type="button">
+      <Icon>person</Icon><span><strong>Your profile</strong>{profileKnown ? <small className="jobs-compact-badge">{missing.length ? `${missing.length} left` : "Complete"}</small> : null}<span className="jobs-compact-description">{profileKnown ? (missing.length ? `Finish ${missing.length} details for better matches` : "Profile and preferences complete") : "Your details and job preferences"}</span></span><Icon>{profileKnown && !missing.length ? "check_circle" : "chevron_right"}</Icon>
+    </button>
     <div className="jobs-setup-features" aria-label="Powerful Runr features">
       <Link className="jobs-feature-card jobs-feature-card--linkedin" to="/referrals?section=linkedin">
         <div><Icon>group_add</Icon><strong>LinkedIn referrals</strong><Icon>{linkedinDone ? "check_circle" : "arrow_forward"}</Icon></div>
-        <p>Find people who can help you get referred.</p>
+        <p>Find people who can refer you</p>
         <span>{linkedinLoading ? "Checking connection…" : linkedinError ? "Check connection" : linkedinDone ? "Connected" : "Connect LinkedIn"}</span>
       </Link>
       <Link className="jobs-feature-card jobs-feature-card--apply" to="/apply-extension">
         <div><Icon>extension</Icon><strong>Runr Apply</strong><Icon>{extension === "connected" ? "check_circle" : "arrow_forward"}</Icon></div>
-        <p>Autofill applications with your profile and documents.</p>
+        <p>Autofill applications instantly</p>
         <span>{extension === "checking" ? "Checking extension…" : extension === "connected" ? "Connected" : "Set up the extension"}</span>
       </Link>
     </div>
+    {profileKnown ? <div className="jobs-profile-readiness"><span>Profile readiness</span><strong>{Math.round((11 - missing.length) / 11 * 100)}%</strong><progress aria-label="Profile readiness" max="11" value={11 - missing.length} /></div> : null}
+    </section>
     {profileOpen ? <dialog aria-labelledby="profile-completion-title" className="profile-completion-dialog" onCancel={() => setProfileOpen(false)} ref={dialog}>
       <header><div><h2 id="profile-completion-title">Finish your profile</h2><p>Your details, experience and preferences, all in one place.</p></div><button aria-label="Close profile completion" onClick={() => setProfileOpen(false)} type="button"><Icon>close</Icon></button></header>
       <Suspense fallback={<p className="profile-completion-loading">Loading your profile…</p>}><ProfilePage completionFlow onSaved={(savedSettings, savedPreferences) => { setSettings(savedSettings); setPreferences(savedPreferences); }} /></Suspense>

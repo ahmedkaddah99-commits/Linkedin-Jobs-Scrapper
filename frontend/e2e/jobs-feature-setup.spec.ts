@@ -27,6 +27,8 @@ test("feature cards remain visible and profile completion opens in one popup", a
   await expect(rail.getByRole("link", { name: /LinkedIn referrals/ })).toBeVisible();
   await expect(rail.getByRole("link", { name: /Runr Apply/ })).toBeVisible();
   await expect(rail.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(rail.getByRole("progressbar", { name: "Profile readiness" })).toHaveAttribute("value", "5");
+  if (testInfo.project.name === "desktop-chromium") await expect(rail.getByRole("complementary", { name: "Saved filters" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("feature-cards.png") });
   await rail.getByRole("button", { name: "Finish your profile" }).click();
   const popup = page.getByRole("dialog", { name: "Finish your profile" });
