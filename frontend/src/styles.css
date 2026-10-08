@@ -3209,3 +3209,15 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .jobs-profile-readiness progress::-moz-progress-bar { background: #14b8a6; }
 .jobs-quick-tools .jobs-feature-card > span { margin-top: .1rem; }
 .jobs-quick-tools .jobs-feature-card p, .jobs-compact-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Jobs filters follow the Runr theme and use one plain choice per row. */
+.runr-filter-confirm.jobs-primary-button { background: var(--jobs-cyan); border: 1px solid var(--jobs-cyan); border-radius: .45rem; color: #fff; font: inherit; font-size: .75rem; font-weight: 700; padding: .45rem .75rem; }
+.runr-filter-confirm.jobs-primary-button:hover { background: var(--jobs-cyan-dark); border-color: var(--jobs-cyan-dark); }
+.runr-filter-options { display: flex; flex-direction: column; gap: .2rem; }
+.runr-filter-options label, .runr-filter-check { background: transparent; border-radius: 0; padding: .4rem 0; }
+.runr-filter-options input, .runr-filter-check input { accent-color: var(--jobs-cyan); flex: 0 0 1rem; height: 1rem; margin: 0; width: 1rem; }
+.runr-function-picker button.is-active { background: #e3f8fd; color: var(--jobs-ink); }
+.runr-function-picker button:hover { background: #e3f8fd; }
+.runr-filter-suggestions { flex-direction: column; max-height: 12rem; overflow: auto; }
+.runr-filter-suggestions button { background: transparent; color: var(--jobs-ink); padding: .5rem; text-align: left; }
+.runr-filter-suggestions button:hover { background: #e3f8fd; }

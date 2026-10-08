@@ -20,7 +20,7 @@ export default function QuickJobFilter({ name, label, icon, filters, onApply }) 
     {open ? <div aria-label={label} className={`jobs-quick-filter__menu ${name === "role" ? "jobs-quick-filter__menu--functions" : ""}`} role="group">
       {name === "role" ? <FunctionField filters={draft} set={set} /> : name === "location" ? <LocationField filters={draft} set={set} /> : name === "requiredExperience" ? <RangeField filters={draft} set={set} /> : name === "industry" ? <TagField label="Industry" name={name} filters={draft} set={set} suggestions={["Information Technology", "Artificial Intelligence (AI)", "Financial Services", "Consulting", "Software", "Healthcare", "Education", "Manufacturing"]} /> : name === "datePosted" ? <div className="runr-filter-options">{[["all", "Any time"], ...CHOICES.datePosted].map(([value, text]) => <label key={value}><input type="radio" checked={draft.datePosted === value} onChange={() => set("datePosted", value)} />{text}</label>)}</div> : <MultiChoice label={label} name={name} options={CHOICES[name]} filters={draft} set={set} />}
       {invalid ? <p role="alert">Minimum years must not exceed maximum years.</p> : null}
-      <button className="runr-filter-confirm" disabled={invalid} onClick={() => { onApply(draft); setOpen(false); }} type="button">Confirm</button>
+      <button className="jobs-primary-button runr-filter-confirm" disabled={invalid} onClick={() => { onApply(draft); setOpen(false); }} type="button">Confirm</button>
     </div> : null}
   </div>;
 }

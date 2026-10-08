@@ -1,3 +1,4 @@
+import { loadCityOptions } from "../../lib/locationOptions";
 import { jobFilterSummary } from "../../lib/jobFilterSummary";
 import JOB_FUNCTIONS from "../../../../backend/domain/job_function_taxonomy.json";
 import { useEffect, useRef, useState } from "react";
@@ -53,7 +54,7 @@ export default function AllJobFilters({ filters, initialSection = SECTIONS[0], o
   const tags = jobFilterSummary(draft);
   const removeTag = (key, item) => set(key, Array.isArray(draft[key]) ? draft[key].filter((value) => value !== item) : typeof draft[key] === "boolean" ? false : key === "datePosted" ? "all" : "");
   return <div className="jobs-filter-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside ref={dialog} aria-label="All Filters" aria-modal="true" className="runr-all-filters" role="dialog">
-    <header><button aria-label="Close filters" onClick={onClose} type="button">‹</button><h2>All Filters</h2><button className="runr-filter-confirm" disabled={invalid} onClick={() => onApply(draft)} type="button">Confirm</button></header>
+    <header><button aria-label="Close filters" onClick={onClose} type="button">‹</button><h2>All Filters</h2><button className="jobs-primary-button runr-filter-confirm" disabled={invalid} onClick={() => onApply(draft)} type="button">Confirm</button></header>
     {tags.length ? <div className="runr-filter-summary">{tags.map(({key, value: item, label}) => <button key={`${key}-${item}`} onClick={() => removeTag(key, item)} type="button">{label} ×</button>)}</div> : null}
     <div className="runr-filter-layout"><nav aria-label="Filter sections">{SECTIONS.map((name, index) => <button className={section === name ? "is-active" : ""} key={name} onClick={() => { setSection(name); document.getElementById(`runr-filter-${SECTIONS.indexOf(name)}`)?.scrollIntoView({ block: "start", behavior: "smooth" }); }} type="button">{name}<small>{SECTION_HINTS[index]}</small></button>)}<p className="runr-filter-help">Applying for specific companies? Use Company Insights to choose employers and exclude staffing agencies.</p></nav><div className="runr-filter-content" onScroll={(event) => { const nodes = [...event.currentTarget.querySelectorAll("section[id]")]; const visible = nodes.filter((node) => node.getBoundingClientRect().top < 300).at(-1); if (visible) setSection(visible.dataset.name); }}>
       <section data-name={SECTIONS[0]} id="runr-filter-0"><h3>Basic Job Criteria</h3><FunctionField filters={draft} set={set} />
@@ -65,12 +66,20 @@ export default function AllJobFilters({ filters, initialSection = SECTIONS[0], o
       <section data-name={SECTIONS[3]} id="runr-filter-3"><h3>Company Insights</h3><TagField filters={draft} label="Company" name="company" set={set} /><MultiChoice filters={draft} label="Company Stage" name="companyStage" options={CHOICES.companyStage} set={set} /><div className="runr-filter-card"><strong>Job Source</strong><label className="runr-filter-check"><input checked={Boolean(draft.excludeStaffingAgency)} onChange={(event) => set("excludeStaffingAgency", event.target.checked)} type="checkbox" />Exclude Staffing Agency</label></div><TagField filters={draft} label="Exclude company" name="hiddenCompanies" set={set} /></section>
     </div></div>
     {invalid ? <p role="alert">Minimum years must not exceed maximum years.</p> : null}
-    <footer><button onClick={() => setDraft({ ...INITIAL_PERSONALIZED_JOB_FILTERS })} type="button">Clear all filters</button><button className="runr-filter-confirm" disabled={invalid} onClick={() => onApply(draft)} type="button">Show results</button></footer>
+    <footer><button onClick={() => setDraft({ ...INITIAL_PERSONALIZED_JOB_FILTERS })} type="button">Clear all filters</button><button className="jobs-primary-button runr-filter-confirm" disabled={invalid} onClick={() => onApply(draft)} type="button">Show results</button></footer>
   </aside></div>;
 }
 
 export function LocationField({ filters, set }) {
-  return <div className="runr-filter-card"><strong>Location<button className="runr-filter-clear" onClick={() => { set("country", ""); set("location", []); }} type="button">Clear all</button></strong><label>Country<select onChange={(event) => { set("country", event.target.value); set("location", []); }} value={filters.country || ""}><option value="">Any country</option>{Object.keys(COUNTRIES).sort().map((country) => <option key={country} value={country}>{country}</option>)}</select></label><TagField filters={filters} label="Cities or areas" name="location" set={set} /></div>;
+  const [cities, setCities] = useState([]);
+  useEffect(() => {
+    let active = true;
+    setCities([]);
+    const code = COUNTRIES[filters.country] || filters.country;
+    if (code) loadCityOptions(code).then((options) => { if (active) setCities(options); }).catch(() => { if (active) setCities([]); });
+    return () => { active = false; };
+  }, [filters.country]);
+  return <div className="runr-filter-card"><strong>Location<button className="runr-filter-clear" onClick={() => { set("country", ""); set("location", []); }} type="button">Clear all</button></strong><label>Country<select aria-label="Country" onChange={(event) => { set("country", event.target.value); set("location", []); }} value={filters.country || ""}><option value="">Any country</option>{Object.keys(COUNTRIES).sort().map((country) => <option key={country} value={country}>{country}</option>)}</select></label><TagField filters={filters} label="Cities or areas" name="location" set={set} suggestions={cities} /></div>;
 }
 
 export function RangeField({ filters, set }) {
@@ -83,5 +92,5 @@ export function FunctionField({ filters, set }) {
   const [query, setQuery] = useState("");
   const selected = asList(filters.role);
   const groups = query ? { "Search results": [...new Set(Object.values(FUNCTIONS).flatMap((group) => Object.values(group).flat()))].filter((role) => role.toLowerCase().includes(query.toLowerCase())) } : FUNCTIONS[group];
-  return <div className="runr-filter-card"><strong>Job Function<button className="runr-filter-clear" onClick={() => set("role", [])} type="button">Clear all</button></strong><input aria-label="Search job functions" placeholder="Search job functions" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="runr-function-picker"><div>{Object.keys(FUNCTIONS).map((name) => <button className={name === group ? "is-active" : ""} key={name} onClick={() => { setGroup(name); setQuery(""); }} type="button">{name}</button>)}</div><div>{Object.entries(groups).map(([heading, roles]) => <section className="runr-function-group" key={heading}><h4>{heading}</h4><div>{roles.map((role) => <button aria-pressed={selected.includes(role)} className={selected.includes(role) ? "is-active" : ""} key={role} onClick={() => set("role", selected.includes(role) ? selected.filter((item) => item !== role) : [...selected, role])} type="button">{role}</button>)}</div></section>)}</div></div><TagField filters={filters} label="Other job functions" name="role" set={set} /></div>;
+  return <div className="runr-filter-card"><strong>Job Function<button className="runr-filter-clear" onClick={() => set("role", [])} type="button">Clear all</button></strong><input aria-label="Search job functions" placeholder="Search job functions" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="runr-function-picker"><div>{Object.keys(FUNCTIONS).map((name) => <button className={name === group ? "is-active" : ""} key={name} onMouseEnter={() => { setGroup(name); setQuery(""); }} onFocus={() => { setGroup(name); setQuery(""); }} onClick={() => { setGroup(name); setQuery(""); }} type="button">{name}</button>)}</div><div>{Object.entries(groups).map(([heading, roles]) => <section className="runr-function-group" key={heading}><h4>{heading}</h4><div>{roles.map((role) => <button aria-pressed={selected.includes(role)} className={selected.includes(role) ? "is-active" : ""} key={role} onClick={() => set("role", selected.includes(role) ? selected.filter((item) => item !== role) : [...selected, role])} type="button">{role}</button>)}</div></section>)}</div></div><TagField filters={filters} label="Other job functions" name="role" set={set} /></div>;
 }

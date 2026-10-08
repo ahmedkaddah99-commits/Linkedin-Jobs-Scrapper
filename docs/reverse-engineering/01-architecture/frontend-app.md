@@ -626,3 +626,13 @@ Profile opens the existing unified completion dialog. Connection checkmarks stil
 use verified state; profile readiness counts the eleven existing required details,
 never the sample percentage from the design reference. Mobile keeps tools above
 the job list and saved filters available through their existing toggle.
+
+## Filter interaction rules (owner instruction, 2026-10-08)
+
+Job Function category navigation must reveal the corresponding right-hand options
+on pointer hover and keyboard focus; clicking remains available for touch. This
+rule applies to both quick filters and the full drawer. Filter actions must use
+the existing Runr cyan button theme. Checkbox/radio choices appear one per row,
+without shaded option blocks, with fixed equal-size controls. Cities suggest
+prefix/text matches from the selected country's lazily loaded city dataset;
+changing country clears prior cities and stale asynchronous suggestions.
