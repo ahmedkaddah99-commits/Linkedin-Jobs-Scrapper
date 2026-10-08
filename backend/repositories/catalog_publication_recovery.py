@@ -1,5 +1,7 @@
 """Bounded, atomic publication of durable jobs left outside producer cycles."""
 import json
+import os
+import time
 from uuid import uuid4
 
 from backend.acquisition.publication import StalePublicationHeadError, get_publication_policy
@@ -9,6 +11,12 @@ from backend.domain.models import utc_now_iso
 def publish_pending(store, *, batch_size, policy_version):
     from backend.repositories.sqlite_acquisition import _publication_payload_sql, _insert_publication_jobs_batched
 
+    started=time.monotonic()
+    def trace(stage):
+        if os.getenv('RUNR_PUBLICATION_RECOVERY_TRACE')=='1':
+            print(json.dumps({'event':'publication_recovery_phase','phase':stage,
+                'elapsed_seconds':round(time.monotonic()-started,3)}),flush=True)
+    trace('prepare_start')
     policy = get_publication_policy(policy_version)
     with store._connect() as conn:
         head_rows = store._fetch_read_rows(conn, 'SELECT publication_id,updated_at FROM acquisition_publication_head WHERE head_id=1')
@@ -37,6 +45,7 @@ def publish_pending(store, *, batch_size, policy_version):
             LEFT JOIN acquisition_publication_jobs a ON a.canonical_job_id=j.canonical_job_id AND a.publication_id=?
             WHERE q.status='pending' ORDER BY q.canonical_job_id LIMIT ?
         """, (head.get('publication_id',''),max(1,min(500,int(batch_size)))))
+    trace('prepare_complete')
     if not candidates:
         return {'processed':0,'published':0,'rejected':0,'publication_id':head.get('publication_id','')}
     candidates = [dict(r) for r in candidates]
@@ -45,19 +54,27 @@ def publish_pending(store, *, batch_size, policy_version):
     accepted = {r['canonical_job_id'] for r in snapshot}
     reasons = {r['canonical_job_id']:[reason['code'] for reason in r['reasons']] for r in rejections}
     now = utc_now_iso()
+    trace('gate_complete')
     publication_id = head.get('publication_id') or 'acq_recovery_'+uuid4().hex
 
     def commit(conn):
+        trace('transaction_start')
         current = conn.execute('SELECT publication_id,updated_at FROM acquisition_publication_head WHERE head_id=1').fetchone()
         if (dict(current) if current else {}) != head:
             raise StalePublicationHeadError('Publication head changed during recovery preparation.')
-        ids = [r['canonical_job_id'] for r in candidates]
-        fresh = conn.execute("""SELECT j.canonical_job_id,j.current_version_id,j.lifecycle_state,q.revision
-            FROM canonical_jobs j JOIN acquisition_publication_queue q USING(canonical_job_id)
-            WHERE j.canonical_job_id IN (SELECT value FROM json_each(?))""",(json.dumps(ids),)).fetchall()
-        expected = {r['canonical_job_id']:(r['current_version_id'],r['lifecycle_state'],r['queue_revision']) for r in candidates}
-        if {r['canonical_job_id']:(r['current_version_id'],r['lifecycle_state'],r['revision']) for r in fresh} != expected:
+        expected=[{'id':r['canonical_job_id'],'version':r['current_version_id'],
+                   'state':r['lifecycle_state'],'revision':r['queue_revision']} for r in candidates]
+        # Validate on the server and return one scalar. Remote cursor streaming
+        # must not hold the write transaction open for every candidate row.
+        matched=conn.execute("""SELECT COUNT(*) AS jobs FROM json_each(?) expected
+            JOIN canonical_jobs j ON j.canonical_job_id=json_extract(expected.value,'$.id')
+            JOIN acquisition_publication_queue q ON q.canonical_job_id=j.canonical_job_id
+            WHERE j.current_version_id IS json_extract(expected.value,'$.version')
+              AND j.lifecycle_state=json_extract(expected.value,'$.state')
+              AND q.revision=json_extract(expected.value,'$.revision')""",(json.dumps(expected),)).fetchone()['jobs']
+        if matched != len(candidates):
             raise StalePublicationHeadError('Job changed during recovery preparation; retry its queued revision.')
+        trace('fences_checked')
         if snapshot:
             if not head:
                 conn.execute("""INSERT INTO acquisition_publications(publication_id,cycle_id,status,snapshot_json,
@@ -80,7 +97,9 @@ def publish_pending(store, *, batch_size, policy_version):
                 actor_user_id='catalog_recovery',previous_publication_id=head.get('publication_id',''),
                 payload={'added':len(snapshot),'policy_version':policy.version},created_at=now)
         if rejections:
+            trace('gate_records_start')
             store._persist_publication_rejections(conn,cycle_id='catalog_recovery',rejected_rows=rejections)
+        trace('queue_acknowledgement')
         outcomes = []
         for r in candidates:
             key = r['canonical_job_id']

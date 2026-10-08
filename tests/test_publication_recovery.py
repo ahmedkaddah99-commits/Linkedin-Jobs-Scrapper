@@ -152,3 +152,25 @@ def test_active_job_removed_by_head_change_is_requeued(tmp_path):
         assert conn.execute('SELECT status FROM acquisition_publication_queue').fetchone()[0]=='pending'
     assert store.publish_pending_catalog_jobs(batch_size=10)['published']==1
 
+
+def test_recovery_transaction_does_not_stream_candidate_rows(tmp_path,monkeypatch):
+    store=SqliteAcquisitionStore(tmp_path/'catalog.db')
+    ingest(store,jobs=[{'job_id':str(i),'title':'Engineer','company':'Employer',
+        'url':f'https://employer.example/jobs/{i}','description':'Engineering responsibilities. '*8}
+        for i in range(3)])
+    original=store._run_transaction
+    class BoundedRead:
+        def __init__(self,conn):self.conn=conn
+        def execute(self,sql,*args):
+            cursor=self.conn.execute(sql,*args)
+            if sql.lstrip().upper().startswith(('SELECT','WITH')) and cursor.description:
+                rows=cursor.fetchall()
+                assert len(rows)<=1,'A recovery transaction must not stream candidates over remote cursors'
+                class Row:
+                    def fetchone(self):return rows[0] if rows else None
+                    def fetchall(self):return rows
+                return Row()
+            return cursor
+    monkeypatch.setattr(store,'_run_transaction',lambda fn:original(lambda conn:fn(BoundedRead(conn))))
+    assert store.publish_pending_catalog_jobs(batch_size=3)['published']==3
+
