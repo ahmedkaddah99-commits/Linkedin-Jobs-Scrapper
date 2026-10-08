@@ -123,19 +123,29 @@ def apply_rows(connection, table, rows, columns, prepared):
     triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? ORDER BY name", (table,)).fetchall()
     if any('runr_storage_compaction_guard' in (sql or '') for _, sql in triggers):
         raise RuntimeError('Restore preexisting maintenance guards before catalog backfill')
-    statements = [(f'DROP TRIGGER "{name.replace(chr(34), chr(34)*2)}"', ()) for name, _ in triggers]
-    assignments = ','.join(column + '=?' for column in columns)
-    guard = ' AND '.join(column + ' IS ?' for column in columns)
-    for row, values in zip(rows, prepared):
-        if tuple(row[1:]) != values:
-            statements.append((f'UPDATE {table} SET {assignments} WHERE rowid=? AND {guard}', (*values, row[0], *row[1:])))
-    statements += [(sql, ()) for _, sql in triggers]
+    changed = [(row, values) for row, values in zip(rows, prepared) if tuple(row[1:]) != values]
+    statements = []
+    if changed:
+        statements = [(f'DROP TRIGGER "{name.replace(chr(34), chr(34)*2)}"', ()) for name, _ in triggers]
+        assignments, parameters = [], []
+        for index, column in enumerate(columns):
+            assignments.append(column + '=CASE rowid ' + ' '.join('WHEN ? THEN ?' for _ in changed) + ' ELSE ' + column + ' END')
+            for row, values in changed:
+                parameters.extend((row[0], values[index]))
+        guard = ' AND '.join(column + ' IS ?' for column in columns)
+        predicates = []
+        for row, _ in changed:
+            predicates.append('(rowid=? AND ' + guard + ')')
+            parameters.extend((row[0], *row[1:]))
+        statements.append((f'UPDATE {table} SET {",".join(assignments)} WHERE ' + ' OR '.join(predicates), tuple(parameters)))
+        statements += [(sql, ()) for _, sql in triggers]
     if isinstance(connection, HttpMaintenanceConnection):
         # Includes JSON escaping, original-value guards and compact replacements.
         encoded = json.dumps([connection.stmt(sql, values, want_rows=False) for sql, values in statements]).encode('utf-8')
         if len(encoded) > MAX_BATCH_WIRE_BYTES - 65536:
             raise RuntimeError('Catalog batch exceeds safe request limit; use a smaller batch')
-    _atomic(connection, statements)
+    if statements:
+        _atomic(connection, statements)
     # A stale writer or ambiguous response never authorizes advancing the cursor.
     ids = [row[0] for row in rows]
     placeholders = ','.join('?' for _ in ids)

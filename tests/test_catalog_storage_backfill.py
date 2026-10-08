@@ -42,6 +42,26 @@ def test_dry_run_preservation_and_resumable_backfill(tmp_path):
         reduce_catalog_storage(connection, database_identity='other', checkpoint=checkpoint)
 
 
+def test_one_update_statement_preserves_each_rows_optimistic_guard(tmp_path, monkeypatch):
+    import scripts.reduce_catalog_storage as module
+    connection = fixture_database(tmp_path)
+    rows = connection.execute('SELECT rowid,payload_json,raw_payload_json FROM job_source_observations ORDER BY rowid').fetchall()
+    values = [(json.dumps({'row': row[0]}), json.dumps({'raw': row[0]})) for row in rows]
+    original = module._atomic
+    statements = []
+    def tracked(db, batch):
+        statements.extend(batch)
+        original(db, batch)
+    monkeypatch.setattr(module, '_atomic', tracked)
+    apply_rows(connection, 'job_source_observations', rows, ('payload_json','raw_payload_json'), values)
+    assert len([sql for sql, _ in statements if sql.startswith('UPDATE ')]) == 1
+    after = connection.execute('SELECT rowid,payload_json,raw_payload_json FROM job_source_observations ORDER BY rowid').fetchall()
+    assert [tuple(row[1:]) for row in after] == values
+    with pytest.raises(RuntimeError, match='optimistic'):
+        apply_rows(connection, 'job_source_observations', rows, ('payload_json','raw_payload_json'), [('{"stale":true}','{}')] * 3)
+    assert connection.execute('SELECT rowid,payload_json,raw_payload_json FROM job_source_observations ORDER BY rowid').fetchall() == after
+
+
 def test_transaction_failure_restores_guards_and_payload(tmp_path):
     connection = fixture_database(tmp_path)
     rows = connection.execute('SELECT rowid,payload_json,raw_payload_json FROM job_source_observations LIMIT 1').fetchall()
