@@ -7,6 +7,15 @@ from typing import Any
 PAGE_HTML_FIELDS = ("source_page_html", "page_html", "source_html", "raw_html", "html")
 
 
+def _without_page_html(record: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = {key: value for key, value in record.items() if key not in PAGE_HTML_FIELDS}
+    for key in ("source_raw_payload", "producer_record", "source_record", "observation_contract"):
+        child = cleaned.get(key)
+        if isinstance(child, Mapping):
+            cleaned[key] = _without_page_html(child)
+    return cleaned
+
+
 def compact_job_payload(payload: Mapping[str, Any], *, normalized: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Keep unique source fields and one mapping; discard duplicated envelopes.
 
@@ -47,8 +56,7 @@ def compact_job_payload(payload: Mapping[str, Any], *, normalized: Mapping[str, 
             else:
                 raw.pop("producer_record", None)
         if isinstance(destination, Mapping):
-            for key in PAGE_HTML_FIELDS:
-                raw.pop(key, None)
+            raw = _without_page_html(raw)
         raw = {key: value for key, value in raw.items() if key not in result or result[key] != value}
         if raw:
             result["source_raw_payload"] = raw

@@ -23,6 +23,15 @@ creating a SQLite backup first. Neither command vacuums the database or deletes
 job/history rows. Focused coverage lives in `tests/test_job_storage_payload.py`
 and the observation-store integration tests.
 
+Historical catalog cleanup uses a temporary interval-scoped maintenance guard
+for remote batches. Ordinary updates remain forbidden; every non-payload column
+and rowid stays protected. A write transaction inserts its authorization, alters
+only compact JSON, and deletes its authorization before commit. Errors roll back
+the whole transaction. Original immutability triggers and the temporary guard
+table are restored/removed at command exit. Failed/ambiguous remote writes must
+be checked for surviving flags before retrying. This operator path is separate
+from recurring ingestion and is not run by a collector timer.
+
 ## Daily source coverage and closure evidence (2026-10-01 local revision)
 
 Completed LinkedIn company scans become due again after 24 hours. The rotating

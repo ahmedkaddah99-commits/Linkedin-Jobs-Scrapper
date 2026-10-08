@@ -57,7 +57,7 @@ def test_historical_cleanup_sql_preserves_hashes_descriptions_and_conflicting_ev
     assert result['content_hash']=='stable' and result['description_text']=='Build'
     assert 'content_fingerprint' not in result and 'field_provenance' not in result
     assert result['source_raw_payload']['title']=='Foreign title'
-    assert result['source_raw_payload']['observation_contract']=={'source':'linkedin'}
+    assert result['source_raw_payload']['observation_contract']=={'source':'linkedin', 'source_record':{'description_text':'Build'}}
     connection.close()
 
 
@@ -73,3 +73,69 @@ def test_original_source_record_survives_when_projection_overwrote_values():
     compact = json.loads(connection.execute(f'SELECT {compact_expression("payload_json")} FROM jobs').fetchone()[0])
     assert compact['source_raw_payload']['observation_contract']['source_record']=={'title':'Original'}
     connection.close()
+
+
+def test_page_html_is_removed_from_conflicting_source_record_without_losing_original_title():
+    job = {'title':'Projected', 'description_text':'Build', 'application_destination':{'resolved_url':'https://jobs.example/apply'},
+           'source_raw_payload':{'observation_contract':{'source_record':{'title':'Original','source_raw_payload':{'html':'large page','custom_salary':100}}}}}
+    compact = compact_job_payload(job)
+    original = compact['source_raw_payload']['observation_contract']['source_record']
+    assert original['title']=='Original'
+    assert original['source_raw_payload']=={'custom_salary':100}
+
+
+def test_historical_cleanup_restores_immutability_in_same_transaction():
+    import json
+    import sqlite3
+    import pytest
+    from scripts.compact_job_storage import apply_batch
+    connection = sqlite3.connect(':memory:')
+    connection.execute('CREATE TABLE job_source_observations(payload_json TEXT, raw_payload_json TEXT)')
+    connection.execute('INSERT INTO job_source_observations VALUES(?,?)', (json.dumps({'content_fingerprint':{}, 'description_text':'Build'}), '{}'))
+    connection.execute("CREATE TRIGGER trg_job_source_observations_immutable_update BEFORE UPDATE ON job_source_observations BEGIN SELECT RAISE(ABORT,'immutable'); END")
+    connection.commit()
+    apply_batch(connection,'job_source_observations',['payload_json','raw_payload_json'],0,1)
+    assert json.loads(connection.execute('SELECT payload_json FROM job_source_observations').fetchone()[0]) == {'description_text':'Build'}
+    with pytest.raises(sqlite3.IntegrityError, match='immutable'):
+        connection.execute("UPDATE job_source_observations SET payload_json='{}'")
+    connection.close()
+
+
+def test_flag_guard_blocks_normal_writes_and_protects_identity_during_cleanup():
+    import json
+    import sqlite3
+    from types import SimpleNamespace
+    import pytest
+    from scripts.compact_job_storage import apply_batch, provision_compaction_guard
+    c = sqlite3.connect(':memory:')
+    c.execute('CREATE TABLE job_source_observations(job_id TEXT, content_hash TEXT, payload_json TEXT, raw_payload_json TEXT)')
+    c.execute('INSERT INTO job_source_observations VALUES(?,?,?,?)', ('id','hash',json.dumps({'content_fingerprint':{},'description_text':'Build'}),'{}'))
+    original = "CREATE TRIGGER trg_job_source_observations_immutable_update BEFORE UPDATE ON job_source_observations BEGIN SELECT RAISE(ABORT,'immutable'); END"
+    c.execute(original)
+    c.commit()
+    def atomic(statements):
+        c.execute('BEGIN IMMEDIATE')
+        try:
+            for sql,args in statements:
+                c.execute(sql,args)
+            c.commit()
+        except BaseException:
+            c.rollback()
+            raise
+    provision_compaction_guard(SimpleNamespace(execute=c.execute,atomic=atomic), 'job_source_observations',original)
+    apply_batch(c,'job_source_observations',['payload_json','raw_payload_json'],0,1)
+    assert c.execute('SELECT count(*) FROM runr_storage_compaction_guard').fetchone()[0]==0
+    assert json.loads(c.execute('SELECT payload_json FROM job_source_observations').fetchone()[0])=={'description_text':'Build'}
+    with pytest.raises(sqlite3.IntegrityError,match='immutable'):
+        c.execute("UPDATE job_source_observations SET payload_json='{}'")
+    c.rollback()
+    c.execute('INSERT INTO runr_storage_compaction_guard VALUES(?,?,?)',('job_source_observations',0,1))
+    for sql in ("UPDATE job_source_observations SET content_hash='changed'", "UPDATE job_source_observations SET job_id='changed'", "UPDATE job_source_observations SET rowid=2"):
+        with pytest.raises(sqlite3.IntegrityError,match='immutable'):
+            c.execute(sql)
+    c.rollback()
+    assert c.execute('SELECT count(*) FROM runr_storage_compaction_guard').fetchone()[0]==0
+    with pytest.raises(sqlite3.OperationalError,match='no such column'):
+        apply_batch(c,'job_source_observations',['missing_column'],0,1)
+    assert c.execute('SELECT count(*) FROM runr_storage_compaction_guard').fetchone()[0]==0
+    c.close()
