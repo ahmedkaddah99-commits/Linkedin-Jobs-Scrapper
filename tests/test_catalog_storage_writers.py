@@ -95,6 +95,34 @@ def test_failed_archive_prevents_catalog_projection(tmp_path, monkeypatch):
         assert connection.execute('SELECT count(*) FROM canonical_jobs').fetchone()[0] == 0
 
 
+def test_bulk_archives_use_bounded_parallel_work(tmp_path, monkeypatch):
+    from threading import Barrier, Lock
+    import backend.repositories.sqlite_acquisition as module
+    store = _store(tmp_path, monkeypatch)
+    snapshot = _snapshot()
+    template = snapshot['jobs'][0]
+    snapshot['jobs'] = [{**template, 'job_id': str(index), 'url': f'https://acme.example/jobs/{index}'} for index in range(8)]
+    barrier, lock = Barrier(4), Lock()
+    original = module._catalog_storage_payloads
+    active = peak = 0
+    def tracked(*args):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            barrier.wait(timeout=10)
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(module, '_catalog_storage_payloads', tracked)
+    store.ingest_snapshots_bulk([snapshot])
+    assert peak == 4
+    with store._connect() as connection:
+        assert connection.execute('SELECT count(*) FROM job_source_observations').fetchone()[0] == 8
+
+
 def test_same_title_rejections_without_source_ids_do_not_collide(tmp_path, monkeypatch):
     store = _store(tmp_path, monkeypatch)
     rows = [{'canonical_job_id': job, 'external_job_id': '', 'title': 'Engineer',

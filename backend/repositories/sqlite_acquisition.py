@@ -6,6 +6,7 @@ import os
 from math import ceil
 from time import monotonic
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -1588,6 +1589,7 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         now = utc_now_iso()
         staged: list[tuple[Any, ...]] = []
+        archive_inputs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
         staged_targets: list[tuple[Any, ...]] = []
         snapshot_ids: list[tuple[str, str, str]] = []
         seen: set[tuple[str, str]] = set()
@@ -1675,7 +1677,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 )
                 job["external_id_source"] = "source_field" if source_external_id else "job_url_fallback"
                 payload_hash = self._payload_hash(job)
-                durable_payload, raw_reference = _catalog_storage_payloads(job, raw_job)
+                archive_inputs.append((job, raw_job))
                 row_number += 1
                 staged.append(
                     (
@@ -1701,8 +1703,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                         payload_hash,
                         hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest(),
                         observed_at,
-                        _json(durable_payload),
-                        _json(raw_reference),
+                        None,
+                        None,
                         _json(list(job.get("quality_warnings") or [])),
                         _json(job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {}),
                         _normalization_mapping_hash(job.get('unified_mapping') or {}, job),
@@ -1728,6 +1730,14 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
         if len(cycle_ids) != 1:
             raise ValueError("All snapshots in a producer ingest batch must belong to one cycle.")
+        # Bound archive concurrency and pending work. Verify every source copy
+        # before issuing the first staging write.
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for start in range(0, len(archive_inputs), 64):
+                results = executor.map(lambda pair: _catalog_storage_payloads(*pair), archive_inputs[start:start + 64])
+                for index, (durable_payload, raw_reference) in enumerate(results, start):
+                    row = staged[index]
+                    staged[index] = row[:22] + (_json(durable_payload), _json(raw_reference)) + row[24:]
         connection.execute(
             "INSERT INTO acquisition_ingest_batches "
             "(batch_id, cycle_id, status, company_count, job_count, created_at) "
