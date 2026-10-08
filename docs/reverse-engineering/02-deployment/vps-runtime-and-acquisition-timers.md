@@ -4,14 +4,26 @@
 # VPS runtime and acquisition timers
 
 Catalog storage maintenance uses `runr-catalog-storage-maintenance.service` and its
-daily timer. Pin its working directory and command to the installed committed release.
+hourly timer. Pin its working directory and command to the installed committed release.
 Load `/etc/runr/catalog-storage.env` after acquisition catalog configuration so source
 archives use the same private R2 namespace as Render. The wrapper shares the publisher
 lock and emits a durable JSON receipt plus Alloy textfile metrics under
 `/var/lib/runr/observability/catalog-storage.prom`. Capacity warnings start at 8 GB;
 9 GB is the included organization storage allowance, not a server disk limit.
 Complete and verify a private database backup before historical backfill or physical
-reclamation. Scheduled retention never runs VACUUM.
+reclamation. Scheduled retention never runs VACUUM. Hourly bounded cleanup is needed
+because approximately 25 daily publications each append a catalog membership snapshot;
+a single daily cleanup budget can fall behind that arrival rate. Measure committed
+deletions and backlog rather than assuming the timer's presence proves sufficient throughput.
+The long-lived `runr-acquisition-worker.service` must also use the installed storage
+release and shared R2 environment. Its `ExecStart` must explicitly set migration head
+and release commit with `/usr/bin/env`, since old `EnvironmentFile` values override
+systemd `Environment` declarations.
+Install `/etc/runr/catalog-storage-release.env` (root:runr-acquisition, 0640) with
+`RUNR_MIGRATION_HEAD` from the installed registry and `RUNR_RELEASE_COMMIT` from
+the installed code revision. Maintenance loads this file last so historical
+acquisition environment files cannot select an older migration or revision.
+Update this release file when changing the maintenance service's code directory.
 
 **Current owner instruction (2026-09-26):** read [vps-acquisition-operating-policy.md](vps-acquisition-operating-policy.md) before touching live acquisition. Dedicated collectors and publisher must stay enabled for unattended validation. Historical UNKNOWN statements below describe the original documentary baseline, not the live evidence in that policy.
 

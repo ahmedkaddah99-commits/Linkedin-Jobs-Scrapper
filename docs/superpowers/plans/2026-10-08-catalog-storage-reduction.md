@@ -13,7 +13,7 @@ an isolated worktree, preserving unrelated local files. Python is 3.12.7.
    rejection state across cycles instead of copying it indefinitely.
 4. Append migration 075 for retention checkpoints/indexes and removal of retired
    FTS structures. Preserve all existing migration checksums.
-5. Implement bounded resumable daily retention, pin head/rollback/checkpoint and
+5. Implement bounded resumable hourly retention, pin head/rollback/checkpoint and
    in-progress recovery publications, cap successful snapshot history, and
    remove obsolete rejection/no-evidence history without deleting user data.
 6. Implement historical backfill with verified cold archives, optimistic
