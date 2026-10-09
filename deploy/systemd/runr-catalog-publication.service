@@ -10,7 +10,7 @@ WorkingDirectory=/opt/runr
 EnvironmentFile=/opt/runr/.env.acquisition
 EnvironmentFile=/etc/runr/acquisition-catalog.env
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
-ExecStart=/usr/bin/flock -n -E 75 /srv/runr/state/locks/publisher.lock /usr/bin/env RUNR_MIGRATION_HEAD=076_catalog_publication_recovery /opt/runr/.venv/bin/python scripts/process_catalog_publication.py --max-seconds 120 --batch-size 200
+ExecStart=/usr/bin/flock -n -E 75 /srv/runr/state/locks/publisher.lock /usr/bin/env RUNR_MIGRATION_HEAD=076_catalog_publication_recovery /opt/runr/.venv/bin/python scripts/process_catalog_publication.py --max-seconds 120 --batch-size 500
 SuccessExitStatus=75
 TimeoutStartSec=240
 MemoryMax=1G
