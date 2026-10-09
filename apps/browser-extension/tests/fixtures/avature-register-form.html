@@ -1,0 +1,255 @@
+<!doctype html>
+<!--
+  Sanitized Avature-style application-form fixture.
+
+  Reproduces the control mix observed on an employer-hosted Avature candidate
+  portal profile step: native inputs and selects, an enhanced multi-select for
+  skills, month/date controls, repeated work-experience and education sections
+  with add/remove affordances, and an attachments block with a required CV
+  control plus optional cover-letter and supporting-document controls.
+
+  Employer and job identifiers are fictional. Every control is empty — no
+  candidate data appears anywhere in this file.
+
+  Detection contract: this page MUST classify as `application_form` with a
+  resume upload and repeated sections detected.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Register | Careers Marketplace</title>
+    <meta property="og:title" content="Automation Platform Engineer (m/w/d)" />
+    <meta property="og:site_name" content="Northwind Industries" />
+    <script src="/assets/avature/portal-runtime.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Automation Platform Engineer (m/w/d)</h1>
+
+      <ol class="application-stepper">
+        <li>Login / Registration</li>
+        <li aria-current="step">Profile information</li>
+        <li>Global questions</li>
+        <li>Country questions</li>
+      </ol>
+
+      <form id="application-form" action="/en_US/externaljobs/RegisterSubmit" method="post">
+        <section data-section="contact">
+          <label for="title">Title</label>
+          <select id="title" name="title">
+            <option value="">Select a title</option>
+            <option value="mr">Mr</option>
+            <option value="ms">Ms</option>
+            <option value="mx">Mx</option>
+          </select>
+
+          <label for="email">Email *</label>
+          <input id="email" name="email" type="email" required />
+
+          <label for="first-name">First Name *</label>
+          <input id="first-name" name="firstName" type="text" required />
+
+          <label for="last-name">Last Name *</label>
+          <input id="last-name" name="lastName" type="text" required />
+
+          <label for="phone">Phone Number *</label>
+          <input id="phone" name="phone" type="tel" required />
+
+          <label for="website">Website</label>
+          <input id="website" name="website" type="url" />
+
+          <label for="citizenship">Country/Region of citizenship *</label>
+          <select id="citizenship" name="citizenship" required>
+            <option value="">Select an option</option>
+            <option value="DE">Germany</option>
+            <option value="HU">Hungary</option>
+          </select>
+
+          <label for="residence">Country / Region of residence *</label>
+          <select id="residence" name="residence" required>
+            <option value="">Select a country</option>
+            <option value="DE">Germany</option>
+            <option value="HU">Hungary</option>
+          </select>
+
+          <label for="state">State / Province / County *</label>
+          <input id="state" name="state" type="text" required />
+
+          <label for="city">City *</label>
+          <input id="city" name="city" type="text" required />
+
+          <label for="street">Street address *</label>
+          <input id="street" name="street" type="text" required />
+
+          <label for="postal-code">Postal Code *</label>
+          <input id="postal-code" name="postalCode" type="text" required />
+
+          <label for="current-title">Current / Last position title *</label>
+          <input id="current-title" name="currentTitle" type="text" required />
+          <p id="current-title-hint">If it does not apply, please enter "Not Applicable"</p>
+
+          <label for="gender">Gender</label>
+          <select id="gender" name="gender">
+            <option value="">Select an option</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+            <option value="undisclosed">Prefer not to say</option>
+          </select>
+        </section>
+
+        <section data-section="skills">
+          <h2>Skills</h2>
+          <label for="skills">Skills</label>
+          <div
+            id="skills"
+            role="combobox"
+            aria-expanded="false"
+            aria-multiselectable="true"
+            aria-label="Skills"
+            data-placeholder="Start typing the skills that you have"
+            tabindex="0"
+          ></div>
+          <ul role="listbox" aria-label="Selected skills" hidden></ul>
+        </section>
+
+        <section data-section="experience">
+          <h2>Work experience</h2>
+
+          <fieldset data-repeat="experience" data-repeat-index="0">
+            <label for="exp-0-title">Job Title</label>
+            <input id="exp-0-title" name="experience[0][title]" type="text" />
+
+            <label for="exp-0-company">Company</label>
+            <input id="exp-0-company" name="experience[0][company]" type="text" />
+
+            <label for="exp-0-description">Description</label>
+            <textarea id="exp-0-description" name="experience[0][description]"></textarea>
+
+            <label for="exp-0-location">Location</label>
+            <input id="exp-0-location" name="experience[0][location]" type="text" />
+
+            <label for="exp-0-start">Start Date</label>
+            <input id="exp-0-start" name="experience[0][start]" type="month" placeholder="mm/dd/yyyy" />
+
+            <label for="exp-0-end">End Date</label>
+            <input id="exp-0-end" name="experience[0][end]" type="month" placeholder="mm/dd/yyyy" />
+
+            <label for="exp-0-current">Is current position?</label>
+            <select id="exp-0-current" name="experience[0][current]">
+              <option value="">Select an option</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+
+            <button type="button" data-repeat-remove="experience">Remove</button>
+          </fieldset>
+
+          <button type="button" data-repeat-add="experience">Add another</button>
+        </section>
+
+        <section data-section="education">
+          <h2>Education details</h2>
+
+          <fieldset data-repeat="education" data-repeat-index="0">
+            <label for="edu-0-school">School</label>
+            <input id="edu-0-school" name="education[0][school]" type="text" />
+
+            <label for="edu-0-degree">Degree</label>
+            <input id="edu-0-degree" name="education[0][degree]" type="text" />
+
+            <label for="edu-0-description">Description</label>
+            <textarea id="edu-0-description" name="education[0][description]"></textarea>
+
+            <label for="edu-0-major">Major</label>
+            <input id="edu-0-major" name="education[0][major]" type="text" />
+
+            <label for="edu-0-start">Start Date</label>
+            <input id="edu-0-start" name="education[0][start]" type="month" placeholder="mm/dd/yyyy" />
+
+            <label for="edu-0-end">End Date</label>
+            <input id="edu-0-end" name="education[0][end]" type="month" placeholder="mm/dd/yyyy" />
+
+            <label for="edu-0-location">Location</label>
+            <input id="edu-0-location" name="education[0][location]" type="text" />
+
+            <label for="edu-0-current">Is current study?</label>
+            <select id="edu-0-current" name="education[0][current]">
+              <option value="">Select an option</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+
+            <button type="button" data-repeat-remove="education">Remove</button>
+          </fieldset>
+
+          <button type="button" data-repeat-add="education">Add another</button>
+        </section>
+
+        <section data-section="attachments">
+          <h2>Attachments</h2>
+
+          <label for="cv">CV / Resume *</label>
+          <input id="cv" name="cv" type="file" accept=".pdf,.doc,.docx" required />
+
+          <label for="cover-letter">Cover Letter</label>
+          <input id="cover-letter" name="coverLetter" type="file" accept=".pdf,.doc,.docx" />
+
+          <label for="additional-1">Additional document</label>
+          <input id="additional-1" name="additional1" type="file" accept=".pdf,.doc,.docx" />
+
+          <label for="additional-2">Additional document</label>
+          <input id="additional-2" name="additional2" type="file" accept=".pdf,.doc,.docx" />
+        </section>
+
+        <section data-section="notifications">
+          <h2>Notifications</h2>
+
+          <label for="notification-language">Please choose your notification language</label>
+          <select id="notification-language" name="notificationLanguage">
+            <option value="">Select an option</option>
+            <option value="en">English</option>
+            <option value="de">German</option>
+          </select>
+
+          <label for="communications">Interested in company communications / news</label>
+          <select id="communications" name="communications">
+            <option value="">Select an option</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+
+          <label for="visibility">Visibility as candidate</label>
+          <select id="visibility" name="visibility">
+            <option value="">Select an option</option>
+            <option value="visible">Visible</option>
+            <option value="hidden">Hidden</option>
+          </select>
+
+          <label for="data-sharing">
+            Make my data accessible to all relevant group companies worldwide to
+            consider me for open positions that fit my profile.
+          </label>
+          <select id="data-sharing" name="dataSharing">
+            <option value="">Select an option</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </section>
+
+        <button type="submit" id="continue-application">Continue Application</button>
+      </form>
+      <script>
+        window.__avatureContinueClicks = 0;
+        document.querySelector("#continue-application").addEventListener("click", (event) => {
+          window.__avatureContinueClicks += 1;
+          const active = document.querySelector(".application-stepper [aria-current='step']");
+          const next = active?.nextElementSibling;
+          if (!active || !next) return;
+          active.removeAttribute("aria-current");
+          next.setAttribute("aria-current", "step");
+          event.preventDefault();
+        });
+      </script>
+    </main>
+  </body>
+</html>

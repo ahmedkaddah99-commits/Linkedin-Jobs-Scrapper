@@ -1,0 +1,2 @@
+# Lightweight language detection only. Translation uses OpenRouter, not local models.
+langdetect==1.0.9

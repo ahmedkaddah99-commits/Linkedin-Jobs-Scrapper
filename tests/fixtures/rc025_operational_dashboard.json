@@ -1,0 +1,266 @@
+{
+  "window": {
+    "start": "2026-08-05T00:00:00Z",
+    "end": "2026-08-12T00:00:00Z",
+    "timezone": "UTC"
+  },
+  "targets": [
+    {
+      "target_id": "ready-company",
+      "display_name": "Ready Company",
+      "connector": "fixture",
+      "provider": "fixture",
+      "maturity_state": "ready",
+      "enabled": true,
+      "quarantined": false,
+      "last_attempt_at": "2026-08-11T23:50:00Z",
+      "last_success_at": "2026-08-11T23:55:00Z",
+      "config": {
+        "employer_id": "employer-1",
+        "organization_group_id": "org-1",
+        "evidence_verified_eligible": true,
+        "freshness_max_age_hours": 24
+      }
+    },
+    {
+      "target_id": "stale-company",
+      "display_name": "Stale Company",
+      "connector": "fixture",
+      "provider": "fixture",
+      "maturity_state": "ready",
+      "enabled": true,
+      "quarantined": false,
+      "last_attempt_at": "2026-08-01T23:50:00Z",
+      "last_success_at": "2026-08-01T23:55:00Z",
+      "config": {
+        "employer_id": "employer-1",
+        "organization_group_id": "org-1",
+        "evidence_verified_eligible": true,
+        "freshness_max_age_hours": 24
+      }
+    },
+    {
+      "target_id": "partial-company",
+      "display_name": "Partial Company",
+      "connector": "fixture",
+      "provider": "fixture",
+      "maturity_state": "ready",
+      "enabled": true,
+      "quarantined": false,
+      "last_attempt_at": "2026-08-11T22:00:00Z",
+      "last_success_at": "2026-08-11T22:10:00Z",
+      "config": {
+        "employer_id": "employer-2",
+        "organization_group_id": "org-2",
+        "evidence_verified_eligible": true,
+        "freshness_max_age_hours": 24
+      }
+    },
+    {
+      "target_id": "failed-unknown-cost",
+      "display_name": "Failed Unknown Cost",
+      "connector": "fixture",
+      "provider": "fixture",
+      "maturity_state": "ready",
+      "enabled": true,
+      "quarantined": false,
+      "last_attempt_at": "2026-08-10T12:00:00Z",
+      "last_success_at": "",
+      "config": {
+        "employer_id": "employer-3",
+        "organization_group_id": "org-3",
+        "evidence_verified_eligible": false,
+        "freshness_max_age_hours": 24
+      }
+    },
+    {
+      "target_id": "stuck-task-company",
+      "display_name": "Stuck Task Company",
+      "connector": "fixture",
+      "provider": "fixture",
+      "maturity_state": "ready",
+      "enabled": true,
+      "quarantined": false,
+      "last_attempt_at": "2026-08-01T12:00:00Z",
+      "last_success_at": "",
+      "config": {
+        "organization_group_id": "org-4",
+        "freshness_max_age_hours": 24
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-ready",
+      "target_id": "ready-company",
+      "status": "completed",
+      "complete_snapshot": true,
+      "valid_snapshot": true,
+      "attempt_count": 1,
+      "max_attempts": 3,
+      "jobs_observed": 3,
+      "jobs_new": 2,
+      "jobs_updated": 1,
+      "jobs_unchanged": 0,
+      "jobs_published": 3,
+      "jobs_rejected": 0,
+      "started_at": "2026-08-11T23:50:00Z",
+      "completed_at": "2026-08-11T23:55:00Z",
+      "updated_at": "2026-08-11T23:55:00Z",
+      "collection_metadata": {"stop_reason": "bounded_snapshot_complete"}
+    },
+    {
+      "task_id": "task-stale",
+      "target_id": "stale-company",
+      "status": "completed",
+      "complete_snapshot": true,
+      "valid_snapshot": true,
+      "attempt_count": 1,
+      "max_attempts": 3,
+      "jobs_observed": 1,
+      "jobs_new": 1,
+      "jobs_updated": 0,
+      "jobs_unchanged": 0,
+      "jobs_published": 1,
+      "jobs_rejected": 0,
+      "started_at": "2026-08-01T23:50:00Z",
+      "completed_at": "2026-08-01T23:55:00Z",
+      "updated_at": "2026-08-01T23:55:00Z",
+      "collection_metadata": {"stop_reason": "bounded_snapshot_complete"}
+    },
+    {
+      "task_id": "task-partial",
+      "target_id": "partial-company",
+      "status": "partial",
+      "complete_snapshot": false,
+      "valid_snapshot": false,
+      "attempt_count": 1,
+      "max_attempts": 3,
+      "jobs_observed": 2,
+      "jobs_new": 1,
+      "jobs_updated": 0,
+      "jobs_unchanged": 0,
+      "jobs_published": 1,
+      "jobs_rejected": 1,
+      "started_at": "2026-08-11T22:00:00Z",
+      "completed_at": "",
+      "updated_at": "2026-08-11T22:10:00Z",
+      "collection_metadata": {"stop_reason": "max_requests"}
+    },
+    {
+      "task_id": "task-failed",
+      "target_id": "failed-unknown-cost",
+      "status": "failed",
+      "complete_snapshot": false,
+      "valid_snapshot": false,
+      "attempt_count": 1,
+      "max_attempts": 3,
+      "jobs_observed": 0,
+      "jobs_new": 0,
+      "jobs_updated": 0,
+      "jobs_unchanged": 0,
+      "jobs_published": 0,
+      "jobs_rejected": 0,
+      "started_at": "2026-08-10T12:00:00Z",
+      "completed_at": "",
+      "updated_at": "2026-08-10T12:01:00Z",
+      "next_attempt_at": "2026-08-11T00:00:00Z",
+      "last_error_code": "source_outage",
+      "collection_metadata": {"negative_result": true}
+    },
+    {
+      "task_id": "task-stuck",
+      "target_id": "stuck-task-company",
+      "status": "running",
+      "complete_snapshot": false,
+      "valid_snapshot": false,
+      "attempt_count": 1,
+      "max_attempts": 3,
+      "jobs_observed": 0,
+      "jobs_new": 0,
+      "jobs_updated": 0,
+      "jobs_unchanged": 0,
+      "jobs_published": 0,
+      "jobs_rejected": 0,
+      "started_at": "2026-08-01T12:00:00Z",
+      "completed_at": "",
+      "updated_at": "2026-08-01T12:01:00Z",
+      "lease_expires_at": "2026-08-02T12:00:00Z",
+      "collection_metadata": {}
+    }
+  ],
+  "requests": [
+    {
+      "request_id": "request-ready",
+      "task_id": "task-ready",
+      "target_id": "ready-company",
+      "status": "completed",
+      "credits_actual": 2,
+      "credits_estimated": 2,
+      "detail": {"cost_known": true},
+      "started_at": "2026-08-11T23:50:00Z",
+      "completed_at": "2026-08-11T23:55:00Z"
+    },
+    {
+      "request_id": "request-failed",
+      "task_id": "task-failed",
+      "target_id": "failed-unknown-cost",
+      "status": "failed",
+      "credits_actual": 0,
+      "credits_estimated": 0,
+      "detail": {"cost_known": false},
+      "started_at": "2026-08-10T12:00:00Z",
+      "completed_at": "2026-08-10T12:01:00Z",
+      "error_code": "source_outage"
+    }
+  ],
+  "workers": [
+    {
+      "worker_id": "worker-online",
+      "status": "idle",
+      "last_heartbeat_at": "2026-08-11T23:59:30Z",
+      "metadata": {
+        "role": "customer",
+        "version": "fixture-worker-v1",
+        "resources": {
+          "disk_free_bytes": 9000000000,
+          "disk_used_bytes": 1000000000,
+          "memory_used_bytes": 200000000,
+          "memory_limit_bytes": 1000000000
+        }
+      }
+    },
+    {
+      "worker_id": "worker-offline",
+      "status": "running",
+      "last_heartbeat_at": "2026-08-01T00:00:00Z",
+      "metadata": {"role": "acquisition", "version": "fixture-worker-v0"}
+    }
+  ],
+  "budget": {
+    "provider_id": "fixture",
+    "max_requests": 4,
+    "max_cost_units": 10,
+    "requests_used": 4,
+    "cost_units_used": 10,
+    "policy_state": "limit_reached"
+  },
+  "expected": {
+    "master_rows": 17601,
+    "existing_master_ids": 7513,
+    "missing_master_ids": 10088,
+    "unique_employer_organizations": 11907,
+    "organization_scan_groups": 4,
+    "source_tasks": 5,
+    "evidence_verified_eligible": 3,
+    "identity_review": 1,
+    "alias_review": 1,
+    "negative_result_recheck": 1,
+    "due_retry": 1,
+    "stuck_tasks": 1,
+    "stale_worker_id": "worker-offline",
+    "stale_source_id": "stale-company",
+    "partial_source_id": "partial-company",
+    "unknown_cost_source_id": "failed-unknown-cost"
+  }
+}

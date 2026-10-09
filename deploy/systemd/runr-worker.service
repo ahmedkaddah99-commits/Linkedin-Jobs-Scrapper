@@ -1,0 +1,40 @@
+[Unit]
+Description=Runr worker
+After=runr-api.service network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/runr
+User=runr
+Group=runr
+UMask=0077
+EnvironmentFile=/opt/runr/.env
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_DATA_DIR=/var/lib/runr/customer-data
+Environment=RUNR_WORKER_LOG_DIR=/var/log/runr/customer
+Environment=WORKER_ROLE=customer
+Environment=WORKER_ID=vps_customer_worker
+ExecStart=/opt/runr/deploy/start.sh worker
+Restart=always
+RestartSec=5
+TimeoutStopSec=300
+CPUAccounting=true
+CPUQuota=300%
+MemoryAccounting=true
+MemoryHigh=9G
+MemoryMax=12G
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr /var/log/runr/customer
+

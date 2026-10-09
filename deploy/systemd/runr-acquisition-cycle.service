@@ -1,0 +1,47 @@
+[Unit]
+Description=Runr bounded LinkedIn and employer acquisition cycle
+After=network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+# Provider credentials are kept separately from operational caps and paths.
+# The leading '-' preserves fail-closed startup when no provider is configured.
+EnvironmentFile=-/opt/runr/.env.acquisition.provider
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_DATA_DIR=/var/lib/runr/acquisition-data
+Environment=RUNR_ACQUISITION_INPUT_ROOT=/srv/runr/shared/inputs
+Environment=RUNR_ACQUISITION_STATE_ROOT=/srv/runr/state
+Environment=RUNR_ACQUISITION_EXPORT_ROOT=/srv/runr/exports
+Environment=RUNR_ACQUISITION_BACKUP_ROOT=/srv/runr/backups
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ExecStart=/opt/runr/deploy/run-acquisition-cycle.sh
+CPUAccounting=true
+CPUQuota=300%
+MemoryAccounting=true
+MemoryHigh=6G
+MemoryMax=9G
+TasksMax=512
+TimeoutStartSec=infinity
+TimeoutStopSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups
+
+[Install]
+WantedBy=multi-user.target

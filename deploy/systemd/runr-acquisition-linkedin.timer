@@ -1,0 +1,11 @@
+[Unit]
+Description=Runr daily LinkedIn acquisition timer
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=runr-acquisition-linkedin.service
+
+[Install]
+WantedBy=timers.target

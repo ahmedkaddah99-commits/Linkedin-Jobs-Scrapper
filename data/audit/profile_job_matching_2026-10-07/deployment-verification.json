@@ -1,0 +1,48 @@
+{
+  "checked_at_utc": "2026-10-07T02:04:10.669316+00:00",
+  "render": {
+    "api": {
+      "status": "live",
+      "commit": "0f0a81b29c580633c05df0f2c4843aee90821da8"
+    },
+    "frontend": {
+      "status": "live",
+      "commit": "0f0a81b29c580633c05df0f2c4843aee90821da8"
+    },
+    "worker": {
+      "status": "live",
+      "commit": "0f0a81b29c580633c05df0f2c4843aee90821da8"
+    }
+  },
+  "api_ready": true,
+  "vps_matching_commit": "0f0a81b29c580633c05df0f2c4843aee90821da8",
+  "vps_timers_restored": [
+    "matching",
+    "description",
+    "publication"
+  ],
+  "description_workers": 32,
+  "coverage": {
+    "published": 33840,
+    "current_facts": 33830,
+    "missing_or_stale": 10
+  },
+  "saved_profile": {
+    "skills": 22,
+    "dated_roles": 4,
+    "education": 2,
+    "source": "selected_uploaded_cv_import_then_saved_profile"
+  },
+  "validation": {
+    "final_backend_tests": 26,
+    "earlier_focused_backend_tests": 32,
+    "frontend_unit_tests": 173,
+    "browser_checks": 4
+  },
+  "limits": [
+    "Production writes can time out with competing acquisition/enrichment writers; durable retry remains enabled.",
+    "Current facts coverage was 99.97% during concurrent enrichment.",
+    "Operator detail service sample took 4.3?4.9 seconds; no sub-second browser latency claim.",
+    "Rubric is provisional, not Jobright proprietary scoring or calibrated hiring probability."
+  ]
+}

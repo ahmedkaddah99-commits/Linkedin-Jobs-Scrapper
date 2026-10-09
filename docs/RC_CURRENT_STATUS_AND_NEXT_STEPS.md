@@ -1,0 +1,702 @@
+# Current RC status and next steps
+
+## Current implementation checkpoint - 2026-09-10
+
+Executable candidate: `2ab1da7fdd9883e86adca726335427ac91244c4b`. The
+2026-09-09 current-tip statements below are historical. Runtime corrections
+now enforce explicit cohorts, defer untouched companies after request-budget
+exhaustion, install the required Python Playwright runtime, use the real
+browser request API and proxy authentication fields, and keep unverified
+rendered snapshots closure-unsafe. Employer discovery tries credible homepage
+career links before spending on guessed paths. Existing enrichment callers
+keep their prior discovery strategy.
+
+Timeouts now retain observed jobs and request counts; browser extraction tries
+direct access before proxy fallback using the remaining shared browser budget.
+The final live invocation was stopped at the user's instruction to stop
+provider-credit diagnostics. Confirmed usage is 188 attempts, with 12 reserved
+for the interrupted run and not available for reuse until reconciled. No
+acquisition processes remain running. Offline checks use no provider credits.
+
+The VPS browser proof passed under the acquisition user and a systemd sandbox
+using only a loopback fixture. RC-027 acceptance and production cutover remain
+pending: real-source diagnostics are not scheduler/Turso/API/UI acceptance.
+Use the latest pilot receipt for request accounting and per-company outcomes.
+
+Date: 2026-09-09
+
+Branch: `deployment/render-turso-r2`
+
+## Final local candidate amendment - 2026-09-09
+
+The clean persistent target and C integration worktree are at
+`83d508b5e227ebd820588d8d05b849d39f77d7bc`. This docs-only descendant of
+the previously pinned local candidate `b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`
+and staged repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was
+not pushed or deployed; the frontend release metadata was rebuilt against
+this exact SHA.
+
+## Repair-candidate live verification amendment - 2026-09-09
+
+The final A/B repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3`
+was staged in an isolated VPS release directory. LinkedIn cycle 1 used 60
+attempts on the frozen four-company selection and remained partial:
+`PARTIAL_SUSPICIOUS_EMPTY` for all four, 61 valid cards, 45 detail successes,
+16 pending retries and 45 jobs written. Employer used 40 attempts, but its
+`--limit 0` invocation processed all 1,574 eligible rows rather than the
+frozen four, so that result is diagnostic only (1,573 partial, one
+source-failed, zero jobs). New usage is 100/200 attempts; no Turso write,
+migration, R2 write or publication occurred, and acquisition remains disabled.
+
+## Producer repair integration amendment - 2026-09-09
+
+A final tip `5c100043d51e616e2de4fb595f362d951d70e30d` and implementation
+`9ac2ab4182c66d1aecdb6150574fdce6012153ca` were merged into C as
+`a10f3e4c559c8ea05c4d458135f487831797c8a5`. B final tip
+`7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` and implementation
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7` were then merged as
+`3882806d44731efe1cafdf12ab11389bf9233b07`. The target and C worktrees now
+match this clean candidate; A/B repair ancestry is preserved in C.
+
+The exact merged backend suite passed **427/429 tests**. The only two failures
+are the unchanged clean-baseline tracker tests recorded below. Ruff, Python
+compilation and `git diff --check` passed. The target frontend passed **170/170
+tests**, and the Vite production build passed with metadata stamped to
+`3882806d44731efe1cafdf12ab11389bf9233b07`.
+
+## Reconciliation amendment - 2026-09-09
+
+The clean integrated code baseline is
+`e28aa5f2e065848679d2302841dbe1bde36be8cd`. A and B were verified at their
+supplied clean tips, merged into C with ancestry preserved, and advanced to
+this same baseline for the next captured-evidence-only producer repairs. A
+owns LinkedIn producer repairs; B owns employer producer repairs; C owns
+shared scheduler, publication, API, configuration, migration, release and
+staging contracts.
+
+The current clean C and persistent-target tip, including the producer repairs
+and reconciliation evidence below, is
+`3882806d44731efe1cafdf12ab11389bf9233b07`. No uncommitted lane files were
+copied.
+
+The earlier 310-test regression was extended after A/B producer repair
+integration to 429 tests. It passed 427 tests; the only failures are the two
+tracker/API failures reproduced unchanged on the clean pre-merge target: the
+bulk-export motivation-letter filename and the empty persisted ATS attempt
+history.
+
+The integrated frontend passed **170 unit tests** and a Vite production build
+with explicit release metadata for the integrated candidate. The lockfile
+install was attempted with `npm ci --no-audit --no-fund` but stalled on
+Windows before restoring the ESLint binary; no lockfile change was made.
+
+The VPS boundary gate now passes for the disabled acquisition service: its
+unit reads only `/opt/runr/.env.acquisition`, skips project dotenv loading,
+cannot read the customer `.env`, starts and restarts with zero restarts and
+zero source/collector log lines, and remains stopped/disabled after the
+check. The local object/cache roots are role-owned under
+`/var/lib/runr/acquisition-data`; rollback copies are retained under
+`/var/lib/runr/rollback/rc027-boundary-20260909/`.
+
+Production R2 was used only for the explicitly authorized immutable RC-027
+receipt and signed range read. No production Turso write or migration was
+made. Isolated Turso management credentials, dedicated R2 credentials and
+bucket CORS management remain unavailable. The live Render API/worker and
+frontend revisions remain separate from this local candidate; no deployment
+has been triggered.
+
+The provider check was repeated by key name only: the authoritative env has
+`TURSO_AUTH_TOKEN` and `TURSO_DATABASE_URL`, but no `TURSO_PLATFORM_TOKEN` or
+`TURSO_ORG`; the existing S3/R2, Render and Webshare key names are present.
+The SQL token queried the production database, while the prior organization
+management probe returned HTTP 401. Turso's current API documentation supports
+personal-account or organization database creation when a Platform API bearer
+token, account/organization slug and existing group are available. The exact
+blocker is management credential/namespace scope, not an assumption that the
+Hobby plan prohibits staging.
+
+The bounded pilot LinkedIn state now has a verified off-host SQLite Online
+Backup checkpoint: source
+`/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`
+was `770048` bytes, SHA-256
+`ed94c1cd30095c3544adccabb028072b327885ccaf2e48630d3d4945213a59d5`, and
+integrity `ok`. Checkpoint
+`linkedin-20260909T201035631862Z-e6d35734a371` produced a `770048` byte backup
+with SHA-256
+`d445e6c1a2dfb45d189c3ced3351406f867f49f3264f5375b07f078f26659356`.
+The local checkpoint and validated local/R2 restores are preserved under
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\`;
+the remote keys are under
+`rc027/checkpoints/linkedin/linkedin-20260909T201035631862Z-e6d35734a371/`.
+This proves bounded pilot-state preservation, not historical-state or
+replacement-host acceptance.
+
+The signed-URL CORS probe against origin `https://app.userunr.com` returned
+`GET 206` with no `Access-Control-Allow-*` headers and `OPTIONS 403` with no
+CORS headers. Direct browser download therefore remains blocked; server-side
+R2 object/HEAD/sign/range behavior passed.
+
+Previous documentation-only reconciliation tip: `7c106545c9f98e8cdf391e7c624f88cdce3d76b0`
+
+Current local release candidate: `83d508b5e227ebd820588d8d05b849d39f77d7bc`
+
+This is an in-host integration handoff. No reset, clean, push, deploy,
+production migration, or customer-service mutation was performed. The
+authorized RC-027 pilot made bounded LinkedIn/employer requests and wrote one
+small immutable receipt to the existing production R2 bucket under a unique
+RC-027 prefix; no production Turso write or existing-object mutation occurred.
+The exact result is in `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`.
+Frozen A/B lane tips remain integrated sequentially. RC-023 host runtime
+rehearsal and the RC-027 producer/transport execution are evidenced, but RC-027
+acceptance remains blocked by invalid/partial source results, authenticated UI
+publication, CORS and dedicated staging-resource gates. The persistent target
+is advanced only after this C evidence commit is complete.
+
+Read-only deployment visibility is split: the VPS runs `6e9a1e93`, the live
+Render API/worker deploy runs `30ef992b7945ff0998704a550fdc2f893b24476f`, and
+the live frontend advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`. The
+public Render API health endpoint returns HTTP 200. The local target is not
+deployed; its remote-tracking branch is `30ef992b7945ff0998704a550fdc2f893b24476f`
+and the local target remains ahead; the exact clean tip is reported by the Git
+handoff.
+
+## Environment and verification result
+
+The repository-mandated interpreter was checked before Python work:
+
+```text
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe --version
+Python 3.12.7
+```
+
+The actual 14-table producer remains `scripts/master_linkedin_jobs_catalog.py`.
+`master_linkedin_jobs_url_catalog.py` was not substituted for it. The RC-013
+retry, lifecycle, suspicious-empty, and ownership fixtures remain in the
+working tree and are covered by the producer-focused tests.
+
+### Bounded backend regression
+
+The combined offline command covered identity, eligibility, adapters, both
+producers, normalization/publication, scheduler and lifecycle, worker roles,
+intelligence recovery, customer task handling, storage, migrations, and SQLite
+repositories. It used the shared Python interpreter above and selected these
+tests:
+
+```text
+tests/test_company_registry_reconciliation.py
+tests/test_company_id_backfill.py
+tests/test_source_eligibility_manifest.py
+tests/test_rc006_resolution_safety.py
+tests/test_producer_adapters.py
+tests/test_phase_b_catalog.py
+tests/test_rc009_normalization_publication.py
+tests/test_rc010_first_acquisition_slice.py
+tests/test_observation_store_integration.py
+tests/test_employer_site_fallbacks.py
+tests/test_rc011_employer_outcomes.py
+tests/test_rc012_employer_concurrency.py
+tests/test_master_employer_jobs_catalog.py
+tests/test_master_linkedin_jobs_catalog.py
+tests/test_phase_a_acquisition.py
+tests/test_phase_a_scheduler.py
+tests/test_phase_a_rc016.py
+tests/test_phase_a_rc017.py
+tests/test_phase_a_rc018.py
+tests/test_phase_a_rc019.py
+tests/test_phase_a_rc020.py
+tests/test_phase_a_rc021.py
+tests/test_object_storage.py
+tests/test_database_migrations.py
+tests/test_worker_service.py
+tests/test_sqlite_repositories.py
+```
+
+Result: **255 passed, 8 subtests passed in 60.98s**.
+
+This verifies the current RC-016 behavior rather than reopening the failures
+reported during RC-016. RC-017's current reconciliation behavior also passed.
+`git diff --check` passed (only normal Git line-ending warnings were emitted).
+
+### Frontend and dependency verification
+
+`frontend/node_modules` was incomplete, so the repository lockfile workflow was
+used: `npm ci` in `frontend/`. It installed 722 packages and audited 723. npm
+reported 19 advisories (2 low, 4 moderate, 11 high, 2 critical), including the
+deprecated/vulnerable `next@15.4.6` package. No audit fix or dependency upgrade
+was run.
+
+Results:
+
+- `npm test`: **167 passed, 0 failed**, 4 suites.
+- `npm run build`: **passed**; Vite transformed 1,148 modules and built in
+  16.24 seconds.
+- `frontend/src/lib/api.test.js` includes the signed-object test proving that a
+  fully-qualified signed URL is fetched without a Runr bearer token. The full
+  frontend suite also covers retry and status polling behavior.
+- `frontend/src/hooks/useTracker.js`, the customer-task route, and the
+  Artifacts/Tracker pages retain queued task status polling. The backend
+  exposes task status for queued bulk export and email sync rather than making
+  the UI treat acceptance as completion.
+
+The production build is a local artifact only; it was not deployed.
+
+## Exact remaining API failures
+
+The focused current-worktree command was:
+
+```text
+pytest -q --disable-warnings tests/test_backend_api.py \
+  -k "test_tracker_api or test_tracker_ats_detail_returns_persisted_read_only_diagnostics"
+```
+
+Result: **2 failed, 123 deselected in 9.98s**.
+
+1. `BackendApiTests.test_tracker_api` (`tests/test_backend_api.py:5305`):
+   expected `Admin_Engineer_ACMEAPI_MotivationLetter.txt` in the bulk-export
+   ZIP, received `Cover letter.txt`.
+2. `BackendApiTests.test_tracker_ats_detail_returns_persisted_read_only_diagnostics`
+   (`tests/test_backend_api.py:6216`): expected two persisted ATS attempts,
+   received an empty `attempt_history`.
+
+Baseline evidence was established without changing this checkout by exporting
+committed HEAD `e7662c6` into an isolated temporary copy and running the same
+focused command. It reproduced both failures exactly: **2 failed, 123
+deselected in 7.83s**. The current RC-021 diff adds object-storage/download
+handling and frontend credential behavior, but has no hunk changing the
+custom-generated filename or `_tracker_ats_detail_payload` history source.
+Therefore these are independent committed-HEAD baseline failures, not RC-021
+regressions. They remain follow-up defects; they were not silently labeled
+unrelated merely because they are outside the storage ticket.
+
+No source fix was justified in this pass. The follow-up should first correct
+the expected document-name contract and then trace the persisted metadata key
+(`ats_attempt_history`) through artifact read-only diagnostics. It should add
+focused regressions before changing the shared API.
+
+## RC-021 storage and browser operational handoff
+
+Offline evidence is in `docs/RC021_PORTABLE_ARTIFACT_STORAGE.md`,
+`tests/test_phase_a_rc021.py`, `tests/test_object_storage.py`, and the selected
+backend API download/export tests. The focused storage result was **13 passed,
+4 subtests passed**; the combined RC-018--021/storage result was **35 passed,
+4 subtests**. The implementation checks:
+
+- ownership before signing in the API route and object-storage descriptor;
+- expiry and signature validation for local signed downloads;
+- allowed MIME types and the configured maximum size in
+  `backend/storage/policy.py`;
+- content-hash object keys and stored SHA-256 metadata for immutable content;
+- bounded materialization cache bytes and age;
+- direct S3/R2 redirects when direct storage is enabled, with local fallback;
+- API response accounting through `object_storage_bytes_shifted` and the
+  redirect headers.
+
+### Required R2 CORS configuration
+
+Apply this to the R2 bucket only after replacing the two placeholders with the
+actual deployed origins. Do not use `*` for production origins:
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://<production-frontend-origin>",
+      "https://<staging-frontend-origin>"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["Range", "Content-Type", "Accept"],
+    "ExposeHeaders": [
+      "Accept-Ranges",
+      "Content-Length",
+      "Content-Disposition",
+      "Content-Type",
+      "ETag"
+    ],
+    "MaxAgeSeconds": 600
+  }
+]
+```
+
+If the browser extension fetches R2 directly, add its exact
+`chrome-extension://<extension-id>` origin as a third `AllowedOrigins` entry
+after the extension ID is fixed. The configuration is **pending external R2
+administration** and has not been claimed as deployed or live-tested.
+
+### Deployed-browser verification procedure
+
+Run this only against an isolated staging artifact after R2 CORS is applied:
+
+1. Record the frontend/API revision, exact frontend origin, R2 bucket policy
+   revision, and test user IDs. Create an artifact owned by user A with a safe
+   MIME type and known byte size.
+2. With user A, request the API download endpoint. Verify ownership is checked
+   before signing, the API response is a redirect to the R2 host, the signed
+   URL has a bounded expiry, and the response contains no API bearer token in
+   the `Location` value.
+3. Follow the signed URL from the browser without an `Authorization` header.
+   Verify CORS, `Content-Disposition` filename, `Content-Type`, exact size,
+   and direct download behavior. Repeat with an empty API/local materialization
+   cache on a second host.
+4. With user B, try user A's API endpoint and signed URL. Expect denial. Try a
+   tampered and an expired URL and expect object-store denial.
+5. Submit forbidden MIME and over-limit fixtures through the API and verify
+   rejection before signing. Verify object keys contain the content hash and
+   do not reuse a mutable path. Exercise cache age/byte pruning and confirm
+   the protected current object is retained.
+6. Confirm API logs report `object_storage_bytes_shifted` and that the
+   download response exposes the redirect/byte headers. Record browser,
+   network, and API evidence with no customer document contents.
+
+No step above was run live in this integration pass.
+
+## Ticket status
+
+The statuses below distinguish offline implementation/evidence from external
+deployment, provider authorization, data approval, and live acceptance.
+
+| Ticket | Implementation/status | Current evidence | Pending action and real dependency |
+|---|---|---|---|
+| RC-001 | Verified offline | Baseline contract, handoff, current combined matrix | Record deployed state and source-of-truth revisions when authorized. |
+| RC-002 | Verified offline | `BASELINE_METRICS.*`, baseline tests | Replace proposed capacity/cost targets with measured approved workload evidence before RC-026/027. |
+| RC-003 | Verified offline, review incomplete | Registry fixtures/tests and identity handoff | Review application/shared-organization dispositions and owner decisions. |
+| RC-004 | Verified offline, dry-run only | Backfill report and backfill tests | Approve mappings and apply bounded data waves. |
+| RC-005 | Verified offline | Manifest artifacts/tests and handoff | Prove runtime manifest consumption and source-task replacement in staging. |
+| RC-006a | Verified offline | Resolution-safety fixtures/tests | Keep resolver controls and review gates in the release. |
+| RC-006b | Not started / external | No provider authorization or live enrichment evidence | Provider authorization and bounded enrichment remain pending; not a prerequisite for RC-022. |
+| RC-007 | Verified offline | Export-separation report and producer tests | Integrate the selected release and verify the deployed export path. |
+| RC-008 | Verified offline | Adapter report, `tests/test_producer_adapters.py`, combined matrix | Runtime adapter wiring and staging proof remain pending. |
+| RC-009 | Verified offline | Normalization/publication report and tests | Staging/live publication, expiry, and user-journey evidence remain pending. |
+| RC-010 | Verified offline fixture/API slice | `tests/test_rc010_first_acquisition_slice.py` | Browser/server and real-source staging acceptance remain pending. |
+| RC-011 | Verified offline | Employer outcome fixtures/tests | Live employer challenge/timeout behavior and coverage denominator remain pending. |
+| RC-012 | Verified offline | Concurrency/transport tests; current matrix | Live request accounting and measured limits remain pending. |
+| RC-013 | Verified offline | Actual 14-table producer tests, retry/ambiguous ownership/suspicious-empty/lifecycle fixtures, producer handoff | No live LinkedIn scan was authorized; staging scan acceptance remains pending. |
+| RC-014 | Verified offline | Incremental-refresh evidence/tests | Real detail-refresh savings and staging cycle remain pending. |
+| RC-015 | Verified offline | Transport/storage evidence/tests | VPS checkpoint/transport performance and recovery evidence remain pending. |
+| RC-016 | Verified current integration | `tests/test_phase_a_rc016.py` and scheduler tests passed in the 255-test matrix | Deployed scheduler ownership and live worker evidence remain pending. |
+| RC-017 | Verified current integration | `tests/test_phase_a_rc017.py` and migration/publication tests passed | Staging publication/expiry and recovery drills remain pending. |
+| RC-018 | Verified offline/current | `docs/RC018_WORKER_ROLES.md`, tests, and combined matrix | Release image separation and deployed role/claim verification move to RC-022/023. |
+| RC-019 | Verified offline/current | `docs/RC019_INTELLIGENCE_RECOVERY.md`, tests, and combined matrix | Live recovery/heartbeat and resource limits remain pending. |
+| RC-020 | Verified offline/current | `docs/RC020_CUSTOMER_TASK_QUEUE.md`, tests, frontend suite | Two independent baseline API failures remain follow-up work; no RC-020/021 regression was demonstrated. |
+| RC-021 | Verified offline/current | Storage tests, selected API tests, frontend signed-URL test, 167 frontend tests, successful production build | R2 CORS, deployed browser behavior, empty-cache host, and external object-store evidence remain pending. |
+| RC-022 | Implemented offline; final acceptance pending | `docs/RC022_BUILD_RELEASE_STAGING.md`, `tests/test_rc022_build_release_contract.py`, separate Dockerfiles, Render filters, CI image jobs; focused suite passed 6/6 | Docker daemon image builds, path-filter execution, and mixed-version isolated staging remain pending. No deploy or RC-006b prerequisite was required. |
+| RC-023 | Host/runtime portion verified; full acceptance pending | `docs/RC027_LIVE_STAGING_EVIDENCE.md`; Python 3.12.7 host, clean setup, systemd services, permissions, migration head, port/health checks, synthetic task, restart and controlled failure evidence | External resource/cost selection, replacement-host restore, full backup receipt, and any remaining operational evidence still require the separate RC-024/026 gates and authorized provider resources. |
+| RC-024 | Bounded pilot-state checkpoint and local/R2 restore verified; full acceptance pending | `docs/RC024_BACKUP_RESTORE.md`; SQLite Online Backup checkpoint `linkedin-20260909T201035631862Z-e6d35734a371`, local restore, R2 restore and integrity/schema validation passed | Replacement-host service resume, outage/reboot acceptance and restoration of the preserved approximately 3.48 GB historical state remain pending. |
+| RC-025 | Offline dashboard/read-model slice integrated; live acceptance pending | A handoff and focused dashboard/API evidence integrated; combined tests pass | Verify actual worker/cycle metadata and live dashboard only after runtime/staging exists. |
+| RC-026 | Offline benchmark/cost preparation integrated; full acceptance pending | `docs/RC026_BENCHMARK.md`, benchmark scripts/tests; focused tests pass | VPS capacity, Turso contention/billing, provider retry/cost and authorized staging sample remain unmeasured. |
+| RC-027 | Real-source two-cycle producer/transport run complete; acceptance pending | `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`, `docs/RC027_LIVE_STAGING_EVIDENCE.md`; four frozen IDs; 190/200 measured attempts; partial/failure persistence; no false publication; R2 signed range receipt | Requires valid/closure-safe source results, authenticated UI/publication proof, browser CORS/direct-download proof, recovery/restart drill on the integrated staging app, and isolated Turso/dedicated R2 scope if retained by the release gate. |
+| RC-028 | Not started | Scope only | Requires RC-027 and production authorization; Gate A and Gate B remain separate. |
+| RC-029 | Not started | Scope only | Requires RC-005, RC-026, RC-028 Gate A, and RC-006 only for cohorts needing enrichment. |
+| RC-030 | Not started / optional P2 | Scope only | Can follow RC-022/025; must remain independent of hosting migration success. |
+| RC-031 | Not started / trigger-based P2 | Scope only | Only start when RC-024/026/028 evidence triggers horizontal capacity work. |
+| RC-032 | Not started | Scope only | Final runbook/acceptance depends on RC-028/029; RC-030/031 only if enabled. |
+
+### Next-ticket decision
+
+RC-022 remains implemented offline with Docker/mixed-version proof pending.
+RC-023's clean-host/systemd portion is verified, but replacement-host and
+operational acceptance evidence remains coupled to RC-024/026. RC-027 is the
+first gate currently blocked on external staging credentials/resources and
+real-source authorization. RC-025 fixture work and RC-030 read-only audit can
+continue offline; RC-006b, RC-028 and RC-029 were not started.
+
+## Migration and runtime release handoff
+
+The current migration registry is ordered and contiguous through:
+
+```text
+054_company_identity_reconciliation
+055_acquisition_analytics_indexes
+056_phase_a_scheduler_fencing
+057_phase_e_intelligence_recovery
+058_customer_task_queue
+```
+
+`sqlite_migrations.py` is shared by identity, acquisition, worker, intelligence,
+and customer-task work. One release owner must apply migrations in registry
+order. New application/worker code must tolerate the previous schema during
+rollout; do not run production migrations in this pass. RC-022 must define who
+runs migrations and the forward-compatible rollback limit before separate
+images are released.
+
+Runtime inputs/state that the eventual acquisition worker release must mount or
+inject explicitly:
+
+- the approved source eligibility manifest and its version/hash;
+- the master input/catalog location and the producer's local state directory;
+- the existing approximately 3.48 GB LinkedIn state with checkpoint/backup
+  capacity, not an assumed ephemeral container filesystem;
+- disposable materialization/cache storage with byte and age limits;
+- Turso/database and R2 credentials by secret name, scoped to the worker role;
+- a unique worker identity, role/claim settings, scheduler interval, and
+  source-cycle ownership configuration.
+
+Customer document/email secrets must not be inherited by acquisition/browser
+processes. A worker must not silently fall back to laptop-relative paths or
+unversioned manifests.
+
+### Proposed release sequence
+
+1. Freeze and record the selected commit, dirty-file ownership, manifest hash,
+   migration head, image digests, environment names, and worker role contract.
+2. Apply migrations once, in registry order, using the designated release
+   owner; verify backward-compatible reads before enabling new writers.
+3. Release API/shared contracts, then the role-specific worker image, then
+   frontend flags. Keep old/new client and worker schema versions compatible
+   during the rollout.
+4. Start one owner per role, verify heartbeats and queue claims, and ensure no
+   competing scheduler is active. Mount the approved input/state and verify
+   object storage/cache paths.
+5. Run offline/staging smoke tests, then the authorized staging pilot. Record
+   deployed revisions separately from this branch's HEAD.
+
+### Rollback and recovery
+
+- Stop admitting new work for the affected role, drain or fence active claims,
+  and disable the new release/feature flag.
+- Restore the last compatible API/worker/frontend images and task ownership;
+  do not restore an old database over newer customer writes.
+- Keep immutable R2 objects and receipts. Rebuild local materialization from
+  object storage when the cache is missing; do not treat a missing cache as
+  data loss.
+- For a failed migration, follow the migration's documented forward-compatible
+  remediation. Do not delete migration rows or run an ad hoc production
+  downgrade.
+- For this dirty checkout, rollback means a scoped hunk/file review or
+  restoring the exact pre-change copy from the owning ticket after approval;
+  do not use `git reset --hard`, `git clean`, or a wholesale checkout that
+  could discard another session's work.
+
+Smoke-test expectations are: API health and version, migration head, one
+role-scoped synthetic queue claim, one retry/lease expiry, one publication and
+read-only customer artifact download, signed URL without API credentials,
+expired/cross-user denial, frontend asset load, and no duplicate scheduler
+owner. Production/provider steps remain authorization-gated.
+
+## Changed and untracked deliverable inventory
+
+The inventory below is the `git status --short --untracked-files=all` snapshot
+for this handoff. Nothing was staged or committed.
+
+### Modified tracked files
+
+```text
+backend/api/routes/__init__.py
+backend/api/routes/acquisition_catalog.py
+backend/api/routes/documents.py
+backend/api/routes/registry.py
+backend/api/routes/tracker.py
+backend/api/routes/workspace.py
+backend/api/server.py
+backend/application/acquisition_scheduler.py
+backend/application/admin_job_import.py
+backend/application/personalized_jobs_service.py
+backend/application/run_services.py
+backend/application/services.py
+backend/config/env_schema.py
+backend/connectors/employer_site_fallbacks.py
+backend/connectors/generic_jsonld.py
+backend/repositories/__init__.py
+backend/repositories/contracts.py
+backend/repositories/sqlite_acquisition.py
+backend/repositories/sqlite_migrations.py
+backend/repositories/sqlite_personalized_jobs.py
+backend/storage/__init__.py
+backend/storage/local.py
+backend/storage/materialization.py
+backend/storage/s3.py
+backend/worker/__init__.py
+backend/worker/service.py
+deploy/start.sh
+frontend/src/hooks/useTracker.js
+frontend/src/lib/api.js
+frontend/src/lib/api.test.js
+frontend/src/pages/ArtifactsPage.jsx
+frontend/src/pages/TrackerPage.jsx
+render.yaml
+scripts/build_master_jobs_catalog.py
+scripts/master_employer_jobs_catalog.py
+scripts/master_linkedin_jobs_catalog.py
+tests/test_master_employer_jobs_catalog.py
+tests/test_master_linkedin_jobs_catalog.py
+tests/test_phase_b_catalog.py
+tests/test_worker_service.py
+tests/test_workspace_runner.py
+workspace_runner.py
+```
+
+### Untracked reports, contracts, and source modules
+
+```text
+ACQUISITION_SOURCE_TRANSFER.md
+BASELINE_AND_INPUT_CONTRACT.md
+BASELINE_METRICS.json
+BASELINE_METRICS.md
+COMPANY_REGISTRY_RECONCILIATION.json
+COMPANY_REGISTRY_RECONCILIATION.md
+RC004_BACKFILL_REPORT.json
+RC004_BACKFILL_REPORT.md
+RC006_RESOLUTION_SAFETY.json
+RC006_RESOLUTION_SAFETY.md
+RC007_EXPORT_SEPARATION.json
+RC007_EXPORT_SEPARATION.md
+RC008_PRODUCER_ADAPTERS.json
+RC008_PRODUCER_ADAPTERS.md
+SOURCE_ELIGIBILITY_MANIFEST.md
+SOURCE_ELIGIBILITY_MANIFEST_RC005.json
+SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json
+SOURCE_ELIGIBILITY_RAW_RC005.jsonl
+SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl
+backend/acquisition/producer_adapters.py
+backend/api/routes/storage.py
+backend/application/company_enrichment_resolution.py
+backend/application/company_id_backfill.py
+backend/application/company_registry_reconciliation.py
+backend/application/customer_tasks.py
+backend/application/source_eligibility_manifest.py
+backend/storage/policy.py
+backend/worker/roles.py
+```
+
+### Untracked ticket reports
+
+```text
+docs/RC009_NORMALIZATION_PUBLICATION.json
+docs/RC009_NORMALIZATION_PUBLICATION.md
+docs/RC010_FIRST_ACQUISITION_SLICE.md
+docs/RC011_EMPLOYER_COVERAGE.md
+docs/RC012_EMPLOYER_CONCURRENCY.md
+docs/RC013_LINKEDIN_LIFECYCLE.md
+docs/RC014_LINKEDIN_INCREMENTAL_REFRESH.md
+docs/RC015_LINKEDIN_TRANSPORT_STORAGE.md
+docs/RC018_WORKER_ROLES.md
+docs/RC019_INTELLIGENCE_RECOVERY.md
+docs/RC020_CUSTOMER_TASK_QUEUE.md
+docs/RC021_PORTABLE_ARTIFACT_STORAGE.md
+docs/RC_IDENTITY_RECONCILIATION_HANDOFF.md
+docs/RC_PRODUCER_VERIFICATION_HANDOFF.md
+docs/RC_CURRENT_STATUS_AND_NEXT_STEPS.md
+docs/RUNR_VPS_ACQUISITION_PLAN.md
+```
+
+### Untracked scripts, fixtures, and tests
+
+```text
+scripts/add_website_discovery_status_column.py
+scripts/apply_known_company_websites.py
+scripts/audit_employer_coverage.py
+scripts/backfill_company_ids.py
+scripts/benchmark_acquisition_baseline.py
+scripts/build_source_eligibility_manifest.py
+scripts/discover_websites_consensus.py
+scripts/discover_websites_from_web_search.py
+scripts/linkedin_company_enrichment_pipeline.py
+scripts/populate_free_companyenrich_logos.py
+scripts/reconcile_company_registry.py
+scripts/run_linkedin_company_id_resolution.py
+scripts/run_manifested_employer.py
+scripts/run_manifested_linkedin.py
+tests/fixtures/ambiguous_source_ownership.csv
+tests/fixtures/lifecycle_transitions.json
+tests/fixtures/linkedin_job_search_suspicious_empty.html
+tests/fixtures/linkedin_retry_sequence.json
+tests/fixtures/rc002/generic_job_malformed.html
+tests/fixtures/rc002/generic_job_valid.html
+tests/fixtures/rc002/generic_listing.html
+tests/fixtures/rc002/greenhouse_payload.json
+tests/fixtures/rc002/interrupted_run.json
+tests/fixtures/rc002/lever_payload.json
+tests/fixtures/rc002/recruitee_payload.json
+tests/fixtures/rc002/workday_payload.json
+tests/fixtures/rc002/workload_profiles.json
+tests/fixtures/rc003_application_registry.json
+tests/fixtures/rc003_company_registry.csv
+tests/fixtures/rc003_shared_organization_dispositions.json
+tests/fixtures/rc004_company_id_backfill.csv
+tests/fixtures/rc005_linkedin_pagination.json
+tests/fixtures/rc005_source_eligibility.csv
+tests/fixtures/rc006_mostly_blocked.json
+tests/fixtures/rc009_cross_source_identity.json
+tests/test_acquisition_baseline.py
+tests/test_company_id_backfill.py
+tests/test_company_registry_reconciliation.py
+tests/test_company_website_consensus.py
+tests/test_known_company_websites.py
+tests/test_linkedin_company_enrichment_pipeline.py
+tests/test_linkedin_company_id_browser_resolution.py
+tests/test_observation_store_integration.py
+tests/test_phase_a_rc016.py
+tests/test_phase_a_rc017.py
+tests/test_phase_a_rc018.py
+tests/test_phase_a_rc019.py
+tests/test_phase_a_rc020.py
+tests/test_phase_a_rc021.py
+tests/test_producer_adapters.py
+tests/test_rc006_resolution_safety.py
+tests/test_rc009_normalization_publication.py
+tests/test_rc010_first_acquisition_slice.py
+tests/test_rc011_employer_outcomes.py
+tests/test_rc012_employer_concurrency.py
+tests/test_source_eligibility_manifest.py
+```
+
+Shared files such as `backend/api/server.py`,
+`backend/repositories/sqlite_migrations.py`, `backend/application/services.py`,
+`backend/application/run_services.py`, `backend/worker/service.py`,
+`render.yaml`, and the route registries are touched by multiple ticket groups.
+They need hunk-level review, not independent wholesale reverts.
+
+## Proposed scoped commit groups
+
+No commits were created. For the next release owner, the safe grouping is:
+
+1. Baseline/identity/manifest: baseline contracts and metrics, company
+   registry/backfill/resolution modules, RC-003--006 fixtures/reports/scripts.
+2. Producer/export/adapters: RC-007--015 producer scripts, adapter modules,
+   employer/LinkedIn fixtures, and their focused tests/reports. Keep the
+   actual 14-table LinkedIn producer in this group.
+3. Scheduler/publication: RC-016/017 acquisition scheduler, repositories,
+   migrations, publication contracts, and focused tests. Serialize migration
+   ownership here.
+4. Worker/intelligence: RC-018/019 role, claim, recovery, input-version,
+   and worker-service changes plus their tests/reports.
+5. Customer tasks/storage/frontend: RC-020/021 customer-task routes, storage
+   policy/materialization/S3/local behavior, API routes, frontend polling and
+   signed-URL behavior, deployment env/start configuration, and focused tests.
+6. This status handoff: `docs/RC_CURRENT_STATUS_AND_NEXT_STEPS.md`, kept as
+   release evidence and not mixed into an unrelated source fix.
+
+Before committing, review shared files against all five groups and preserve
+the two committed-HEAD baseline API failures as explicit follow-up rather than
+silently changing their contract in a storage release.
+
+RC-022 additions in this pass are:
+
+```text
+Dockerfile.api
+Dockerfile.worker
+backend/deployment/__init__.py
+backend/deployment/release_contract.py
+docs/RC022_BUILD_RELEASE_STAGING.md
+frontend/scripts/write-release-metadata.mjs
+tests/test_rc022_build_release_contract.py
+```
+
+RC-022 also updates these existing release files:
+
+```text
+.github/workflows/ci.yml
+.gitignore
+Dockerfile
+deploy/start.sh
+frontend/package.json
+render.yaml
+docs/RC_CURRENT_STATUS_AND_NEXT_STEPS.md
+```
+
+## Branch versus deployed state
+
+The current local evidence describes the clean candidate recorded at the top of
+this document. It does not claim that this candidate is a deployed Render
+revision or deployed VPS worker, a live Turso schema, or configured R2 CORS.
+Those external states remain separate and are recorded only where observed in
+the live-pilot receipt.

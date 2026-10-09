@@ -1,0 +1,10 @@
+[Unit]
+Description=Process published Runr job descriptions
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+Unit=runr-job-descriptions.service
+
+[Install]
+WantedBy=timers.target

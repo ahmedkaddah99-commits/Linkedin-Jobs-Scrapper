@@ -1,0 +1,6 @@
+{
+  "partial_scan": {"status": "PARTIAL_PAGE_ANOMALY", "absence_count": "0"},
+  "first_complete_absence": {"status": "COMPLETE", "absence_count": "1", "lifecycle_status": "active"},
+  "second_complete_absence": {"status": "COMPLETE", "absence_count": "2", "lifecycle_status": "inactive"},
+  "replayed_scan_does_not_add_absence": true
+}

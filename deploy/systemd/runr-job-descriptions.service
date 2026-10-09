@@ -1,0 +1,36 @@
+[Unit]
+Description=Runr published job Nemo descriptions and filters
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr-description-worker/current
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+EnvironmentFile=/etc/runr/description.env
+EnvironmentFile=/etc/runr/acquisition-catalog.env
+EnvironmentFile=/etc/runr/nemo-enrichment.env
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+ExecStart=/usr/bin/flock -n /srv/runr/state/description-worker.lock /opt/runr/.venv/bin/python scripts/process_catalog_enrichment.py --workers 32 --max-jobs 4096 --runtime-seconds 1800 --daily-budget 10
+CPUAccounting=true
+CPUQuota=200%
+MemoryAccounting=true
+MemoryHigh=4G
+MemoryMax=6G
+TasksMax=128
+TimeoutStartSec=3h
+TimeoutStopSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr /srv/runr/state

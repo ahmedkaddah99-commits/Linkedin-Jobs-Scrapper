@@ -1,0 +1,352 @@
+[
+  {
+    "id": "complete_package",
+    "description": "Full package with job, answers, documents, warnings, policy sections.",
+    "python_package": {
+      "package_id": "aapkg_test_full_001",
+      "user_id": "user_test_001",
+      "job_id": "job_gh_001",
+      "version": 1,
+      "status": "created",
+      "schema_version": 1,
+      "launch_tab_binding_id": "",
+      "launch_tab_binding_expires_at": "",
+      "job": {
+        "job_id": "job_gh_001",
+        "title": "Software Engineer",
+        "company": "Test Corp",
+        "portal": "greenhouse",
+        "url": "",
+        "location": "SF"
+      },
+      "answers": [
+        {
+          "field_intent": "candidate.name",
+          "label": "Name",
+          "proposed_value": "Jane Doe",
+          "source": "profile_verified",
+          "sensitivity": "standard",
+          "scope": "global",
+          "confidence": 0.95,
+          "requires_review": false,
+          "reasons": []
+        }
+      ],
+      "documents": [
+        {
+          "document_id": "doc_1",
+          "document_kind": "cv",
+          "asset_id": "a1",
+          "object_key": "k1",
+          "mime_type": "application/pdf",
+          "file_name": "cv.pdf",
+          "sha256_hex": "",
+          "document_version": 1
+        }
+      ],
+      "warnings": {
+        "items": [
+          "check answers"
+        ]
+      },
+      "policy": {
+        "schema_version": 1,
+        "permit_sensitive_autofill": false,
+        "permit_demographic_autofill": false,
+        "require_legal_answer_confirmation": true,
+        "jurisdiction": ""
+      },
+      "created_at": "2026-07-17T10:00:00+00:00",
+      "updated_at": "2026-07-17T10:00:00+00:00",
+      "launched_at": "",
+      "bound_at": "",
+      "expired_at": "",
+      "consumed_at": ""
+    },
+    "extension_payload": {
+      "packageId": "aapkg_test_full_001",
+      "jobId": "job_gh_001",
+      "version": 1,
+      "schemaVersion": 1,
+      "job": {
+        "jobId": "job_gh_001",
+        "title": "Software Engineer",
+        "company": "Test Corp",
+        "portal": "greenhouse",
+        "location": "SF"
+      },
+      "answers": [
+        {
+          "fieldIntent": "candidate.name",
+          "label": "Name",
+          "proposedValue": "Jane Doe",
+          "source": "profile_verified",
+          "sensitivity": "standard",
+          "scope": "global",
+          "confidence": 0.95,
+          "requiresReview": false,
+          "reasons": []
+        }
+      ],
+      "documents": [
+        {
+          "documentId": "doc_1",
+          "documentVersion": 1,
+          "documentKind": "cv",
+          "mimeType": "application/pdf",
+          "fileName": "cv.pdf"
+        }
+      ],
+      "warnings": [
+        "check answers"
+      ],
+      "policy": {
+        "permitSensitiveAutofill": false,
+        "permitDemographicAutofill": false,
+        "requireLegalAnswerConfirmation": true
+      }
+    },
+    "expected_answer_count": 1,
+    "expected_document_count": 1,
+    "expected_warning_count": 1,
+    "portal": "greenhouse"
+  },
+  {
+    "id": "lever_package",
+    "description": "Package for Lever portal.",
+    "python_package": {
+      "package_id": "aapkg_test_lever_001",
+      "user_id": "user_test_002",
+      "job_id": "job_lever_001",
+      "version": 1,
+      "status": "created",
+      "schema_version": 1,
+      "launch_tab_binding_id": "",
+      "launch_tab_binding_expires_at": "",
+      "job": {
+        "job_id": "job_lever_001",
+        "title": "PM",
+        "company": "Lever Inc",
+        "portal": "lever",
+        "url": "",
+        "location": "Remote"
+      },
+      "answers": [
+        {
+          "field_intent": "candidate.name",
+          "label": "Name",
+          "proposed_value": "John Smith",
+          "source": "profile_verified",
+          "sensitivity": "standard",
+          "scope": "global",
+          "confidence": 0.99,
+          "requires_review": false,
+          "reasons": []
+        }
+      ],
+      "documents": [
+        {
+          "document_id": "doc_2",
+          "document_kind": "cv",
+          "asset_id": "a2",
+          "object_key": "k2",
+          "mime_type": "application/pdf",
+          "file_name": "js.pdf",
+          "sha256_hex": "",
+          "document_version": 1
+        }
+      ],
+      "warnings": {
+        "items": []
+      },
+      "policy": {
+        "schema_version": 1,
+        "permit_sensitive_autofill": true,
+        "permit_demographic_autofill": false,
+        "require_legal_answer_confirmation": true,
+        "jurisdiction": ""
+      },
+      "created_at": "2026-07-17T12:00:00+00:00",
+      "updated_at": "2026-07-17T12:00:00+00:00",
+      "launched_at": "",
+      "bound_at": "",
+      "expired_at": "",
+      "consumed_at": ""
+    },
+    "extension_payload": {
+      "packageId": "aapkg_test_lever_001",
+      "jobId": "job_lever_001",
+      "version": 1,
+      "schemaVersion": 1,
+      "job": {
+        "jobId": "job_lever_001",
+        "title": "PM",
+        "company": "Lever Inc",
+        "portal": "lever",
+        "location": "Remote"
+      },
+      "answers": [
+        {
+          "fieldIntent": "candidate.name",
+          "label": "Name",
+          "proposedValue": "John Smith",
+          "source": "profile_verified",
+          "sensitivity": "standard",
+          "scope": "global",
+          "confidence": 0.99,
+          "requiresReview": false,
+          "reasons": []
+        }
+      ],
+      "documents": [
+        {
+          "documentId": "doc_2",
+          "documentVersion": 1,
+          "documentKind": "cv",
+          "mimeType": "application/pdf",
+          "fileName": "js.pdf"
+        }
+      ],
+      "warnings": [],
+      "policy": {
+        "permitSensitiveAutofill": true,
+        "permitDemographicAutofill": false,
+        "requireLegalAnswerConfirmation": true
+      }
+    },
+    "expected_answer_count": 1,
+    "expected_document_count": 1,
+    "expected_warning_count": 0,
+    "portal": "lever"
+  },
+  {
+    "id": "minimal_package",
+    "description": "Minimal package.",
+    "python_package": {
+      "package_id": "aapkg_test_minimal_001",
+      "user_id": "user_test_003",
+      "job_id": "job_minimal_001",
+      "version": 1,
+      "status": "created",
+      "schema_version": 1,
+      "launch_tab_binding_id": "",
+      "launch_tab_binding_expires_at": "",
+      "job": {
+        "job_id": "job_minimal_001",
+        "title": "",
+        "company": "",
+        "portal": "",
+        "url": "",
+        "location": ""
+      },
+      "answers": [],
+      "documents": [],
+      "warnings": {
+        "items": []
+      },
+      "policy": {
+        "schema_version": 1,
+        "permit_sensitive_autofill": false,
+        "permit_demographic_autofill": false,
+        "require_legal_answer_confirmation": true,
+        "jurisdiction": ""
+      },
+      "created_at": "2026-07-17T14:00:00+00:00",
+      "updated_at": "2026-07-17T14:00:00+00:00",
+      "launched_at": "",
+      "bound_at": "",
+      "expired_at": "",
+      "consumed_at": ""
+    },
+    "extension_payload": {
+      "packageId": "aapkg_test_minimal_001",
+      "jobId": "job_minimal_001",
+      "version": 1,
+      "schemaVersion": 1,
+      "job": {
+        "jobId": "job_minimal_001",
+        "title": "",
+        "company": "",
+        "portal": "",
+        "location": ""
+      },
+      "answers": [],
+      "documents": [],
+      "warnings": [],
+      "policy": {
+        "permitSensitiveAutofill": false,
+        "permitDemographicAutofill": false,
+        "requireLegalAnswerConfirmation": true
+      }
+    },
+    "expected_answer_count": 0,
+    "expected_document_count": 0,
+    "expected_warning_count": 0,
+    "portal": ""
+  },
+  {
+    "id": "expired_binding",
+    "description": "Package with stale binding expiry.",
+    "python_package": {
+      "package_id": "aapkg_test_expired_001",
+      "user_id": "user_test_expiry",
+      "job_id": "job_expiry_001",
+      "version": 2,
+      "status": "launched",
+      "schema_version": 1,
+      "launch_tab_binding_id": "bind_stale",
+      "launch_tab_binding_expires_at": "2025-01-01T00:00:00+00:00",
+      "job": {
+        "job_id": "job_expiry_001",
+        "title": "Old Role",
+        "company": "Old Corp",
+        "portal": "greenhouse",
+        "url": "",
+        "location": ""
+      },
+      "answers": [],
+      "documents": [],
+      "warnings": {
+        "items": []
+      },
+      "policy": {
+        "schema_version": 1,
+        "permit_sensitive_autofill": false,
+        "permit_demographic_autofill": false,
+        "require_legal_answer_confirmation": true,
+        "jurisdiction": ""
+      },
+      "created_at": "2024-01-01T00:00:00+00:00",
+      "updated_at": "2024-01-01T00:00:00+00:00",
+      "launched_at": "2024-01-01T00:00:00+00:00",
+      "bound_at": "",
+      "expired_at": "",
+      "consumed_at": ""
+    },
+    "extension_payload": {
+      "packageId": "aapkg_test_expired_001",
+      "jobId": "job_expiry_001",
+      "version": 2,
+      "schemaVersion": 1,
+      "job": {
+        "jobId": "job_expiry_001",
+        "title": "Old Role",
+        "company": "Old Corp",
+        "portal": "greenhouse",
+        "location": ""
+      },
+      "answers": [],
+      "documents": [],
+      "warnings": [],
+      "policy": {
+        "permitSensitiveAutofill": false,
+        "permitDemographicAutofill": false,
+        "requireLegalAnswerConfirmation": true
+      }
+    },
+    "expected_answer_count": 0,
+    "expected_document_count": 0,
+    "expected_warning_count": 0,
+    "portal": "greenhouse"
+  }
+]

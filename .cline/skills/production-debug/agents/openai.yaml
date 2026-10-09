@@ -1,0 +1,4 @@
+interface:
+  display_name: "Production Debug"
+  short_description: "Verify fixes against live production"
+  default_prompt: "Use $production-debug to diagnose and fix this production issue with live provider evidence."

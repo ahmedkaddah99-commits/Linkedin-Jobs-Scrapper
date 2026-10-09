@@ -1,0 +1,99 @@
+{
+  "contract_version": "job_publication_completeness_v1",
+  "generated_at": "2026-09-11T13:59:49.778161+00:00",
+  "linkedin": {
+    "total": 188206,
+    "distinct_source_job_ids": 188206,
+    "duplicate_source_job_ids": 0,
+    "publishable": 42564,
+    "distinct_publishable_companies": 1235,
+    "outcomes": {
+      "not_publishable_unresolved_identity": 145637,
+      "publishable_complete": 42564,
+      "not_publishable_invalid": 5
+    },
+    "top_reasons": [
+      {
+        "code": "missing_canonical_company_id",
+        "count": 145637
+      },
+      {
+        "code": "insufficient_description",
+        "count": 466
+      },
+      {
+        "code": "blocked_or_error_body",
+        "count": 51
+      }
+    ],
+    "source_metrics": {
+      "missing_canonical_company_id": 145637,
+      "missing_description": 0,
+      "missing_application_url": 0,
+      "missing_location": 0
+    },
+    "apply_metrics": {
+      "easy_apply_true": 631,
+      "apply_url_is_linkedin_view": 188206
+    }
+  },
+  "employer": {
+    "total": 2612,
+    "distinct_source_job_ids": 2440,
+    "duplicate_source_job_ids": 172,
+    "publishable": 63,
+    "distinct_publishable_companies": 4,
+    "outcomes": {
+      "publishable_complete": 63,
+      "not_publishable_unresolved_identity": 2018,
+      "not_publishable_missing_required": 487,
+      "not_publishable_invalid": 41,
+      "not_publishable_placeholder": 3
+    },
+    "top_reasons": [
+      {
+        "code": "missing_canonical_company_id",
+        "count": 2018
+      },
+      {
+        "code": "missing_location",
+        "count": 1911
+      },
+      {
+        "code": "missing_description",
+        "count": 1404
+      },
+      {
+        "code": "insufficient_description",
+        "count": 72
+      },
+      {
+        "code": "blocked_or_error_body",
+        "count": 3
+      },
+      {
+        "code": "placeholder_title",
+        "count": 1
+      }
+    ],
+    "source_metrics": {
+      "missing_canonical_company_id": 2018,
+      "missing_description": 1404,
+      "missing_application_url": 0,
+      "missing_location": 1911
+    },
+    "apply_metrics": {
+      "missing_explicit_apply_url": 1663,
+      "has_job_detail_url_fallback": 2612
+    }
+  },
+  "reconciliation": {
+    "linkedin_outcome_total_equals_records": true,
+    "employer_outcome_total_equals_records": true
+  },
+  "combined": {
+    "total": 190818,
+    "publishable": 42627,
+    "distinct_source_job_ids": 190646
+  }
+}

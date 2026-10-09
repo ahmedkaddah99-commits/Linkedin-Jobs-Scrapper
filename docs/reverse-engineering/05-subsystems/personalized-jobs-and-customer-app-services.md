@@ -1,0 +1,455 @@
+> Source: deployment/render-turso-r2 | SHA: 58a96674 | Verified: 2026-09-14
+
+# Personalized jobs and customer application services (WS-4, primary)
+
+## Company selection and remembered filters (2026-10-08)
+
+`GET /personalized-jobs/companies?q=...` returns up to ten canonical employers
+with jobs in the current valid publication, ranked by exact name, prefix, then
+substring. Search treats `%` and `_` literally and returns IDs, names and optional
+signed cached logos. It reads the shared catalog and does not trigger acquisition.
+The route uses the existing authenticated catalog access gate.
+
+The feed accepts exact `company_id` selection without a Job Function. Company
+searches bypass saved profile defaults, while explicitly supplied filters still
+apply. Role-selected searches retain their existing indexed role scope, and
+published-job visibility and blue-collar exclusion still apply to company feeds.
+
+Creating or updating a named filter set also activates it. The account-owned
+`POST /personalized-jobs/filter-sets/{id}/activate` route activates an existing
+set; another account cannot activate or update it. Saving and activation write
+the default-search snapshot in the same transaction. The existing default-search
+JSON now supports an envelope containing `filters` and `active_filter_set_id`;
+legacy flat snapshots remain readable. Deleting the active set clears that
+account's remembered snapshot. No schema migration is required.
+
+Jobs loads the saved filter list and remembered snapshot before its initial
+feed request. An explicit navigation filter or edits made during loading take
+precedence. The UI restores the selected company, filter criteria and sort.
+Unsaved edits do not replace the remembered set. Relevant coverage:
+`tests/test_jobs_company_search_and_saved_filters.py`,
+`frontend/src/lib/jobsSavedFilters.test.js`, and
+`frontend/e2e/jobs-company-search.spec.ts`. This change is local; production
+deployment and live verification are separate.
+
+Secondary slice: [career-profiles-and-documents.md](career-profiles-and-documents.md) covers profiles, the Master CV, CV upload, tailored documents, Career Memory, evidence and work experience. The browser-extension side of Assisted Apply belongs to WS-9: [assisted-apply.md](assisted-apply.md). This doc covers only the backend services behind it.
+
+All line numbers refer to `58a96674`. "Static" means read from source at that SHA. Nothing here was run, and no live system was contacted. LIVE PRODUCTION = UNKNOWN.
+
+---
+
+## 1. Purpose and user-facing capabilities
+
+`backend/application/` is the Python layer between the HTTP route handlers ([backend-api.md](../01-architecture/backend-api.md), WS-1) and the worker ([backend-workers-and-orchestration.md](../01-architecture/backend-workers-and-orchestration.md), WS-2) on one side, and the repositories/domain model ([domain-model.md](../01-architecture/domain-model.md), WS-5) on the other. The facade `BackendApplication` (`backend/application/services.py:863`) is built once by `backend/bootstrap.py:344`. It composes these sub-services (`services.py:880-930`):
+
+| Customer capability | Service (owned) | Facade methods (`services.py`) |
+|---|---|---|
+| Personalized Jobs feed over the published catalog: filters, saved search, preferences, save/hide/report, company pages, job intelligence | `personalized_jobs_service.py` `PersonalizedJobsService` (L844), `personalized_jobs_intelligence.py` | `get_personalized_jobs` L1159 … `get_hidden_personalized_jobs` L1357 |
+| Monthly plan quotas | `quota.py` | used directly by routes and the stage adapter (§3) |
+| Async customer slow tasks: bulk document export, tracker email sync | `customer_tasks.py` | `enqueue_customer_task` L1227, `process_next_customer_task` L1253 |
+| Tracker, referral contacts, LinkedIn connection sync, outreach, relevant-people discovery | `tracker_services.py` `TrackerApplicationService` (L37), `backend/capabilities/networking/**`, `backend/capabilities/tracker/**` | L2708-2880 |
+| Workspaces, workflow templates, runs, reviews, artifacts, workers | `domain_services.py` `WorkspaceCatalogService` (L35), `run_services.py` `RunLifecycleService` (L76) | L1413-1430, L1998-2622, L3108-3366 |
+| Identity, API tokens, secrets, scopes | `domain_services.py` `IdentityAccessService` (L121) | L2624-2636, L2882, L3011-3070 |
+| Phase I production rollout gates and the catalog cohort gate | `production_rollout.py` | L1068-1105 (no route caller, §3) |
+| Assisted Apply backend: extension connection (PKCE), application packages, document grants, corrections, preparations, telemetry | `assisted_apply_service.py`, `assisted_apply_package_service.py`, `assisted_apply_correction_service.py`, `assisted_apply_preparation_service.py`, `assisted_apply_telemetry_service.py` | L2897-3010, L3371-3545 |
+| Per-user ScrapeOps company-site budget and usage, shown in Settings | `services.py` L685-815, L1479-1997 (policy config owned by WS-5) | `get_scrapeops_user_usage_summary` L1672 |
+| Capability registries shown in the workspace builder (connectors, generations, renderers, stages) | built in `backend/bootstrap.py:47-253` (WS-2); implementations in `backend/capabilities/**` | `list_connectors` L2004, `list_generations` L2007, `list_renderers` L2010, `get_workspace_builder_catalog` L2013 |
+
+`backend/application/` also contains 13 acquisition and company files owned by WS-3 (see §2). `BackendApplication` exposes them too: `run_due_acquisition` L932, `run_due_company_enrichment` L940 and the acquisition cycle/audit methods L1019-1156, L1360-1395. They are documented in [acquisition-and-collectors.md](acquisition-and-collectors.md) and [company-identity-enrichment-and-logos.md](company-identity-enrichment-and-logos.md).
+
+## 2. Owned paths and governing instructions
+
+| Path | Files | Lines (approx.) | Notes |
+|---|---|---|---|
+| `backend/application/` (WS-4 subset) | 18 of 31 | ~11,400 | `__init__`, `assisted_apply_{correction,package,preparation,telemetry}_service`, `assisted_apply_service`, `baseline_cv_replacement_service`, `contracts`, `customer_tasks`, `domain_services`, `personalized_jobs_intelligence`, `personalized_jobs_service`, `production_rollout`, `quota`, `rebind_service`, `run_services`, `services` (3,545 lines), `tracker_services` |
+| `backend/capabilities/**` | 56 | ~22,000 | packages: `candidate_evidence`, `career_profile_evidence`, `cv_bullet_suggestions`, `evidence_recommendation`, `networking`, `profile_matching`, `reusable_packages`, `source_processing`, `source_text_review`, `tailored_documents` (21 files), `tracker` |
+| `backend/career_memory/**`, `backend/evidence/**`, `backend/evidence_library/**`, `backend/master_cv/**`, `backend/profiles/**`, `backend/work_experience/**` | 2 + 4 + 2 + 2 + 11 + 2 | — | see the secondary doc |
+| `backend/tools/**` | 6 | ~3,500 | local CLI tools (see the secondary doc) |
+| `backend/scripts/**` | 1 | 100 | `migrate_users_to_clerk.py` |
+| `backend/repositories/sqlite_personalized_jobs.py` | 1 | 1,680 | `SqlitePersonalizedJobsStore`: preferences, dispositions, intelligence queue, published-catalog queries, customer tasks |
+| `backend/repositories/assisted_apply_preparation.py` | 1 | 94 | preparation persistence |
+| `backend/repositories/document_payloads.py` | 1 | 187 | splits candidate document text/assets out of user/workspace/run payloads |
+
+The 13 WS-3 files in `backend/application/` are **not** owned here: `acquisition_scheduler`, `company_enrichment`, `company_enrichment_resolution`, `company_identity_canonicalization`, `company_logo`, `company_logo_adapter`, `company_id_backfill`, `company_reconciliation`, `company_registry_reconciliation`, `company_operations`, `source_eligibility_manifest`, `expansion_wave_manifest`, `duplicate_decisions`.
+
+Governing instructions and specs. Each was opened, and its agreement with code is stated:
+- Root `AGENTS.md` (25 lines): covers only the Python environment, with nothing specific to this subsystem.
+- `docs/personalized_jobs_contracts.md`: says "P0 definitions only … not yet persisted". It describes `backend/domain/personalized_jobs_contracts.py` (WS-5). Its header is **stale**: migration `034_phase_c_personalized_jobs` and `SqlitePersonalizedJobsStore` now persist preferences, saved searches and dispositions. Keep it for payload shapes only.
+- `docs/RC020_CUSTOMER_TASK_QUEUE.md`: **matches code** for the two task types, the `202` + status URL behaviour, customer-role-only claiming and bounded attempts (`customer_tasks.py:10-12`, `services.py:1253-1301`).
+- `docs/PERSONALIZED_JOBS_PREVIEW.md`: describes a frontend-only preview behind `VITE_PERSONALIZED_JOBS_EXPERIENCE`, with redirects to "the existing dashboard". This is **historical**: the backend feed now exists (§3), and `/dashboard` is residue (§10).
+- `docs/reports/phase_i_production_rollout_acceptance_2026-08-07.md`: "not complete — production approval and live evidence are pending". Offline acceptance only.
+- Assisted Apply architecture and ticket docs (`docs/architecture/assisted_apply_*_2026-08-01.md`, `docs/assisted-apply/runr-assisted-apply-ticket-pack.md`) are owned and assessed by WS-9 in [assisted-apply.md](assisted-apply.md).
+- Standing never-submit boundary for Assisted Apply (owner decision; see WS-9). On the backend side, `assisted_apply_package_service.py:66-67` accepts only observed outcome evidence (`success_banner`, `confirmation_page`, `url_transition`) and the adapters `greenhouse`/`lever`. The backend never submits anything.
+
+## 3. Entry points and registered routes/commands/units
+
+### 3.1 HTTP routes → services
+
+Routes are registered per module and loaded by `build_route_registry` (`backend/api/server.py:28`; WS-1 owns the registry, `backend/api/routes/registry.py`). The table lists registered route **names** and what they call.
+
+| Route module (WS-1) | Registered route names | WS-4 services called |
+|---|---|---|
+| `backend/api/routes/acquisition_catalog.py:10-22` | `personalized_jobs.read`, `.preferences.read/write/patch`, `.saved_search.read/write/post`, `.hidden.read`, `.report`, `.company.read_prefix`, `.job.read`, `.job.action`, `.job.delete` | `get_personalized_jobs`, `get_personalized_preferences`, `save_personalized_preferences`, `get/save_personalized_saved_search`, `get_personalized_job_detail`, `get_personalized_company_detail`, `set_personalized_job_state`, `report_personalized_job/filter`, `get_hidden_personalized_jobs`, `improve_personalized_resume`, `enqueue_personalized_job_intelligence`, `get_public_acquisition_catalog` |
+| `backend/api/routes/tracker.py:29-42` | `tracker.google.callback` (no auth), `tracker.referrals[.post/.put/.delete]`, `tracker.tracker[.post/.put/.delete]`, `tracker.rejected_jobs[.post]`, `tracker.people_discovery[.post]`, `tracker.outreach.post` | `TrackerApplicationService` via the facade (referrals, LinkedIn sync status, outreach, relevant-people discovery), `customer_tasks` (`CUSTOMER_TASK_EMAIL_SYNC`, L323, L817), `quota.check_and_increment_quota` (L637), `capabilities/tracker` |
+| `backend/api/routes/documents.py:77-87` | `documents.cv`, `.cv_upload_status`, `.contracts`, `.documents[.post/.put/.delete]`, `.cv_upload`, `.profile_photo_upload`, `.ats`, `.run_generation` | `customer_tasks` (`CUSTOMER_TASK_BULK_EXPORT`, L502-527; status/download L217-226), `profiles.cv_editor`, `profiles.cv_upload_jobs`, `quota` (L552), `requeue_job_for_generation` (see the secondary doc) |
+| `backend/api/routes/workspace.py:23-46` | `workspace.workspaces*`, `.builder*`, `.templates*`, `.connectors`, `.generations`, `.renderers`, `.runs*`, `.review_queue`, `.artifacts`, `.workers*`, `.quick_apply`, `.career_url_discovery` | `WorkspaceCatalogService`, `RunLifecycleService`, `start_quick_apply_run`, `validate_workspace_builder_sources` (uses the ScrapeOps policy), `quota` (L418, L474, L549). `career-url-discovery/run` raises `PermissionError` ("disabled on the production API", L381-382) |
+| `backend/api/routes/assisted_apply.py` | `assisted_apply.extension.connection_requests.create`, `.extension.token.exchange`, `.extension.session.verify/delete`, `.extension.preferences.update`, `.web.connection.get`, `.web.connection_requests.action`, `.web.preferences.update`, `.web.sessions.delete` | `AssistedApplyConnectionService` |
+| `backend/api/routes/assisted_apply_packages.py:31-103` | `assisted_apply.packages.create/prepare/launch`, `.extension.packages.bind/get/post`, `.extension.document_grants.create/download`, `.extension.corrections.create`, `.extension.standard_answers.create`, `.extension.application_outcomes.create` | `ApplicationPackageService`, `AssistedApplyCorrectionService` |
+| `backend/api/routes/assisted_apply_preparations.py:19-23` | `assisted_apply.preparations.create/read/action`, `.extension.preparations.report/action` (no bearer auth; extension session) | `AssistedApplyPreparationService` |
+| `backend/api/routes/assisted_apply_telemetry.py:44` | `assisted_apply.telemetry.events.receive` (no auth) | `AdapterHealthTelemetryService` |
+| `backend/api/routes/assisted_apply_linkedin.py:10` | `assisted_apply.extension.linkedin_connections.sync` | `sync_linkedin_connections`, `get_user_plan_id` |
+| `backend/api/routes/application_bindings.py:20-32` | `application_bindings.list/create/get/delete` | `capabilities/profile_matching/application_binding.py` |
+| `backend/api/routes/admin.py:24-33` (customer billing/settings, despite the file name) | `admin.scrapeops` (`GET scrapeops/usage`, L84-100), `admin.settings`/`.settings.put`, `admin.billing*` (incl. `.billing.post`), `admin.auth.me`, `admin.webhooks.clerk`, `admin.webhooks.creem`, `admin.account.delete` | `get_scrapeops_user_usage_summary`, `get_scrapeops_usage_summary`. Billing/webhooks are WS-6: [billing-and-creem.md](billing-and-creem.md) |
+| Career/evidence/Master CV route modules | see the secondary doc §3 | — |
+
+Unregistered handler bodies (N-1, residue only, WS-1 owns them): `admin.py:102` (`["dashboard"]` → `server.py:7358 _dashboard_payload` → `server.py:7143 _dashboard_analytics_payload`) and `admin.py:239` (`["analytics","events"]`). Neither has a `registry.exact/prefix` entry in `admin.py:24-33`.
+
+### 3.2 Worker task families → services
+
+Roles and families are defined in `backend/worker/roles.py:5-26`: role `customer` → family `customer`; role `acquisition` → family `acquisition`. `backend/worker/service.py` (WS-2) calls:
+
+| Family | Call (worker/service.py) | WS-4 target |
+|---|---|---|
+| customer | L261 `process_next_personalized_intelligence` | `PersonalizedJobsService.process_next_intelligence` (L1060) → `SqlitePersonalizedJobsStore.claim_next_intelligence` (L672) / `complete_intelligence` (L722) |
+| customer | L277 `process_next_customer_task` | `services.py:1253` → `customer_tasks.execute_customer_task` (L64) |
+| customer | L298 `claim_next_queued_run` → `execute_claimed_run` | `RunLifecycleService.claim_next_queued_run` (L713) / `execute_claimed_run` (L769); CV upload runs branch at `run_services.py:771` → `profiles/cv_upload_jobs.process_cv_upload_run` |
+| acquisition | L437 `maybe_run_scheduled_scrapeops_maintenance` (every 60 s) | `services.py:1978` → `run_scrapeops_reconciliation_cycle` L1878 |
+| acquisition | L476 `run_due_acquisition`, L502 `run_due_company_enrichment` | WS-3 services |
+
+Stage adapters (`backend/adapters/stage_adapters.py:11-60`, WS-2) import `capabilities/reusable_packages/*`, `capabilities/tailored_documents/*`, `capabilities/source_processing/extraction` and `profiles/cv_text`. They charge runner credits via `quota.check_and_increment_quota_amount` (L654, L720). Stages are registered at `stage_adapters.py:1206`.
+
+### 3.3 CLI
+
+`workspace_runner.py` (WS-1) calls the facade for users, tokens, secrets, runs and registries, and imports `backend/tools/discover_company_careers.py` (L15). `backend/scripts/migrate_users_to_clerk.py:84 main()` is a one-off script that calls `backend.bootstrap.create_backend` and `backend.integrations.clerk`. No deploy unit references WS-4 paths directly.
+
+## 4. Inputs, outputs, storage and dependencies
+
+| Store / table | Owner of schema | Written by (WS-4) |
+|---|---|---|
+| `personalized_search_preferences`, `personalized_saved_searches`, `personalized_job_dispositions`, `personalized_job_events`, `personalized_job_evaluations` (`sqlite_migrations.py:1640-1685`, migration `034_phase_c_personalized_jobs`) plus the intelligence cache/queue (`035_phase_e_job_intelligence`, `038_phase_e_async_intelligence`) | WS-5 [schema-and-migrations.md](../03-data/schema-and-migrations.md) | `sqlite_personalized_jobs.py:80-790` |
+| Published catalog (read-only): `query_published_jobs` L1172, `get_current_publication` L1062, `get_published_company_page` L1259 | WS-3 [publication-and-catalog.md](publication-and-catalog.md) | reads only |
+| Company profiles/enrichment targets (`sqlite_personalized_jobs.py:793-1044`) | WS-5 / WS-3 | written by the WS-3 `CompanyEnrichmentService` through `profile_writer=upsert_company_profile` (`services.py:925-929`) |
+| `customer_tasks` (`sqlite_migrations.py:1891`, migration `058_customer_task_queue`) | WS-5 | `sqlite_personalized_jobs.py:1468-1640` |
+| `quota_usage` (`sqlite_migrations.py:165`) | WS-5 | via `auth_repository.increment_quota_usage` (`quota.py:38-45`, L99+) |
+| `assisted_apply_connections`, `application_packages`, `assisted_apply_corrections`, `assisted_apply_correction_audit`, `assisted_apply_document_grants`, `assisted_apply_submission_events`, `assisted_apply_tracker_records`, `assisted_apply_preparations`, `assisted_apply_preparation_reports` (`sqlite_migrations.py:823-1035`, migrations 016-020, 027, 028) | WS-5 | the `assisted_apply_*` services and `repositories/assisted_apply_preparation.py` |
+| `app_config` key `scrapeops.admin_policy` (read-only here) | WS-5 `backend/config/scrapeops_admin_policy.py:11` | none; read by `services.py:689` |
+| Rollout config keys `acquisition.phase_i.*` | WS-5 config store | `ProductionRolloutService.configure/advance` (unreachable from routes, §3) |
+| `analytics_events` | WS-5 | `BackendApplication.emit_event` L1431 (ScrapeOps reconciliation/alert events). Worker-side analytics is WS-2 |
+| Object storage: company logos (signed URL, `personalized_jobs_service.py:872-880`), document grants and packages | WS-5 [object-storage-r2.md](../03-data/object-storage-r2.md) | — |
+
+Environment keys read inside WS-4 services. Only names are listed, never values. "Schema" means declared in `backend/config/env_schema.py`; "render" means a `key:` in `render.yaml`.
+
+| Key | Read at | Schema / render.yaml |
+|---|---|---|
+| `PERSONALIZED_JOBS_SUMMARY_PROVIDER` (must equal `gemini` to enable AI summaries), `PERSONALIZED_JOBS_SUMMARY_MODEL` (default `gemini-2.5-flash-lite`), `GEMINI_API_KEY` / `GOOGLE_API_KEY` | `personalized_jobs_intelligence.py:367-397` (`google.genai`, L373) | only `GEMINI_API_KEY` is in the schema; none are in render.yaml. With the provider unset, summaries are deterministic (`build_description_intelligence` L411) |
+| `RUNR_CUSTOMER_TASKS_ASYNC`, `RUNR_ENV` | `customer_tasks.py:18-23` (default async only when `RUNR_ENV` is prod/production) | render.yaml L78, L195; not in the schema |
+| `RUNR_DISABLE_QUOTAS` | `quota.py:35`; also `server.py:7417` | schema L267 |
+| `RUNR_PRIVATE_TEST_DEPLOYMENT` | `production_rollout.py:68-72` (forces rollout flags off, L142-156) | render.yaml L80, L197 |
+| `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, `CREEM_RUNR_PRO_PRODUCT_ID` (presence check only) | `production_rollout.py:356-357` | WS-6 |
+| `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION` | `assisted_apply_preparation_service.py:34,54` | schema; render.yaml L103 |
+| `SCRAPEOPS_API_KEY` | `services.py:817` (account state), L1709 (domain stats); `capabilities/networking/discovery.py:550,718`; `capabilities/tailored_documents/linkedin_connector.py:171` | render.yaml L150, L239 |
+| `DEEPSEEK_API_KEY` (+ model keys `DEEPSEEK_NETWORKING_DISCOVERY_MODEL`, `DEEPSEEK_STAGE4_MODEL`) | `capabilities/networking/discovery.py:562-567` (`https://api.deepseek.com/chat/completions` L582); document generation in the secondary doc | render.yaml L152, L241 |
+| `RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY`, `RUNR_NETWORKING_DISCOVERY_SEARCH_MODE/COUNTRY` | `capabilities/networking/discovery.py:534,722-723` | schema; render.yaml L86, L203 |
+| `TRACKER_GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REDIRECT_URI/_SCOPES` | `capabilities/tracker/google_oauth.py:27-34` | render.yaml L154 (client id) |
+| `RUNR_COMPANY_ENRICHMENT_ENABLED`, `RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY` | `services.py:952-960` (WS-3 feature, facade-owned read) | schema; render.yaml L90, L207 |
+
+Document rendering dependency: the server-side CV PDF renderer shells out to `node frontend/scripts/render-cv-pdf.mjs` (`capabilities/tailored_documents/rendering.py:1350-1380`). For that reason the Render `runr-api` and `runr-worker` `buildFilter` lists include `frontend/package.json`, `frontend/package-lock.json`, `frontend/scripts/render-cv-pdf.mjs`, `frontend/src/lib/cvStudio.js` and `frontend/src/lib/cvSocialLinks.js` (`render.yaml:60-64`, `176-180`). `Dockerfile.api:56-58` and `Dockerfile.worker:55-57` copy them, and `backend/deployment/release_contract.py:18-25` mirrors them as `FRONTEND_RUNTIME_PATHS`. WS-7 owns these files: [render.md](../02-deployment/render.md).
+
+Other dependencies: plan limits come from `backend/config/plans.py` (WS-5). Auth context (`plan_id`, `quota_overrides`) comes from WS-6 [security-and-auth.md](../01-architecture/security-and-auth.md). The ScrapeOps client lives in `backend/integrations/scrapeops.py` (WS-6).
+
+## 5. Important call/data flows
+
+1. **Jobs feed** (`GET /personalized-jobs`): `acquisition_catalog.py` → `services.py:1159 get_personalized_jobs` → `personalized_jobs_service.py:1290 feed`. The flow:
+   - `_assert_catalog_access` (L853) → `production_rollout.catalog_user_access` (L159). This returns true unless `user_cohort_gate_enabled`; otherwise only internal or selected cohort users get through.
+   - Filters merge in order: preferences, then the saved search (applied only when no explicit filters), then explicit filters.
+   - Non-Pro plans are downgraded from `priority`/`best` sort to `newest` (L1315-1317).
+   - A cursor fingerprint mismatch raises `cursor_filter_mismatch`.
+   - `store.query_published_jobs` (L1172) runs against the current publication.
+   - Cached intelligence is attached. GETs never enqueue intelligence (`services.py:1303-1305` docstring).
+   - **T54:** the feed response (card and full views) includes a privacy-safe `timings` object with `store_query_ms`, `capabilities_ms` and `total_ms`. The default newest feed counts and selects a bounded page from a lightweight publication-membership projection, then hydrates observations, applicant history and evaluations only for those page ids. `get_published_filter_capabilities` caches per publication id, bounded to 8 publications. Small catalogs retain exact data-presence probing; catalogs above 5,000 jobs return the complete set of filters supported by the query engine instead of scanning every JSON payload on the synchronous request path.
+2. **Job intelligence**: `enqueue_personalized_job_intelligence` → `enqueue_intelligence_for_job` (L930) → `store.enqueue_intelligence` (L551). The customer worker then runs `process_next_intelligence` (L1060): `recover_stale_intelligence` (L614), `claim_next_intelligence`, `build_description_intelligence` (optional Gemini summary), `build_match_intelligence` (L784), and `complete_intelligence`. `improve_resume` (L1211) builds a tailored document payload (`build_tailored_document` L811).
+3. **Customer tasks**:
+   - Route side (`documents.py:502-527`, `tracker.py:817`): if `customer_tasks_async_enabled()`, the route calls `enqueue_customer_task` with `customer_task_idempotency_key` (sha256 of user/type/payload, `customer_tasks.py:26`) and returns `202` with the status URL (`customer_task_status_url` L37). Otherwise it runs synchronously.
+   - Worker side (`services.py:1253`): non-customer roles return immediately (L1261). The worker calls `recover_stale_customer_tasks`, then `claim_next_customer_task`, then `execute_customer_task`, and finally `complete_customer_task` with the lease token (fenced).
+   - Task bodies import `backend.api.server` helpers lazily: `_create_bulk_export_bundle` (`customer_tasks.py:73-88`) and the tracker email helpers (L91-186). This is a layering inversion (WS4-G3).
+   - `public_customer_task` (L45) strips `user_id`, lease fields and the local bundle `path`.
+4. **Quota**: `check_and_increment_quota` (`quota.py:99`) resolves the limit (override, else `plans.get_quota`) and short-circuits with `limit=-1` if quotas are disabled. It raises `QuotaExceededError` (L10) when `used >= limit` and emits an event. The period key is UTC `YYYY-MM`.
+5. **Assisted Apply packages**: `create_application_package` (`services.py:3371`) → `ApplicationPackageService.create_package` (L252). Then `launch_package` (L321) → the extension calls `bind_package` (L361) and `get_or_bind_package_for_extension` (L439). Next come `create_document_grant` (L526; 60 s TTL, `aadoc_` prefix, ≤10 MiB, L43-48) and `consume_document_grant` (L628). `respond_to_application_outcome` (L703) records a submission event and a tracker record idempotently (L766-797). Corrections go through `AssistedApplyCorrectionService` (365-day TTL, sensitive exact-question filter, `assisted_apply_correction_service.py:30-38`). Connection (`assisted_apply_service.py`): a chrome-extension origin with a 32-char `[a-p]` id, PKCE S256, request TTL 10 min, auth code 2 min, session 8 h (L26-38). Preparations are gated by `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION`, and report idempotency uses a fingerprint (`repositories/assisted_apply_preparation.py:66-86`).
+6. **ScrapeOps company-site policy** (decision for the brief question): `services.py:29-32` imports `SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY`, `default_scrapeops_admin_policy`, `normalize_scrapeops_admin_policy` and `plan_policy_limits` from WS-5's `backend/config/scrapeops_admin_policy.py`.
+   - `_load_scrapeops_admin_policy` (L685-690) reads `app_config` key `scrapeops.admin_policy`, defaulting to plan-derived limits (`scrapeops_admin_policy.py:59-80`).
+   - `_effective_scrapeops_policy_limits` (L693-715) and `_plan_limit_for_user` (L718-734) feed `_current_company_site_policy_snapshot` (L761-813).
+   - That snapshot is served by the **registered customer route** `admin.scrapeops` → `GET scrapeops/usage` (`admin.py:27,84-100`) and by the subscription payload `server.py:7973`, which the frontend reads (`frontend/src/pages/SettingsPage.jsx:740`).
+   - It also feeds `validate_workspace_builder_sources` (L2053-2077: `domain_policies`, runtime quota overrides) and the worker's `maybe_run_scheduled_scrapeops_maintenance` (L1978, `alert_policy.enabled`, `worker/service.py:437`).
+   - **Decision: live customer/runtime ScrapeOps budget policy, not admin-dashboard residue.** Only the *name* ("admin") and the missing write path are residue. No route or code at baseline writes `scrapeops.admin_policy` (`git grep` finds only the reads in `services.py`). The admin editor was removed with the admin surfaces (`dd47acf9`), so the defaults apply unless the value was persisted earlier (UNKNOWN, WS4-G1).
+7. **Production rollout**: `ProductionRolloutService` (`production_rollout.py:236`) has `status` L365, `configure` L427, `evidence_report` L466 and `advance` L538, exposed by the facade at `services.py:1068-1102`. `git grep` finds **no route, worker or script caller** outside `services.py`. Only the module functions `catalog_user_access`, `phase_i_config` (imported by `admin.py:4`) and `private_test_deployment_enabled` (used by WS-3 `acquisition_scheduler.py:34,159,181`) are live in code.
+
+## 6. Invariants, failure handling and recovery
+
+- **Catalog cohort gate**: `PermissionError("jobs_catalog_rollout_not_available")` (`personalized_jobs_service.py:855`). `RUNR_PRIVATE_TEST_DEPLOYMENT` forces the cohort gate off, i.e. open access (`production_rollout.py:142-156`).
+- **Read-only GETs**: Jobs/Company GETs never enqueue intelligence (`services.py:1304`). The feed limit is clamped to 1–100 (`personalized_jobs_service.py:1303`). Without a store or publication the feed returns an "unavailable" empty feed (`personalized_jobs_service.py:1325`, `1336`). T54 timings in the feed payload are aggregate durations only (no query text, user ids, or payload content).
+- **Public payload scrubbing**: `_PUBLIC_INTERNAL_KEYS` (`personalized_jobs_service.py:38`) and `_public_clean`. Company provenance `source` is replaced with "verified source" (L864-869).
+- **Customer tasks**: unique `(user_id, idempotency_key)`, bounded attempts (default 3), stale-lease requeue then terminal failure, and lease-fenced completion (`sqlite_personalized_jobs.py:1521-1640`; `docs/RC020_CUSTOMER_TASK_QUEUE.md`). Execution exceptions are stored as `failed` with `retryable=True` (`services.py:1280-1291`).
+- **Intelligence queue**: `recover_stale_intelligence` before each claim, and a cache key over user/job version/profile/cv/evidence/evaluator versions plus input hash (`personalized_jobs_service.py:901-906`).
+- **Quota**: fails closed if the repository lacks `increment_quota_usage` (`quota.py:109`, `180`). `-1` means unlimited.
+- **Assisted Apply**: short TTLs, token prefixes with lookup-prefix hashing, origin allow-pattern, document size and MIME limits, adapter version semver (`assisted_apply_package_service.py:43-68`). The backend accepts outcome evidence only and never submits (see WS-9).
+- **ScrapeOps maintenance**: exceptions are caught and emitted as the alert event `reconciliation_cycle_failed` (`services.py:1985-1996`). The worker also logs `worker_scheduled_maintenance_failed` (`worker/service.py:441-444`).
+- **Runs**: orphaned running runs are recovered after 600 s (`run_services.py:52`), `WorkerLeaseLostError` (L56), `recover_stale_workers` (L507).
+
+## 7. Relevant tests and safe verification commands
+
+Tests are owned by WS-10 ([test-suite-map.md](../04-testing/test-suite-map.md)). Test files that exist at baseline:
+
+- Application/facade: `tests/test_backend_application.py`
+- Personalized jobs: `tests/test_phase_c_personalized_jobs.py`, `tests/test_phase_c_feed_performance_security.py`, `tests/test_phase_d_jobs_cutover.py`, `tests/test_phase_e_personalized_jobs_intelligence.py`, `tests/test_phase_e_job_intelligence_async.py`, `tests/test_personalized_jobs_contracts.py` (WS-5 contract)
+- Rollout: `tests/test_phase_i_production_rollout.py`
+- Assisted Apply backend: `tests/test_assisted_apply_connection_service.py`, `tests/test_assisted_apply_corrections.py`, `tests/test_assisted_apply_document_grants.py`, `tests/test_assisted_apply_launch_prepare.py`, `tests/test_assisted_apply_package_routes.py`, `tests/test_assisted_apply_telemetry.py`, `tests/test_assisted_apply_tracker_confirmation.py`
+- Tracker/networking/capabilities: `tests/test_tracker_gmail_integration.py`, `tests/test_networking_referrals.py`, `tests/test_application_binding.py`, `tests/test_reusable_package_services.py`, `tests/test_scrapeops_integration.py`, `tests/test_title_filter.py`, `tests/test_company_career_discovery.py` (tools)
+- Career/documents: see the secondary doc §7
+
+No dedicated test file for `quota.py`, `customer_tasks.py` or `scrapeops_admin_policy` was found by file name (`git ls-tree` over `tests/`). Their coverage, if any, is inside the broader files above (UNKNOWN, WS4-G5).
+
+Safe verification commands (not executed in Phase 2):
+```
+python -m pytest tests/test_backend_application.py tests/test_phase_c_personalized_jobs.py tests/test_phase_c_feed_performance_security.py tests/test_phase_d_jobs_cutover.py tests/test_phase_e_personalized_jobs_intelligence.py tests/test_phase_e_job_intelligence_async.py tests/test_phase_i_production_rollout.py -q
+python -m pytest tests/test_assisted_apply_*.py tests/test_tracker_gmail_integration.py tests/test_networking_referrals.py -q
+git grep -n "scrapeops.admin_policy\|SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY" 58a96674 -- backend frontend/src
+git grep -n "get_production_rollout_status\|advance_production_rollout" 58a96674 -- backend scripts workspace_runner.py
+```
+
+## 8. Historical decisions and supporting commits
+
+From `git log --oneline 58a96674 -- <WS-4 application files, sqlite_personalized_jobs.py>`, selected:
+
+| SHA | Subject | Relevance |
+|---|---|---|
+| `d44d3c0f` | production: restore canonical publication chain | feed reads the canonical publication |
+| `dd47acf9` | Complete acquisition delivery and remove admin surfaces | admin routes removed; `/dashboard` and `analytics/events` bodies left unregistered (N-1) |
+| `bdd58615` | feat: add product outcome analytics and wave planning | analytics hooks in services |
+| `5b900167` | perf: avoid hydrating run payloads for document lists | equivalent of unmerged `61c3a686` (U5) |
+| `530c7942` | Speed up personalized jobs loading | feed performance |
+| `42d4603d` | feat: complete Phase D Jobs production cutover | `/jobs` over the published catalog |
+| `5a91380e` | reconstruct Phase I offline rollout evidence and disable career discovery API | `production_rollout.py`; `career-url-discovery` disabled |
+| `027c976a` / `247c3a4b` | feat: complete phase e job intelligence / add async job intelligence and evidence review | intelligence queue |
+| `6d938f1c` | fix: bound personalized jobs feed and public intelligence | clamps and scrubbing |
+| `c7bf109b` | feat: deploy jobs catalog and portal rollout | cohort gate |
+| `5e674e1e` | fix: migrate Creem billing to Runr Pro | Pro plan id used by rollout checks |
+| `92760a3a`, `cc9cf2b8` | LinkedIn connection sync from browser tab; unlimited sync for paid plans | tracker services |
+| `664f0810`, `04fa1ba4` | assisted apply package launch lifecycle / complete package filling | package service |
+| `ec49b716` | ScrapeOps use AM control mechanisms and endpoint | origin of `scrapeops_admin_policy` |
+| `7251ae29` | feat(acquisition): reconcile producers inputs and runtime data | last touch of `customer_tasks.py` |
+
+## 9. Current implementation status
+
+| Capability | Classification |
+|---|---|
+| Personalized Jobs feed/detail/company/preferences/saved-search/dispositions | VERIFIED (scope: static — 13 routes registered `acquisition_catalog.py:10-22`, handlers call facade → `PersonalizedJobsService` → `SqlitePersonalizedJobsStore.query_published_jobs`; not run, U10 payloads unverified) |
+| Catalog cohort gate | VERIFIED (scope: static — `catalog_user_access` called at `personalized_jobs_service.py:854`; effective config values UNKNOWN) |
+| Async job intelligence (deterministic) | VERIFIED (scope: static — customer worker `worker/service.py:261` → `process_next_intelligence`) |
+| Gemini AI job summaries | IMPLEMENTED-UNVERIFIED (code at `personalized_jobs_intelligence.py:367-397`; provider key not in render.yaml, so enablement is UNKNOWN) |
+| Customer task queue (bulk export, email sync) | VERIFIED (scope: static — enqueue in `documents.py:502-527`/`tracker.py:817`, claim in `worker/service.py:277`; async flag in render.yaml L78/L195, value not inspected) |
+| Plan quotas | VERIFIED (scope: static — callers in `documents.py:552`, `tracker.py:637`, `workspace.py:418/474/549`, `stage_adapters.py:720`) |
+| Tracker/referrals/outreach/LinkedIn sync | VERIFIED (scope: static — `tracker.*` and `assisted_apply.extension.linkedin_connections.sync` routes registered, facade → `TrackerApplicationService`) |
+| Live relevant-people discovery (DeepSeek + ScrapeOps) | IMPLEMENTED-UNVERIFIED (gated by `RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY`, `discovery.py:534`) |
+| Workspaces/runs/workers/quick-apply | VERIFIED (scope: static — `workspace.*` routes registered, facade → `RunLifecycleService`/`WorkspaceCatalogService`) |
+| Career URL discovery API | RETIRED/HISTORICAL (handler raises `PermissionError`, `workspace.py:381-382`; CLI tool remains) |
+| ScrapeOps per-user company-site budget and usage | VERIFIED (scope: static — `admin.scrapeops` registered `admin.py:27`, calls `get_scrapeops_user_usage_summary`; policy read `services.py:685-690`) |
+| ScrapeOps policy editing | RETIRED/HISTORICAL (no writer of `scrapeops.admin_policy` at baseline; admin surfaces removed `dd47acf9`) |
+| ScrapeOps reconciliation/alert maintenance | IMPLEMENTED-UNVERIFIED (acquisition worker `worker/service.py:437`; which host runs an acquisition-role worker is WS-7, C6) |
+| Assisted Apply connection/packages/grants/corrections/outcomes (backend) | VERIFIED (scope: static — `assisted_apply.*` routes registered in 5 route modules, handlers call the facade services) |
+| Assisted Apply preparations | IMPLEMENTED-UNVERIFIED (routes registered `assisted_apply_preparations.py:19-23`; gated by `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION`, render.yaml L103 value not inspected) |
+| Phase I production rollout status/configure/advance | PARTIAL (service exists `production_rollout.py:236-600`; no caller outside `services.py`, so unreachable at runtime; acceptance report says not complete) |
+| Customer `/dashboard` analytics payload, `POST /analytics/events` | RETIRED/HISTORICAL (unregistered bodies `admin.py:102`, `admin.py:239`; N-1, WS-1) |
+| Unmerged CV editor/perf commits on the feature branch | see §10 (U5); patch-equivalent content already in baseline |
+
+### Deployment evidence (documentary only)
+
+- `docs/RUNR_PRODUCTION_COMPLETION_HANDOFF.md` records Render at `5dfdd106`. The baseline is 44 commits later (U1). None of the above is claimed live.
+- `docs/reports/phase_i_production_rollout_acceptance_2026-08-07.md`: offline acceptance, "production approval and live evidence are pending".
+- `render.yaml` declares `RUNR_CUSTOMER_TASKS_ASYNC`, `RUNR_PRIVATE_TEST_DEPLOYMENT`, `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION`, `RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY` for api/worker. What is actually set on the service is UNKNOWN (U3).
+
+## 10. Confirmed gaps and unresolved questions
+
+| ID | Gap / question | Evidence |
+|---|---|---|
+| WS4-G1 | `scrapeops.admin_policy` has no writer at baseline. The effective policy is plan defaults unless a value persisted before `dd47acf9`. The "admin" naming is misleading for a live customer policy. Owner: rename/move, or add a non-admin config path? | `services.py:685-690`; `git grep` shows only reads |
+| WS4-G2 | `ProductionRolloutService` status/configure/advance/evidence have no reachable caller. Its Phase I stages are driven only by config defaults and `RUNR_PRIVATE_TEST_DEPLOYMENT`. Delete, or re-expose via CLI? | `services.py:1068-1102`; grep in §7 |
+| WS4-G3 | `customer_tasks.py` imports private helpers from `backend.api.server` (`_create_bulk_export_bundle`, tracker email helpers), so the worker depends on the API module. | `customer_tasks.py:77, 94, 179` |
+| WS4-G4 | `docs/personalized_jobs_contracts.md` header ("not yet persisted") and `docs/PERSONALIZED_JOBS_PREVIEW.md` (dashboard redirect, frontend-only) contradict baseline code. | §2 |
+| WS4-G5 | No test file by name for `quota.py`, `customer_tasks.py` or the ScrapeOps policy loader. | `git ls-tree tests/` |
+| WS4-G6 | AI summary env keys (`PERSONALIZED_JOBS_SUMMARY_PROVIDER/MODEL`, `GOOGLE_API_KEY`) and `RUNR_CUSTOMER_TASKS_ASYNC` are read in code but absent from `env_schema.py` (48 keys). | §4 table |
+| N-1 (link) | Customer `/dashboard` → the frontend redirects to `/jobs`. The backend `_dashboard_payload`/`_dashboard_analytics_payload` (`server.py:7358`, `7143`) are reachable only from the unregistered `admin.py:102` branch. Residue, owned by WS-1/WS-11. | [backend-api.md](../01-architecture/backend-api.md), [retired-features.md](../06-history-and-provenance/retired-features.md) |
+| U5 (label only) | `UNMERGED (feature/admin-analytics-final-production @ ce3718b0)`: CV editor/perf commits `1bffdc21`, `85d4ddb2`, `77a19ba9`, `646ef39e`, `5574f396`, `09c24293`, `61c3a686`, `92b575e4`, `06ace3ba` all show as patch-equivalent (`-`) in `git cherry -v 58a96674 ce3718b0`. A two-dot diff of WS-4 paths shows no `cv_editor.py` difference. The remaining owned-path differences are the branch being older (no `customer_tasks.py`) plus `backend/application/admin_job_import.py`, a retired admin feature absent from baseline. Nothing to restore. | `git cherry`, `git diff --stat 58a96674 ce3718b0` |
+| U7 / U10 / U11 | Owner decision on dead telemetry; authenticated `/jobs` payloads not visually verified; full backend suite not run. | contradictions-and-unknowns |
+| T03 (link) | Unmerged assisted-apply panel / generic ATS planner work in `0d7f2b5c`, reviewed under WS-9. | linear-ticket-candidates |
+
+## Agent context and remaining work
+
+**(a) Agent context packet**
+- Required reading: this doc; [career-profiles-and-documents.md](career-profiles-and-documents.md); [backend-api.md](../01-architecture/backend-api.md); [backend-workers-and-orchestration.md](../01-architecture/backend-workers-and-orchestration.md); [schema-and-migrations.md](../03-data/schema-and-migrations.md); [assisted-apply.md](assisted-apply.md); `docs/RC020_CUSTOMER_TASK_QUEUE.md`; `backend/application/services.py:863-930` (composition).
+- Allowed paths: the WS-4 owned set in §2. Never the 13 WS-3 application files, `backend/api/**`, `backend/config/**` or `tests/**` without the owner.
+- Tests to run: the §7 commands, plus `tests/test_backend_api.py` and `tests/test_customer_route_surface.py` when facade signatures change.
+- Prohibited: re-registering `/dashboard` or `analytics/events`; restoring admin surfaces or `admin_job_import.py`; any Assisted Apply submit path; live provider calls (Gemini, DeepSeek, ScrapeOps) in tests; changing `RUNR_MIGRATION_HEAD` (C3, WS-5/WS-7).
+
+**(b) Registry proposal**
+
+| subsystem id | name | owned globs | primary doc | test globs | owner WS |
+|---|---|---|---|---|---|
+| `app-services` | Personalized jobs and customer application services | `backend/application/{__init__,assisted_apply_*,baseline_cv_replacement_service,contracts,customer_tasks,domain_services,personalized_jobs_*,production_rollout,quota,rebind_service,run_services,services,tracker_services}.py`, `backend/capabilities/**`, `backend/career_memory/**`, `backend/evidence/**`, `backend/evidence_library/**`, `backend/master_cv/**`, `backend/profiles/**`, `backend/work_experience/**`, `backend/tools/**`, `backend/scripts/**`, `backend/repositories/{sqlite_personalized_jobs,assisted_apply_preparation,document_payloads}.py` | `docs/reverse-engineering/05-subsystems/personalized-jobs-and-customer-app-services.md` | `tests/test_backend_application.py`, `tests/test_phase_{c,d,e,i}_*.py`, `tests/test_assisted_apply_*.py`, `tests/test_career_*.py`, `tests/test_evidence*.py`, `tests/test_master_cv.py`, `tests/test_tailored_document_generation.py` | WS-4 |
+
+**(c) Gap/ticket candidates**: WS4-G1 (ScrapeOps policy naming and writer), WS4-G2 (dead rollout service), WS4-G3 (worker→API import inversion), WS4-G4 (stale specs), WS4-G5 (quota/customer-task tests), WS4-G6 (env_schema coverage). No new Linear tickets created.
+# Job filter contract (2026-10-03)
+
+### Reference filter contract correction (2026-10-08)
+
+Frontend choices and SQL enum allowlists share `backend/domain/job_filter_choices.json`.
+Work model, job type, experience level and role type compare complete normalized
+scalar/array members, preserving source precedence and avoiding substring matches.
+Country names and ISO codes share `job_filter_countries.json`; country predicates
+compare codes exactly and only use full country names in free-text locations.
+Multiple locations remain alternatives within their field and combine with country
+and other fields before pagination. Unknown geography is not inferred from city names.
+Company stage now reads the company profile as well as the posting.
+
+Experience bounds preserve decimals. Numeric filters reject malformed, negative
+or nonfinite values and reversed salary/experience bounds. Annual salary predicates
+accept yearly amounts and monthly amounts multiplied by twelve; hourly and other
+unsupported periods remain unmatched. Legacy salaries without a period retain the
+existing annual interpretation. A single known salary endpoint is usable.
+Optional `salary_currency` is recognized by the HTTP route, saved filters and SQL;
+no currency conversion occurs. Without a currency selection, amount comparisons
+retain their existing cross-currency behavior. Unknown amounts/experience match
+only when the respective numeric bounds are cleared. Source cache schema stays
+unchanged; the new period/currency paths read source payloads when required.
+
+Evidence: `tests/test_job_filter_reference_contract.py`, existing source-cache and
+feed-performance tests, and `frontend/e2e/jobs-reference-filters.spec.ts`.
+No migration or catalog reclassification is required. Local implementation is
+not yet deployed; verify authenticated feed queries, totals, pagination and saved
+filter reloads after deploying both frontend and API.
+
+## Jobs feed read performance (2026-10-06)
+
+The newest feed fetches page IDs and page hydration through bounded Turso Hrana
+HTTP SELECT requests. SQLite and managed transaction reads retain their existing
+connection. The HTTP path binds parameters, closes its remote stream, applies a
+15-second request timeout and the existing bounded retry policy, and returns the
+same typed database rows. Feed hydration removes only acquisition audit envelopes
+(`source_raw_payload`, `unified_mapping`, `field_provenance`,
+`normalized_source_metadata`, `content_fingerprint`); detail hydration still reads
+the full immutable posting payload. Public job fields, filtering and version/hash
+classification checks are preserved. Filter capability cache keys include the
+head timestamp because incremental publication can change a publication in place.
+
+A read-only comparison against the live catalog returned the same 25,342-job count
+and 26 first-page rows. Compact job payload bytes fell from 2,803,702 to 424,803.
+Two local calls against live Turso through the changed repository took 3.11 and
+3.17 seconds. These are repository measurements, not browser or deployed API
+timings. Regression coverage is in `tests/test_jobs_feed_performance.py` and
+`tests/test_database_connection.py`.
+
+The Jobs workspace now sends multi-select filters as repeated query parameters and saves named filter sets through `GET/POST /personalized-jobs/filter-sets` and `DELETE /personalized-jobs/filter-sets/{id}`. Migration `067_personalized_filter_sets` stores these separately from the legacy single default saved search. The service normalizes the request, and `SQLitePersonalizedJobsRepository._feed_filter_sql` applies predicates before pagination.
+
+The drawer exposes job function, excluded title, job type, work model, country/location, experience level and years, posting age, minimum salary, sponsorship, clearance/citizenship exclusions, industry/skill inclusion and exclusion, role type, company/stage, and staffing agency exclusion. Filters derived from job or company metadata only match records with those fields populated. The source catalog does not yet supply dependable coordinates for a distance radius, so radius filtering is not offered. The job-function picker uses the shared category/subheading/function taxonomy and also accepts custom terms.
+
+Migration `068_published_job_filter_intelligence` adds `job_filter_intelligence` for inferred values. The published feed joins it only for the current posting version and matching content hash, then applies its role, work model, job type, experience, skill, and role-type fields before pagination. It leaves employer posting payloads intact. `scripts/pilot_published_job_filters.py` generates a reversible 100-job Nemo cohort and keeps its source, raw model output, accepted values, and rollback snapshot under `data/audit/white_collar_filter_pilot_2026-10-04/`. Salary, country, industry, and company stage continue to use posting or company metadata; this pilot does not infer them.
+
+## Full catalog classification (2026-10-04)
+
+`backend/domain/job_function_taxonomy.json` supplies both the drawer and Nemo prompt. The intelligence JSON uses `roles` for multiple exact function memberships and `collar` for white/blue classification. Counts overlap. Current-version, matching-hash blue records are excluded from customer lists, counts, detail hydration and company job lists. Unclassified records remain visible; an empty function list never causes exclusion.
+
+`scripts/classify_published_catalog.py` pins and pages the published employer catalog, stores source/output/API usage locally, and separately requests function classification and supported metadata. German and English originals are supplied so quotes can be checked against the source. Years must be numeric and supported by experience evidence; invalid/unknown fields are hidden. Source fields take precedence. Unstated employment defaults to full-time under the product rule. Adjacent experience levels can appear together; nonadjacent alternatives display the highest level.
+
+Run the first pass with `--workers 256 --budget 5`; rerun unresolved records with a bounded `--max-attempts` (default three). `--refresh-snapshot` catches up once to the current publication, retains superseded inputs and fences previous calls from changed posting versions. Use `--report-only --revalidate --publish --live-report --verify-live` after reviewing results. Verification compares every function's customer-query count with current Turso memberships and checks the other supported fields. Publishing saves rollback rows and exact written identity before writes, then atomically verifies the current version/hash. Operator writes use 25-row Hrana HTTP statements with a 60-second request timeout; an interrupted batch can resume from persisted progress without new model calls. `--rollback` restores only this run's unchanged JSON/model/prompt/hash/timestamp identity; later writes remain intact.
+
+Function and metadata prompts are separate. Metadata keys are whitelisted and cannot overwrite occupation decisions. Explicit profession/duty guards correct systemic small-model mistakes; version/hash-bound `reviewed_classifications.json` records source-reviewed exceptions where actual professional duties conflict with a manual-trade title. Manual-title guards precede industry labels. Qualified clinical professions and retail sales are included under the operational white collar definition; manual trades, driving, cooking/table service and machine operation are excluded. Classification coverage is not a measured accuracy rate.
+
+Local source, model responses, API usage, all job links and rollback evidence are in `data/audit/catalog_classification_2026-10-04/`; [the full report](../../../data/audit/catalog_classification_2026-10-04/REPORT.md) distinguishes generated and current Turso counts. Budget reservations persist before calls; interrupted requests are charged conservatively. Salary, company industry/stage/funding and sponsorship still require reliable existing source metadata and are not guessed from a job description. The first full round is an operator-run batch; future publication changes require another explicitly scheduled or operator-run classification pass.
+
+### October 6 feed read correction
+
+Remote feed reads use an HTTP read session with a shared 15-second request and retry budget. This is a request budget, not a strict wall-clock deadline. Reads inside an existing transaction retain that connection so uncommitted changes remain visible. The default count checks posting hashes only for blue-collar candidates. A proposed covering-index migration was withdrawn before being recorded because Turso returned SQLITE_IOERR during index creation; the deployed migration head remains 069. Membership publication remains one catalog per acquisition cycle with incremental membership changes.
+
+
+Render migration deployment first verifies every registered remote migration timestamp and checksum through HTTP. When all match, it skips opening a redundant schema write transaction. Missing or unverified migrations retain normal initialization; checksum mismatches fail deployment.
+
+### Job Function selection and bounded feed reads — October 6, 2026
+
+The customer Jobs route requires at least one selected Job Function. Without one the frontend issues no feed request; the HTTP feed service returns an empty selection-required response before catalog access. Saved named filters remain available, and direct job details and hidden jobs retain their routes.
+
+Migration `070_job_function_lookup` creates `job_filter_roles` indexed by normalized function. Version-bound memberships come from white-collar classification metadata, with insert/update/delete triggers preserving the lookup and ignoring unrelated metadata updates. The one-time backfill reads classification JSON, not posting history. Queries start from selected functions, deduplicate overlapping functions, and verify current version, content hash and publication membership before applying other filters. Unclassified jobs require classification before function discovery; stale classification never supplies current function membership.
+
+Customer feed requests omit exact totals (`total: null`). The UI displays jobs loaded and uses the extra page row to determine whether more exist. Internal catalog queries retain optional exact totals. Customer filter capabilities describe supported queries and do not scan the catalog for field availability. Existing role-less internal and hidden-job contracts are unchanged.
+
+Live Hrana probes before deployment: Data Analyst page selection read 5,937 rows (first) and 5,912 (next); Project/Program Manager read 14,761 and 14,736. Each wrote zero rows; server SQL durations were 23–46ms. These are page-selection measurements, not whole-request counters; hydration and account preferences add reads. Complete repository page retrievals took 1.1–4.2 seconds. The prior standalone count measurement was 169,481 reads. Selecting a broad function or several functions can still examine many matching candidates; it no longer scans every published job for an exact total on each page.
+
+
+### Continuous published-job Nemo enrichment (2026-10-06)
+
+Owner update (2026-10-08): production translation now uses a separate budgeted
+Nemo request before extraction, replacing serialized Argos inference. The local
+usage ledger caches verified English passage translations by source hash across
+restarts. English input bypasses translation. Original quotations and passage IDs
+remain intact; malformed or non-English translations are rejected. Repair inventory
+is durable and resumable, and failed supplemental attempts are eligible for the
+owner-requested retry alongside German output and unattempted descriptions.
+Argos fallback and model installer were removed at the owner's request. Only
+lightweight language detection remains local; no translation models run on the VPS.
+
+Restored English-input workflow (2026-10-07): the description worker detects
+source language and uses local Argos translation before Nemo extraction. English
+passage text and original quotations share passage IDs; employer originals stay
+unchanged. English output is checked before saving substantial descriptions.
+Translation dependencies are isolated in `requirements-translation.txt`; install
+CPU-only torch first, then Argos and language models with
+`scripts/install_description_translation_models.py`. Unsupported languages fail
+explicitly rather than silently passing untranslated descriptions to Nemo.
+`scripts/repair_english_descriptions.py` audits current published versions and
+requeues German output or unattempted missing-field passes with `--apply`; it
+never deletes stored descriptions. Regeneration retains populated header values
+when a new candidate is empty. Description and filter prompts select the highest
+minimum across separate mandatory experience requirements, distinguish explicit
+alternative paths, and require JSON numeric years. Existing matching-fact triggers
+enqueue updated descriptions for recalculation; Nemo does not assign fit scores.
+
+Live performance diagnosis on 2026-10-07 found a temporary four-worker override
+and subsequently an inactive description timer/stopped service. VPS reads took
+0.10–0.15 seconds and a no-op write took 0.17 seconds during diagnosis. The claim
+UPDATE planner selected a pending-state index over approximately 29,000 waiting
+rows; explicit primary-key indexing changes it to selected version-ID lookups.
+Queue recovery maintenance runs once per minute rather than on every refill.
+Slow database operations report total duration and local slot wait without SQL,
+job text or credentials. Intermittent provider/database timeouts still require
+live timing evidence; these observations do not prove a universal timeout cause.
+
+Both Nemo classification prompts read the same taxonomy JSON as the frontend.
+Function selection starts from the posting's main duties and orders matches by
+suitability, most specific primary function first (`roles[0]`, also stored as
+`role`). Secondary functions require substantial distinct duties; incidental
+keywords, employer industry and redundant broader labels do not justify them.
+Taxonomy changes require restarting the worker on an updated release because
+the allowed list is loaded at process startup. Existing classifications are
+reused and are not automatically reclassified by a taxonomy or prompt change.
+
+Migration `071_nemo_catalog_enrichment_queue` queues each published posting version once. Publication membership inserts and current-version changes enqueue work; repeated publication of unchanged versions does not regenerate descriptions or classifications. `scripts/process_catalog_enrichment.py` uses exactly `mistralai/mistral-nemo` through OpenRouter for missing descriptions (`runr_description_nemo_v3`) and filter metadata (`runr_catalog_filters_nemo_v3`). Current acceptable results are reused regardless of the earlier provider; Nemo fills missing stages. App-listed jobs must have an indexed function assignment; intentionally excluded blue-collar jobs retain their classification. Missing white-collar function assignments are flagged `review_required`, never invented. New description v3 outputs require exact quoted source evidence for each model fact. Existing descriptions using a frontend-supported prompt (v1/v2/v3), matching content hash, valid JSON objects and populated frontend description fields are reused; a newer prompt alone never forces regeneration. Short source fragments (under 80 characters) are flagged `source_incomplete` rather than expanded from the job title. Filter writes also maintain the indexed job-function lookup. Source metadata is retained in the compact filter projection.
+
+Each stage is persisted independently with a current-version/hash/lease guard. Failed descriptions therefore reuse successful filters on retry. Claims have ten-minute recoverable leases; provider/validation failures retry after thirty minutes. Three unsuccessful validation attempts move a version to `review_required` to bound repeated model costs. Missing original text is recorded as `source_missing`, with no invented description. Original employer text is preserved alongside generated English facts and source passage IDs.
+
+The VPS description service runs bounded batches (32 concurrent jobs, at most 4096 jobs/30 minutes), restarted by its timer one minute after exit. A durable local OpenRouter ledger caps daily worker spend at $10, conservatively reserving full output limits before each request. The conflicting legacy rules worker must be stopped and its timer disabled when installing this replacement. Acquisition and backup timers stay enabled. Backfill completion must be established from queue states and current-publication coverage, not a successful service start. New jobs may briefly await enrichment while their queue work runs. Completed requests replenish the concurrency window, so a slow provider request does not hold up the whole batch. Personio XML ingestion retains every named description section rather than only the first company introduction.
+
+
+### Missing-field second pass (owner decision, 2026-10-07)
+
+Performance investigation on 2026-10-07 found live Turso persistence timeouts followed by a fatal queue-claim timeout (00:52:44 UTC). The preceding run completed 115 jobs before stalling; provider latency alone does not explain the backlog. The worker now bounds remote database requests separately to four concurrent requests, refills free AI slots at one-second intervals, and backs off five seconds after claim failures while keeping existing jobs alive. Ambiguous claim writes are recovered through the existing leases rather than blindly retried. OpenRouter routing prefers throughput within the unchanged $0.03/million-token price ceiling and $10/day ledger budget. These changes require deployment and live throughput verification. Initial classification, description, and the supplemental request remain separate source-validated stages.
+
+Migration `072_enrichment_field_pass` adds a durable supplemental-pass receipt and unresolved-field list to the internal enrichment queue. Completed jobs are revisited once, including jobs with an already usable function and description. After initial extraction, the worker makes one combined Nemo request for unpopulated classification fields, five description sections and seven description header fields. Valid source-supported values fill gaps; populated values remain unchanged. Unknown optional facts, including unstated salary and experience bounds, remain empty. A default employment type does not count as source-supported.
+
+`gap_pass_attempted=1` reserves the single supplemental request, preventing retries after ambiguous provider failures or restarts; `2` records that no gaps required a request. Budget rejection before a provider call releases the reservation. `missing_fields_json` and `gap_pass_error_code` are backend audit fields only, never copied to job metadata, descriptions or customer payloads. The customer UI receives any recovered facts in its existing structure and receives no missing-field flags. Every newly queued posting version starts with a fresh supplemental-pass receipt.
+
+
+## Profile matching release (2026-10-07)
+
+Customer percentages now use `backend/application/profile_job_matching.py` and the saved account profile, independent of CVs and preferences. Migration 073 and `scripts/process_profile_job_facts.py` maintain shared version/hash-bound job facts on the VPS. The Jobs workspace uses cards followed by clicked detail; employer descriptions are linked externally. See [implementation report](../../../data/audit/profile_job_matching_2026-10-07/REPORT.md) for formulas, lifecycle, performance and limits.
+
+### Job-function taxonomy completion (2026-10-07)
+
+The shared `backend/domain/job_function_taxonomy.json` now includes the full owner-supplied function list under its category and subheading, including specialist software, consulting, finance, healthcare, engineering, sales, legal and education roles. Existing functions remain valid; repeated Customer Service input is represented once, and Consulting retains its existing category name. The frontend imports this file directly, and classification uses its exact function labels. Adding options does not reclassify previously published jobs; existing version-bound memberships remain unchanged until enrichment runs.

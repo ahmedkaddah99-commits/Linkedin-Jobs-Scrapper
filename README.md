@@ -1,139 +1,192 @@
-# LinkedIn Jobs Automation (Scraper + DeepSeek)
+# Job Automation Platform
 
-This project automates:
-1. Scraping and enriching LinkedIn jobs.
-2. Filtering jobs (local rules + AI relevance check).
-3. Generating tailored CV outputs per job (DOCX/PDF + JSON/XLSX).
+This repo now runs as one workspace-driven application.
 
-## Tech Stack
-- Python 3.12.7
-- Free Dependencies
-- DeepSeek API (main AI provider)
-- Gemini API (optional fallback in Stage 4)
-- ScrapeOps API (Scrapper) - make sure to activate email to get full access to all feautes for free.
+The product surface is:
+- scratch-built workspaces
+- workflow templates
+- queued or synchronous runs
+- background workers
+- generated artifacts
+- review queue
+- React frontend + JSON API
 
-Main pipeline scripts:
-- `stage1_scrape_enrich.py`
-- `stage2_filter_local.py`
-- `stage3_filter_ai.py`
-- `stage4_docs_export.py`
-- `orchestrator.py`
+## Main Entry Points
+
+Use these first:
+
+- `workspace_runner.py`
+- `backend/api/server.py`
+- `frontend/`
 
 ## Setup (Windows + venv)
+
 ```powershell
-# from repo root
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Create `user_config/.env`:
+For local verification and cleanup work, install the dev tools too:
+
+```powershell
+pip install -r requirements-dev.txt
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm install
+```
+
+Assisted Apply browser extension (independent lockfile):
+
+```powershell
+cd apps/browser-extension
+npm install
+npx playwright install chromium
+```
+
+Create `frontend/.env.local` for the Vite client:
+
+```env
+VITE_API_BASE_URL=/v1
+VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+```
+
+## Secrets
+
+Create `user_config/.env` for local external-service credentials:
+
 ```env
 SCRAPEOPS_API_KEY=your_scrapeops_key
 DEEPSEEK_API_KEY=your_deepseek_key
-# optional fallback for stage 4:
-GEMINI_API_KEY=your_gemini_key
+# Optional: disable billing quota enforcement during local development.
+RUNR_DISABLE_QUOTAS=true
 ```
 
-## How To Run
+For the unified backend, prefer persisted backend secrets instead of raw config values.
 
-Run full pipeline (Stage 1 -> 4):
+## Run The Product
+
+All successful local start commands currently available in this repo are below.
+
+Start API + worker + frontend from one terminal at the repo root:
+
 ```powershell
-.\.venv\Scripts\python.exe orchestrator.py
+npm run dev
 ```
 
+Start only the API from the repo root:
 
-## Most Important: How To Customize For Different Job Targets
+```powershell
+npm run dev:api
+```
 
-Edit `user_config/job_seeker_config.json` and adjust:
+Start only the worker from the repo root:
 
-### 1) Job target rules
-- `job_search.keywords`: add/remove target roles.
-- `job_search.linkedin_geo_id`: change location.
-- `job_search.experience_levels`: adjust seniority.
-- `job_search.forbidden_title_keywords`: exclude unwanted roles.
-- Stage-2 thresholds (`runtime.stage2.*_special_char_threshold`) for local language filtering behavior.
+```powershell
+npm run dev:worker
+```
 
-### 2) AI filtering behavior
-- `ai.prompts.stage3_prompt_override` controls what Stage 3 accepts/rejects.
-- Keep JSON schema exactly as required by the script.
+Start only the frontend from the repo root:
 
-### 3) Candidate profile used for CV generation
-- `candidate.cv_path`: path to your master CV text file (default `user_config/cv_master.txt`).
-- `candidate.name`, `candidate.email`, `candidate.languages`: used in generated CV header.
-- `candidate.profile_links.linkedin.*` and `candidate.profile_links.github.*`: optional top-of-CV hyperlinks.
-  - `url`: target URL (leave empty to hide that link)
-  - `text`: clickable text shown next to the icon
-  - `icon`: short icon label (for example `in` or `GH`)
+```powershell
+npm run dev:ui
+```
 
-### 4) Profile image
-- Use **PNG only**.
-- Placement: place image in `generated_docs/_assets/` and title it _profile_from_cv.png to replace existing sample image
+Start only the frontend from inside `frontend/`:
 
+```powershell
+cd frontend
+npm run dev
+```
 
-## CV Content + Format Requirements (Very Important)
+If you start services individually, the equivalent direct Python commands are:
 
-The generator parses your master CV text and expects clear section structure.
+```powershell
+.\.venv\Scripts\python.exe workspace_runner.py serve-api
+.\.venv\Scripts\python.exe workspace_runner.py run-worker --worker-id local_worker
+```
 
-Recommended section labels in `user_config/cv_master.txt`:
-- `PROFESSIONAL EXPERIENCE`
-- `PROJECTS`
-- `SKILLS`
-- `EDUCATION`
+Local URLs:
 
-Formatting guidance:
-- Experience entries should be one role header line + bullet lines.
-- Use bullet markers (`- ...`) under roles/projects/thesis.
-- Keep degree title and thesis title stable (AI may reword thesis bullets only).
+```text
+Frontend: http://127.0.0.1:4173
+API health: http://127.0.0.1:8000/health
+```
 
-### PROFESSIONAL EXPERIENCE behavior (confirmed)
-- The section is **partially protected**, not fully untouched.
-- Preserved from your master CV:
-  - role titles
-  - company names
-  - date/period values
-  - role order
-- Can still be changed:
-  - bullet points may be tailored/reworded for each job.
-- Fallback behavior:
-  - if AI does not provide matched bullets, baseline bullets from `user_config/cv_master.txt` are kept.
+## Production
 
-### Hardcoded output section titles in generated CV DOCX
-The generated CV currently prints these section headings:
-- `PROFESSIONAL SUMMARY`
-- `PROFESSIONAL EXPERIENCE`
-- `PROJECTS`
-- `SKILLS`
-- `EDUCATION`
+Do not use `npm run dev` for production. Production expects:
 
-If you want different output headings, change them in `stage4_docs_export.py`.
+- a ready Python virtualenv at `.venv`
+- frontend dependencies installed
+- required backend environment variables configured from `.env.example`
+- a process manager such as PM2
 
-## Common Output Files
-- `highly_curated_jobs.json` (Stage 1 output)
-- `stage2_filtered_local.json` / `stage2_rejected_local.json`
-- `stage3_filtered_ai.json` / `stage3_rejected_local.json`
-- `stage4_documents.json`
-- `final_jobs_with_docs.xlsx`
-- `generated_docs/<run-date>/...` (DOCX/PDF CV files)
+Build and start the production stack with:
 
-## Post-Generation Workflow (How to Track Applications)
+```powershell
+npm run pm2:prod
+```
 
-After each run, the most important output file is:
-- `final_jobs_with_docs.xlsx`
+Useful production process commands:
 
-Why it matters:
-- It contains the full job list with generated document paths (CV DOCX/PDF and related outputs).
-- Stage 4 writes run results into its own sheet, so each run is separated and easy to review.
-- Deduplicates Jobs that already exist in any of the sheets even if the job id is not that same.
+```powershell
+npm run pm2:status
+npm run pm2:logs
+npm run pm2:stop
+```
 
-Practical workflow:
-1. Open `final_jobs_with_docs.xlsx` after generation finishes.
-2. Copy the current run’s rows/sheet into your separate tracking workbook.
-3. In your tracker, keep at least:
-   - `Applied?` column
-   - `Notes` column
-4. Continue applying from the tracker while the automation keeps generating new roles in future runs.
+## Create And Run Workspaces
 
-This gives you a stable process:
-- Automation handles discovery/filtering/CV generation.
-- Your tracker handles application status and manual notes.
+The intended path is:
+
+1. create a workspace from the frontend or `POST /workspace-builder/workspaces`
+2. inspect/edit its settings
+3. run it synchronously from the app or queue it for a worker
+4. review jobs and download artifacts
+
+CLI example:
+
+```powershell
+.\.venv\Scripts\python.exe workspace_runner.py list-templates
+.\.venv\Scripts\python.exe workspace_runner.py list-workspaces
+.\.venv\Scripts\python.exe workspace_runner.py run --workspace my_custom_workspace
+```
+
+Queue instead of executing immediately:
+
+```powershell
+.\.venv\Scripts\python.exe workspace_runner.py run --workspace my_custom_workspace --queue
+```
+
+## Scheduled Execution
+
+The daily scripts now run a workspace through the unified backend instead of calling old orchestrators.
+
+Example:
+
+```powershell
+.\run_daily.ps1 -WorkspaceId my_custom_workspace
+```
+
+## Architecture
+
+Start with [docs/architecture/current_system.md](./docs/architecture/current_system.md) for current agent context, then use [ARCHITECTURE.md](./ARCHITECTURE.md) for the longer historical architecture narrative.
+
+## Verification
+
+Fast checks from the repo root:
+
+```powershell
+npm run check
+npm run check:backend
+npm run check:frontend
+npm run check:extension
+npm run check:assisted-apply
+```
+
+`check:backend` runs Ruff plus a documented fast pytest subset. Use `npm run check:backend:api` for the slower API sweep and `npm run check:backend:full` before larger merges. `check:frontend` currently uses the Vite production build as the frontend check. `check:extension` runs type, unit, production-build, and manifest checks; `check:assisted-apply` also launches the packaged MV3 extension in Playwright Chromium.

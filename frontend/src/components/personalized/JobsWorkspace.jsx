@@ -1,0 +1,835 @@
+import QuickJobFilter from "./QuickJobFilter";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useSession } from "../../context/SessionContext";
+import { markJobsPhase } from "../../lib/api";
+import { logPersonalizedEvent } from "../../lib/personalizedAnalytics";
+import {
+  countPersonalizedJobFilters,
+  buildPersonalizedJobsQuery,
+  companyProfileField,
+  companyProfileIsUnverified,
+  filtersFromSavedSearch,
+  formatJobDate,
+  hasSelectedJobFunction,
+  INITIAL_PERSONALIZED_JOB_FILTERS,
+  toPersonalizedJobView,
+  toPersonalizedJobsFilterPayload,
+  unknownCompanyCharacteristics,
+} from "../../lib/personalizedJobsApi";
+import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
+import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
+import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
+import { alternativeSeniority, descriptionLines, descriptionPlaceholder, employmentTypeLabel, formatPostingAge, hasRunrDescription, seniorityFromYears } from "../../lib/jobReadingPresentation";
+import AllJobFilters from "./AllJobFilters";
+import CompanySearch from "./CompanySearch";
+import SavedFiltersPanel from "./SavedFiltersPanel";
+import EvaluationPanel from "./ProfileMatchPanel";
+import AccountSetupPanel from "./AccountSetupPanel";
+import { matchLabel, matchScore } from "../../lib/profileJobMatch";
+
+const NETWORK_ITEMS = [
+  ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
+  ["alumni", "Alumni from your school", "From your saved profile", "school"],
+  ["direct", "Direct contacts", "Connection data unavailable", "lock"],
+  ["warm", "Warm intros", "Connection data unavailable", "lock"],
+];
+
+// Bounded upper limit for Jobs catalog reads so a hung request ends in a
+// retryable failure state instead of an indefinite spinner.
+const JOBS_FEED_TIMEOUT_MS = 20000;
+
+function Icon({ children, className = "", ...props }) {
+  return <span className={["material-symbols-outlined", className].join(" ")} {...props}>{children}</span>;
+}
+
+function CompanyMark({ company, large = false, logoUrl = "", monogram = "" }) {
+  const name = String(company || "?");
+  const color = ["#0d628c", "#0f7c74", "#6d50c7", "#c35c35", "#2b6cae"][name.length % 5];
+  return logoUrl ? <span aria-hidden="true" className={["jobs-company-mark", large ? "jobs-company-mark--large" : ""].join(" ")} style={{ "--company-color": color }}><img alt="" src={logoUrl} /></span> : <span aria-hidden="true" className={["jobs-company-mark", large ? "jobs-company-mark--large" : ""].join(" ")} style={{ "--company-color": color }}>{monogram || name.slice(0, 1).toUpperCase()}</span>;
+}
+
+function FilterPill({ icon, label, onChange, options, value }) {
+  const selected = Array.isArray(value) ? value[0] || "all" : value || "all";
+  const active = selected !== "all";
+  return <label className={["jobs-filter-pill", active ? "is-active" : ""].join(" ")}>
+    <Icon>{icon}</Icon>
+    <span>{label}{active ? " (1)" : ""}</span>
+    <select aria-label={label} onChange={(event) => onChange(event.target.value)} value={selected}>
+      {options.map((option) => <option key={`${option.value}-${option.label}`} value={option.value}>{option.label}</option>)}
+    </select>
+    <Icon className="jobs-filter-pill__chevron">expand_more</Icon>
+  </label>;
+}
+
+function JobListCard({ isSaved, job, onSave, onSelect, selected }) {
+  const arrangement = job.workArrangement === "onsite" ? "On-site" : job.workArrangement === "unknown" ? "Unknown" : job.workArrangement;
+  return <article className={["jobs-list-card", selected ? "is-selected" : ""].join(" ")}>
+    <button className="jobs-list-card__select" onClick={onSelect} type="button">
+      <div className="jobs-list-card__score"><strong>{matchScore(job.matchIntelligence?.score)}</strong><span>{matchLabel(job.matchIntelligence)}</span></div>
+      <div className="jobs-list-card__company"><CompanyMark company={job.company} logoUrl={job.companyLogoUrl} monogram={job.companyMonogram || job.companyProfile?.monogram} /><span>{job.company}</span></div>
+      <strong>{job.title}</strong>
+      <div className="jobs-list-card__meta">
+        <span><Icon>calendar_month</Icon>{job.experienceLevel}</span>
+        <span><Icon>schedule</Icon>{employmentTypeLabel(job.employmentType) || "Job type unspecified"}</span>
+        {formatPostingAge(job.publishedAt) ? <span>{formatPostingAge(job.publishedAt)}</span> : null}
+        <span><Icon>location_on</Icon>{job.location}</span>
+        <span><Icon>{job.workArrangement === "remote" ? "wifi" : job.workArrangement === "hybrid" ? "sync_alt" : "business"}</Icon>{arrangement}</span>
+        {job.applicantLabel !== "Unknown" ? <span><Icon>groups</Icon>{job.applicantLabel}</span> : null}
+      </div>
+    </button>
+    <button aria-label={isSaved ? `Unsave ${job.title}` : `Save ${job.title}`} aria-pressed={isSaved} className={["jobs-list-card__save", isSaved ? "is-saved" : ""].join(" ")} onClick={() => onSave(job)} type="button">
+      <Icon style={isSaved ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>
+    </button>
+  </article>;
+}
+
+function InfoRow({ icon, label, children }) {
+  return <div className="jobs-info-row"><Icon>{icon}</Icon><div><strong>{label}</strong><span>{children}</span></div></div>;
+}
+
+function NetworkCard({ icon, onClick, subtitle, title, tone }) {
+  return <button className={["jobs-network-card", tone ? `jobs-network-card--${tone}` : "", "is-locked"].join(" ")} onClick={onClick} type="button">
+    <span className="jobs-network-card__badge"><Icon>{icon}</Icon></span>
+    <strong>{title}</strong>
+    <span>{subtitle}</span>
+    <em>Manage network <Icon>arrow_forward</Icon></em>
+  </button>;
+}
+
+function ReferralSection({ onOpenNetwork }) {
+  return <section className="jobs-section jobs-referral-section">
+    <div className="jobs-section__heading"><div><h3>Get referred to this company</h3><p>See people who can refer or advise you</p></div><button className="jobs-text-link" onClick={() => onOpenNetwork("hiring")} type="button">Manage network <Icon>arrow_forward</Icon></button></div>
+    <div className="jobs-network-grid">{NETWORK_ITEMS.map(([key, title, subtitle, icon], index) => <NetworkCard icon={icon} key={key} onClick={() => onOpenNetwork(key)} subtitle={subtitle} title={title} tone={index === 0 ? "purple" : index === 1 ? "blue" : ""} />)}</div>
+  </section>;
+}
+
+function CatalogStateBanner({ error, feed, loading }) {
+  if (error) return null;
+  const hasPendingIntelligence = Array.isArray(feed?.jobs) && feed.jobs.some((job) => (
+    String(job?.match_intelligence?.state || job?.evaluation?.match_intelligence?.state || "").toLowerCase() === "pending"
+  ));
+  // While a refresh runs, an already loaded feed stays visible; the banner
+  // says results are being updated instead of implying an empty catalog.
+  const state = loading && !feed ? "loading" : loading && feed ? "refreshing" : error ? "failure" : hasPendingIntelligence ? "partial" : String(feed?.evaluation?.state || "unavailable");
+  const labels = {
+    loading: "Loading the shared jobs catalog…",
+    refreshing: "Updating results with the latest catalog…",
+    partial: "Some job fields are unknown. Runr is showing only verified values.",
+    stale: "The shared catalog is stale. Results remain visible with their last verification time.",
+    unavailable: "The shared jobs catalog is currently unavailable.",
+    failure: "The shared jobs catalog could not be loaded.",
+  };
+  if (!error && state === "available") return null;
+  return <div className={["jobs-catalog-state", `jobs-catalog-state--${state}`].join(" ")} role={error || state === "failure" ? "alert" : "status"}><Icon>{state === "loading" || state === "refreshing" ? "progress_activity" : state === "partial" ? "hourglass_top" : "cloud_off"}</Icon><span>{error || labels[state] || "Catalog state is unknown."}</span></div>;
+}
+
+function intelligenceValues(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return value ? [value] : [];
+}
+
+function IntelligenceList({ empty = "Unknown", items, evidence = false }) {
+  const values = intelligenceValues(items).map((item) => {
+    if (!evidence || !item || typeof item !== "object") return String(item);
+    return `${item.requirement || "Requirement"}: ${item.evidence || item.reason || "Evidence unavailable"}`;
+  }).filter(Boolean);
+  return values.length ? <ul className="jobs-intelligence-list">{values.map((value, index) => <li key={`${value}-${index}`}>{value}</li>)}</ul> : <p className="jobs-unknown-value">{empty}</p>;
+}
+
+function RunrSummary({ job }) {
+  const summary = job.runrSummary || {};
+  return <section className="jobs-section jobs-runr-summary">
+    <div className="jobs-section__heading"><div><h3>Runr Summary</h3><p>Generated from this job-description version; employer text is preserved separately.</p></div><span className="jobs-data-badge">Generated · Free</span></div>
+    <p className="jobs-summary-overview">{summary.overview || (job.descriptionIntelligence?.state === "pending" ? "Pending precompute" : "Unknown")}</p>
+    <div className="jobs-summary-grid">
+      <div><strong>Main responsibilities</strong><IntelligenceList items={summary.main_responsibilities} /></div>
+      <div><strong>Essential requirements</strong><IntelligenceList items={summary.essential_requirements} /></div>
+      <div><strong>Preferred qualifications</strong><IntelligenceList items={summary.preferred_qualifications} /></div>
+      <div><strong>Important application details</strong><IntelligenceList items={summary.important_application_details} /></div>
+    </div>
+  </section>;
+}
+
+function CompetitionPanel({ job }) {
+  const intelligence = job.applicantIntelligence || {};
+  const pro = intelligence.pro || null;
+  const change = pro?.change;
+  const changeLabel = change?.state === "available" && Number.isFinite(Number(change.delta))
+    ? `${Number(change.delta) >= 0 ? "+" : ""}${change.delta} applicants since first observation`
+    : "Trend unknown until two exact observations are available.";
+  return <section className="jobs-section jobs-competition-panel">
+    <div className="jobs-section__heading"><div><h3>Applicant competition</h3><p>Only explicitly reported applicant counts are shown.</p></div><span className="jobs-data-badge">{pro ? "Pro" : "Verified"}</span></div>
+    <div className="jobs-summary-grid">
+      <div><strong>Latest applicants</strong><span>{job.applicantLabel}</span></div>
+      <div><strong>Freshness</strong><span>{job.applicantFreshness === "unknown" ? "Unknown" : job.applicantFreshness}</span></div>
+      <div><strong>Apply method</strong><span>{job.applicantApplyMethod === "direct_apply" ? "Direct Apply" : job.applicantApplyMethod}</span></div>
+      <div><strong>Change over time</strong><span>{pro ? changeLabel : "Detailed trend available in Runr Pro."}</span></div>
+    </div>
+  </section>;
+}
+
+function ImproveResumeReview({ job, result, onClose, onRewrite, busy }) {
+  const match = job.matchIntelligence || {};
+  const evidence = result?.evidence || {};
+  const value = (key) => evidence[key] ?? match[key];
+  const canRewrite = Boolean(job.improveResume?.rewriting_available);
+  return <div className="jobs-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section aria-labelledby="improve-resume-title" aria-modal="true" className="jobs-improve-modal" role="dialog">
+    <header><div><p className="jobs-eyebrow">Evidence review</p><h2 id="improve-resume-title">Improve Resume</h2></div><button aria-label="Close evidence review" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
+    <p>Review what your current profile supports before making any change. Never claim experience you cannot verify.</p>
+    <div className="jobs-intelligence-grid">{[["Matched keywords", "matched_keywords"], ["Missing keywords", "missing_keywords"], ["Matched requirements", "matched_requirements"], ["Unproven requirements", "unproven_requirements"], ["Apparent non-matches", "apparent_non_matches"], ["Matched evidence", "matched_evidence"], ["Missing evidence", "missing_evidence"]].map(([label, key]) => <div className="jobs-intelligence-card" key={key}><strong>{label}</strong><IntelligenceList evidence={key === "matched_evidence" || key === "missing_evidence"} items={value(key)} /></div>)}</div>
+    <p>Matching uses your saved profile. Tailoring a resume does not change your profile match.</p>
+    <footer><button className="jobs-outline-button" onClick={onClose} type="button">Close review</button>{canRewrite ? <button className="jobs-primary-button" disabled={busy} onClick={onRewrite} type="button">{busy ? "Queuing…" : "Create tailored resume"}</button> : <span className="jobs-pro-gate">Tailored rewriting is available in Runr Pro.</span>}</footer>
+  </section></div>;
+}
+
+function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHide, onReport, onImprove }) {
+  const summary = job.runrSummary || {};
+  const structured = job.structuredDescription || {};
+  const extracted = (name) => structured[name]?.value;
+  const present = (value) => value && String(value).toLowerCase() !== "unknown" ? value : null;
+    const yearsMin = extracted("experience_years_min") ?? job.requiredExperienceYears;
+  const yearsMax = extracted("experience_years_max");
+  const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}–${yearsMax} years experience` : `${yearsMin}+ years experience`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years experience` : null);
+  const salary = extracted("salary");
+  const salaryAmounts = salary && typeof salary === "object" ? [salary.min, salary.max].filter((value) => typeof value === "number").map((value) => new Intl.NumberFormat("en-US").format(value)).join("–") : "";
+  const salaryText = salaryAmounts && salary?.currency && salary?.period ? `${salaryAmounts} ${salary.currency}/${salary.period}` : null;
+  const arrangementLabel = (value) => ({ onsite: "On-site", on_site: "On-site", in_person: "On-site", hybrid: "Hybrid", remote: "Remote" })[String(value || "").toLowerCase()] || null;
+    const seniorityLabel = (value) => ({ intern: "Intern", entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
+  const scrapedSalary = present(job.salaryLabel) && job.salary?.period ? `${job.salaryLabel}/${job.salary.period}` : null;
+  const employment = employmentTypeLabel(present(job.employmentType), extracted("employment_type"), job.title);
+    const extractedLevels = (job.experienceLevels || []).map(seniorityLabel).filter(Boolean).join(", ");
+    const seniority = extractedLevels || seniorityFromYears(yearsMin) || alternativeSeniority(summary.required_qualifications, structured.source_passages) || seniorityLabel(extracted("seniority")) || seniorityLabel(present(job.experienceLevel));
+    const facts = [
+    ["location_on", present(job.location) || extracted("location")],
+    ["home_work", arrangementLabel(present(job.workArrangement)) || arrangementLabel(extracted("work_arrangement"))],
+    ["alarm", employment, "jobs-reading__fact--stacked"],
+    ["crown", seniority, "jobs-reading__fact--stacked"],
+    ["calendar_month", years],
+    ["payments", scrapedSalary || salaryText],
+    ];
+  const placeholder = descriptionPlaceholder(job, detailsLoaded, detailError);
+  const available = hasRunrDescription(job);
+  const itemsFor = (key) => Array.isArray(summary[key]) ? summary[key].filter((item) => typeof (typeof item === "string" ? item : item?.text) === "string" && (typeof item === "string" ? item : item.text).trim()) : [];
+  const responsibilities = itemsFor("responsibilities");
+  const required = itemsFor("required_qualifications");
+  const preferred = itemsFor("preferred_qualifications");
+  const benefits = itemsFor("benefits");
+  const applicationDetails = itemsFor("application_details");
+  const list = (items) => <ul className="jobs-reading__list">{descriptionLines(items).map((line, index) => <li key={index}>{line}</li>)}</ul>;
+  const companyDescription = company?.profile?.fields?.description?.state === "known" ? company.profile.fields.description.value : "";
+  const postingAge = formatPostingAge(job.publishedAt);
+  return <article className="jobs-reading"><aside className="jobs-reading__match"><EvaluationPanel job={job} /></aside>
+    <header className="jobs-reading__header"><div className="jobs-reading__employer"><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{job.company}</strong>{postingAge ? <small>{postingAge}</small> : null}</span></div><h1>{job.title}</h1><div className="jobs-reading__facts">{facts.filter(([, value]) => value && value !== "Unknown").map(([icon, value, className]) => <span className={className} key={icon}><Icon>{icon}</Icon>{value}</span>)}</div></header>
+    <div className="jobs-reading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button className="jobs-outline-button" onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon>{job.userState === "hidden" ? "Restore" : "Hide"}</button><button className="jobs-outline-button" onClick={onReport} type="button"><Icon>flag</Icon>Report</button></div>
+    {available ? <>
+      {summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}
+      {responsibilities.length > 0 ? <section className="jobs-reading__section" id="job-responsibilities"><h2><Icon>checklist</Icon>Responsibilities</h2>{list(responsibilities)}</section> : null}
+      {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
+      {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
+      {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
+    </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{placeholder.title}</h2><p>{placeholder.text}</p></div></section>}
+    <section className="jobs-reading__section jobs-reading__company"><h2><Icon>business</Icon>Company</h2><div><CompanyMark company={job.company} large logoUrl={job.companyLogoUrl} monogram={job.companyMonogram} /><span><strong>{company?.name || job.company}</strong>{companyDescription ? <p>{companyDescription}</p> : null}</span></div></section>
+  </article>;
+}
+
+function DrawerFilterControl({ filter, value, onChange }) {
+  const options = filter.options || [];
+  if (filter.type === "boolean") return <label className="jobs-drawer-switch"><input checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} type="checkbox" /><span aria-hidden="true" /><em>{value ? "On" : "Off"}</em></label>;
+  if (["single_select", "multi_select", "taxonomy", "currency", "tri_state"].includes(filter.type)) {
+    const selectOptions = filter.type === "tri_state" && !options.length ? ["yes", "no", "unknown"] : options;
+    return <select aria-label={filter.label} onChange={(event) => onChange(event.target.value)} value={value ?? ""}><option value="">Any</option>{selectOptions.map((option) => <option key={option} value={option}>{formatFilterOption(option)}</option>)}</select>;
+  }
+  const inputType = filter.type === "date" ? "date" : ["money", "number", "percentage", "year"].includes(filter.type) ? "number" : "text";
+  return <input aria-label={filter.label} onChange={(event) => onChange(event.target.value)} placeholder={inputType === "text" ? `Add ${filter.label.toLowerCase()}` : "Any"} type={inputType} value={value ?? ""} />;
+}
+
+const FILTER_CAPABILITY_BY_KEY = {
+  posting_age: "posting_recency", posted_at: false, application_deadline: false, sort_by: true, exclude_expired: false,
+  simple_application: false, exclude_applied: false, exclude_saved: false, cover_letter_required: false, referral_available: false, recruiter_contact_available: false, applicant_count_max: false, apply_method: false,
+  salary_min: "salary", salary_max: "salary", salary_currency: false, salary_period: false, salary_disclosed: false, compensation_types: false,
+  language: "language", languages: false,
+  work_authorization: "work_authorization", work_authorization_required: false, citizenship_required: false,
+  sponsorship: "sponsorship", visa_sponsorship: false, h1b_sponsorship: false,
+  industry: "industry", company_size: "company_size", company_stage: "company_stage", funding_stage: "funding_stage",
+  company_include: false, company_exclude: "hidden_companies", company_type: false, founded_year_min: "founded_year", headquarters_location: false,
+  funding_min: "funding_range", funding_max: "funding_range", funding_year_min: "funding_year", funding_year_max: "funding_year", education: "education", preferred_major: "preferred_major", degree_requirement: false, fields_of_study: false, certifications: false, professional_license: false,
+  security_clearance: "security_clearance", lifting_requirement: "lifting_requirement",
+  remote_scope: false, travel_percent_max: false, relocation_assistance: false, workplace_type: false,
+  keywords_include: false, keywords_exclude: false, skills_include: false, skills_exclude: false, years_experience_min: false, years_experience_max: false, management_role: false,
+  benefits: false, verified_posting: false, has_company_profile: false, has_closing_date: false, source_type: false,
+};
+
+function FilterDrawer({ capabilities = {}, filters, onChange, onClear, onClose, onApply }) {
+  const [query, setQuery] = useState("");
+  const normalized = query.trim().toLowerCase();
+  const supports = (filter) => {
+    const capability = FILTER_CAPABILITY_BY_KEY[filter.key];
+    if (capability === false) return false;
+    return !capability || !Object.keys(capabilities).length || capabilities[capability] !== false;
+  };
+  return <div className="jobs-filter-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <aside aria-label="More filters" aria-modal="true" className="jobs-filter-drawer" role="dialog">
+      <header className="jobs-filter-drawer__header"><div><p className="jobs-eyebrow">Job search</p><h2>More filters</h2><p>Every control maps to a stable backend key.</p></div><button aria-label="Close filters" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
+      <div className="jobs-filter-drawer__body">
+        <label className="jobs-drawer-search"><Icon>search</Icon><input aria-label="Search filter keys" onChange={(event) => setQuery(event.target.value)} placeholder="Find a filter or backend key" value={query} /></label>
+        <div className="jobs-filter-groups">{JOB_MORE_FILTER_GROUPS.map((group) => {
+          const visibleFilters = group.filters.filter((filter) => supports(filter) && (!normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized)));
+          if (!visibleFilters.length) return null;
+          return <section className="jobs-filter-group" key={group.group}><header><span className="jobs-filter-group__icon"><Icon>{FILTER_GROUP_ICONS[group.group] || "tune"}</Icon></span><div><h3>{group.label}</h3><small>{group.filters.length} backend key{group.filters.length === 1 ? "" : "s"}</small></div></header><div className="jobs-filter-list">{visibleFilters.map((filter) => <div className="jobs-drawer-filter" key={filter.key}><div><strong>{filter.label}</strong><code>{filter.key}</code></div><DrawerFilterControl filter={filter} onChange={(value) => onChange(filter.key, value)} value={filters[filter.key]} /></div>)}</div></section>;
+        })}</div>
+        {!JOB_MORE_FILTER_GROUPS.some((group) => group.filters.some((filter) => supports(filter) && (!normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized)))) ? <div className="jobs-filter-empty"><Icon>search_off</Icon><strong>No supported filter keys found</strong><span>This catalog has no verified data for that filter yet.</span></div> : null}
+      </div>
+      <footer className="jobs-filter-drawer__footer"><button className="jobs-outline-button" onClick={onClear} type="button">Clear all</button><button className="jobs-primary-button" onClick={onApply} type="button">Show results</button></footer>
+    </aside>
+  </div>;
+}
+
+function ReportDialog({ onClose, onSubmit }) {
+  const [reason, setReason] = useState("incorrect_location");
+  return <div className="jobs-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section aria-labelledby="report-job-title" aria-modal="true" className="jobs-report-modal" role="dialog"><header><div><p className="jobs-eyebrow">Catalog feedback</p><h2 id="report-job-title">Report incorrect filtering</h2></div><button aria-label="Close report dialog" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header><p>Tell Runr what looks wrong. This report is recorded against the job and does not trigger acquisition.</p><label>Reason<select onChange={(event) => setReason(event.target.value)} value={reason}><option value="incorrect_location">Incorrect location</option><option value="incorrect_experience">Incorrect experience level</option><option value="incorrect_language">Incorrect language requirement</option><option value="incorrect_company">Incorrect employer</option><option value="other">Other</option></select></label><footer><button className="jobs-outline-button" onClick={onClose} type="button">Cancel</button><button className="jobs-primary-button" onClick={() => onSubmit(reason)} type="button">Send report</button></footer></section></div>;
+}
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 800px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
+  return isMobile;
+}
+
+export default function JobsWorkspace({ initialJobId = "" }) {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { isConnected, request, user } = useSession();
+  const routeJobId = initialJobId || searchParams.get("job") || "";
+  const isMobile = useIsMobile();
+  const [filters, setFilters] = useState(() => location.state?.jobFilters || INITIAL_PERSONALIZED_JOB_FILTERS);
+  const canSearch = hasSelectedJobFunction(filters) || Boolean(filters.companyId);
+  const [feed, setFeed] = useState(null);
+  const [detailJob, setDetailJob] = useState(null);
+  const [detailError, setDetailError] = useState("");
+  const [selectedJobId, setSelectedJobId] = useState(routeJobId);
+  const [feedError, setFeedError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [saveFilterOnOpen, setSaveFilterOnOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterSection, setFilterSection] = useState("Basic Job Criteria");
+  const [savedFilterSets, setSavedFilterSets] = useState([]);
+  const [showFilterSets, setShowFilterSets] = useState(!isMobile);
+  const [activeFilterSetId, setActiveFilterSetId] = useState("");
+  const [filterSetsBusy, setFilterSetsBusy] = useState(false);
+  const [filterSetsError, setFilterSetsError] = useState("");
+  const [filtersReady, setFiltersReady] = useState(false);
+  const filtersTouchedRef = useRef(false);
+  const filterOwnerRef = useRef(user?.user_id);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [improveOpen, setImproveOpen] = useState(false);
+  const [improveResult, setImproveResult] = useState(null);
+  const [improveBusy, setImproveBusy] = useState(false);
+  const [preparing, setPreparing] = useState(searchParams.get("prepare") === "1");
+  const [feedback, setFeedback] = useState("");
+  const [busyAction, setBusyAction] = useState("");
+  const [feedAttempt, setFeedAttempt] = useState(0);
+  const listBodyRef = useRef(null);
+  const listScrollTopRef = useRef(0);
+  const loadMoreSentinelRef = useRef(null);
+  const loadingMoreRef = useRef(false);
+  const relevantJobEventRef = useRef("");
+  const initialFeedRef = useRef(true);
+  const skipNextFeedRef = useRef(false);
+  const usefulRenderMarkedRef = useRef(false);
+  const feedRequestMsRef = useRef(null);
+  const loadMoreAbortRef = useRef(null);
+  const fetchedDetailIdRef = useRef("");
+  const interactiveMarkedRef = useRef(false);
+
+  useEffect(() => {
+    markJobsPhase("route-mounted", { mode: "cold" });
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    let active = true;
+    if (filterOwnerRef.current !== user?.user_id) {
+      filterOwnerRef.current = user?.user_id;
+      filtersTouchedRef.current = false;
+      setFilters(INITIAL_PERSONALIZED_JOB_FILTERS);
+      setFeed(null);
+      setSavedFilterSets([]);
+      setActiveFilterSetId("");
+    }
+    setFilterSetsError("");
+    setFiltersReady(false);
+    Promise.all([
+      request("/personalized-jobs/filter-sets", { timeoutMs: 10000 }),
+      request("/personalized-jobs/saved-search", { timeoutMs: 10000 }),
+    ]).then(([result, saved]) => {
+      if (!active) return;
+      setSavedFilterSets(result.filter_sets || []);
+      setActiveFilterSetId(saved.active_filter_set_id || "");
+      if (!filtersTouchedRef.current && !location.state?.jobFilters && saved.filters && Object.keys(saved.filters).length) setFilters(filtersFromSavedSearch(saved));
+    }).catch(() => {
+      if (active) setFilterSetsError("Unable to load saved filters. Reload to try again.");
+    }).finally(() => { if (active) setFiltersReady(true); });
+    return () => { active = false; };
+  }, [isConnected, request, user?.user_id]);
+
+  const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
+  const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
+  const cardJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId));
+  const detailsLoaded = Boolean(detailJob && String(detailJob.canonical_job_id || detailJob.posting_id) === String(selectedJobId));
+  const selectedRawJob = detailsLoaded ? {
+    ...cardJob,
+    ...detailJob,
+    company_detail: {
+      ...cardJob?.company_detail,
+      ...detailJob.company_detail,
+      profile: {
+        ...cardJob?.company_profile,
+        ...detailJob.company_profile,
+        ...detailJob.company_detail?.profile,
+        logo_url: detailJob.company_detail?.profile?.logo_url || cardJob?.company_profile?.logo_url,
+      },
+    },
+    company_profile: detailJob.company_profile?.logo_url || detailJob.company_detail?.profile?.logo_url
+      ? (detailJob.company_profile || detailJob.company_detail.profile) : cardJob?.company_profile,
+    apply_url: detailJob.apply_url || cardJob?.apply_url,
+    direct_apply_url: detailJob.direct_apply_url || cardJob?.direct_apply_url,
+  } : cardJob;
+  const selectedJob = routeJobId && selectedRawJob ? toPersonalizedJobView(selectedRawJob) : null;
+  const personalizedDataMode = selectedJob?.dataMode || feed?.data_mode || "real";
+  const activeFilterCount = countPersonalizedJobFilters(filters);
+  const showMobileList = isMobile && !routeJobId;
+
+  useEffect(() => {
+    setSelectedJobId(routeJobId);
+    setDetailJob(null);
+    fetchedDetailIdRef.current = "";
+  }, [routeJobId]);
+
+  useEffect(() => {
+    setPreparing(searchParams.get("prepare") === "1");
+  }, [searchParams]);
+
+  useLayoutEffect(() => {
+    const list = listBodyRef.current;
+    if (!routeJobId && list) list.scrollTop = listScrollTopRef.current;
+    return () => {
+      if (list) listScrollTopRef.current = list.scrollTop;
+    };
+  }, [routeJobId]);
+
+  useEffect(() => {
+    if (!isConnected || !filtersReady) return undefined;
+    if (!canSearch) {
+      loadMoreAbortRef.current?.abort();
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+      setLoading(false);
+      setFeed(null);
+      setFeedError("");
+      if (!routeJobId) {
+        setDetailJob(null);
+        setSelectedJobId("");
+      }
+      return undefined;
+    }
+    if (skipNextFeedRef.current) {
+      skipNextFeedRef.current = false;
+      return undefined;
+    }
+    let active = true;
+    const isInitialFeed = initialFeedRef.current;
+    initialFeedRef.current = false;
+    // The first feed request fires immediately after the route connects;
+    // later filter edits stay debounced so rapid typing does not fan out.
+    const feedMode = isInitialFeed ? "cold" : "warm";
+    const requestStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : null;
+    markJobsPhase("feed-request-start", { mode: feedMode });
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const runFeedRequest = async () => {
+      // An already usable feed stays visible while a refresh is in flight;
+      // only an initial load renders without content.
+      setLoading(true);
+      setFeedError("");
+      try {
+        const query = buildPersonalizedJobsQuery(filters, { limit: 25, view: "cards" });
+        const payload = await request(`/personalized-jobs?${query}`, { signal: controller?.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS });
+        if (active) {
+          const durationMs = requestStartedAt === null ? null : Math.round(performance.now() - requestStartedAt);
+          feedRequestMsRef.current = durationMs;
+          markJobsPhase("feed-request-end", { mode: feedMode, durationMs, serverMs: payload?.timings?.total_ms ?? null });
+          setFeed(payload || { jobs: [], total: 0 });
+          logPersonalizedEvent("jobs_feed_viewed", {
+            route: "/jobs",
+            jobCount: Array.isArray(payload?.jobs) ? payload.jobs.length : 0,
+            filterCount: countPersonalizedJobFilters(filters),
+            dataMode: payload?.data_mode || "real",
+          });
+          if (isInitialFeed && payload?.filters) {
+            skipNextFeedRef.current = true;
+            setFilters((current) => {
+              const restored = filtersFromSavedSearch({ filters: payload.filters });
+              return { ...current, ...restored, companyLabel: restored.companyId && restored.companyId === current.companyId ? current.companyLabel : restored.companyLabel };
+            });
+          }
+        }
+      } catch (error) {
+        if (active) {
+          markJobsPhase("feed-request-end", { mode: feedMode, durationMs: requestStartedAt === null ? null : Math.round(performance.now() - requestStartedAt), outcome: "failed" });
+          // A timed-out request must end in a retryable failure state, never
+          // an indefinite spinner.
+          setFeedError(error?.message || "Unable to load the shared jobs catalog.");
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    const timer = isInitialFeed ? null : window.setTimeout(runFeedRequest, 150);
+    if (timer === null) {
+      void runFeedRequest();
+    }
+    return () => { active = false; if (timer) window.clearTimeout(timer); controller?.abort(); };
+  // Opening or closing a posting retains this feed and must not query it again.
+  }, [feedAttempt, filters, canSearch, filtersReady, isConnected, request]);
+
+  function retryFeed() {
+    setFeedAttempt((attempt) => attempt + 1);
+  }
+
+  useEffect(() => {
+    if (!isConnected || !selectedJobId) return undefined;
+    const listJob = rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId));
+    if (!routeJobId && !listJob) return undefined;
+    // Skip a duplicate detail request when this job was already fetched on
+    // this page; a failed fetch clears the marker so a later trigger retries.
+    const detailKey = String(selectedJobId);
+    if (fetchedDetailIdRef.current === detailKey) return undefined;
+    fetchedDetailIdRef.current = detailKey;
+    setDetailError("");
+    let active = true;
+    let settled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    request(`/personalized-jobs/${encodeURIComponent(selectedJobId)}`, { signal: controller?.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS })
+      .then((payload) => {
+        settled = true;
+        if (active) {
+          setDetailJob(payload);
+          setFeedError("");
+          const eventJobId = String(payload?.canonical_job_id || payload?.posting_id || selectedJobId || "").trim();
+          if (eventJobId && relevantJobEventRef.current !== eventJobId) {
+            relevantJobEventRef.current = eventJobId;
+            logPersonalizedEvent("job_relevant_viewed", { route: "/jobs", jobId: eventJobId, dataMode: payload?.data_mode || "real" });
+          }
+        }
+      })
+      .catch((error) => {
+        settled = true;
+        if (active) {
+          fetchedDetailIdRef.current = "";
+          setDetailError(error?.message || "Job details could not be loaded.");
+          setFeedError(error?.message || "This job is not available in the shared catalog.");
+        }
+      });
+    return () => {
+      active = false;
+      controller?.abort();
+      // An aborted, never-settled fetch must stay retryable on the next
+      // trigger instead of being swallowed by the dedupe marker.
+      if (!settled && fetchedDetailIdRef.current === detailKey) {
+        fetchedDetailIdRef.current = "";
+      }
+    };
+  }, [isConnected, rawJobs, request, routeJobId, selectedJobId]);
+
+  // First useful Jobs render: a verified card page, a truthful empty state,
+  // or a retryable failure state. Document `load` is not useful readiness.
+  useEffect(() => {
+    if (usefulRenderMarkedRef.current) return undefined;
+    const usefulState = feedError ? "error" : loading ? "" : jobs.length ? "cards" : "empty";
+    if (!usefulState) return undefined;
+    usefulRenderMarkedRef.current = true;
+    markJobsPhase("useful-render", { mode: "cold", state: usefulState, feedRequestMs: feedRequestMsRef.current });
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => {
+        if (!interactiveMarkedRef.current) {
+          interactiveMarkedRef.current = true;
+          markJobsPhase("interactive");
+        }
+      }, { timeout: 3000 });
+    } else {
+      const timeoutId = window.setTimeout(() => {
+        if (!interactiveMarkedRef.current) {
+          interactiveMarkedRef.current = true;
+          markJobsPhase("interactive");
+        }
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+    return undefined;
+  }, [feedError, jobs.length, loading]);
+
+  function updateFilter(name, value) {
+    filtersTouchedRef.current = true;
+    loadMoreAbortRef.current?.abort();
+    setFeed((current) => current ? { ...current, next_cursor: null } : current);
+    setFilters((current) => ({ ...current, [name]: value }));
+    setFeedback("");
+    logPersonalizedEvent("jobs_filter_changed", { route: "/jobs", filterName: name, dataMode: personalizedDataMode });
+  }
+
+  function clearFilters() {
+    filtersTouchedRef.current = true;
+    loadMoreAbortRef.current?.abort();
+    setFeed((current) => current ? { ...current, next_cursor: null } : current);
+    setFilters(INITIAL_PERSONALIZED_JOB_FILTERS);
+    setFeedback("Filters cleared.");
+  }
+
+  function setRawUserState(id, state) {
+    const matches = (job) => String(job.canonical_job_id || job.posting_id) === String(id);
+    setFeed((current) => current ? { ...current, jobs: (current.jobs || []).map((job) => matches(job) ? { ...job, user_state: state } : job) } : current);
+    setDetailJob((current) => current && matches(current) ? { ...current, user_state: state } : current);
+  }
+
+  async function saveJob(job) {
+    const nextState = job.userState === "saved" ? "none" : "saved";
+    setBusyAction("save");
+    try {
+      await request(`/personalized-jobs/${encodeURIComponent(job.id)}/save`, { method: nextState === "none" ? "DELETE" : "POST", body: {} });
+      setRawUserState(job.id, nextState);
+      setFeedback(nextState === "saved" ? `${job.title} saved.` : `${job.title} removed from saved jobs.`);
+      logPersonalizedEvent(nextState === "saved" ? "job_saved" : "job_unsaved", { route: "/jobs", jobId: job.id, dataMode: job.dataMode || personalizedDataMode });
+    } catch (error) {
+      setFeedback(error?.message || "Unable to update this saved job.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function toggleHide() {
+    if (!selectedJob) return;
+    const hiding = selectedJob.userState !== "hidden";
+    setBusyAction("hide");
+    try {
+      await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/${hiding ? "hide" : "restore"}`, { method: "POST", body: {} });
+      setRawUserState(selectedJob.id, hiding ? "hidden" : "none");
+      setFeedback(hiding ? "This job is hidden. You can restore it from Hidden jobs." : "This job is back in your shortlist.");
+    } catch (error) {
+      setFeedback(error?.message || "Unable to update this job.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function markApplied() {
+    if (!selectedJob || selectedJob.userState === "applied") return;
+    setBusyAction("applied");
+    try {
+      await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/applied`, { method: "POST", body: {} });
+      setRawUserState(selectedJob.id, "applied");
+      setFeedback("Marked as applied.");
+      logPersonalizedEvent("application_marked_applied", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
+    } catch (error) {
+      setFeedback(error?.message || "Unable to mark this job as applied.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function reportJob(reason) {
+    if (!selectedJob) return;
+    setReportOpen(false);
+    try {
+      await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/report`, { method: "POST", body: { reason_code: reason } });
+      setFeedback("Thanks. Your report was recorded for this job.");
+      logPersonalizedEvent("job_relevance_feedback", {
+        route: "/jobs",
+        jobId: selectedJob.id,
+        feedbackReasonCode: reason,
+        dataMode: personalizedDataMode,
+      });
+    } catch (error) {
+      setFeedback(error?.message || "Unable to send this report.");
+    }
+  }
+
+  async function saveSearch(name, filterSetId, criteria = filters) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
+    try {
+      const saved = await request("/personalized-jobs/filter-sets", { method: "POST", body: { name, filter_set_id: filterSetId, filters: toPersonalizedJobsFilterPayload(criteria) } });
+      setSavedFilterSets((current) => [saved, ...current.filter((item) => item.filter_set_id !== saved.filter_set_id)]);
+      setActiveFilterSetId(saved.filter_set_id);
+      setFeedback(`Saved ${name}.`);
+      return true;
+    } catch (error) {
+      setFilterSetsError(error?.message || "Unable to save this search.");
+      return false;
+    } finally {
+      setFilterSetsBusy(false);
+    }
+  }
+
+  async function activateFilterSet(item) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
+    try {
+      const saved = await request(`/personalized-jobs/filter-sets/${encodeURIComponent(item.filter_set_id)}/activate`, { method: "POST", body: {} });
+      filtersTouchedRef.current = true;
+      setFilters(filtersFromSavedSearch(saved));
+      setActiveFilterSetId(item.filter_set_id);
+    } catch (error) {
+      setFilterSetsError(error?.message || "Unable to activate this filter.");
+    } finally {
+      setFilterSetsBusy(false);
+    }
+  }
+
+  async function deleteFilterSet(filterSetId) {
+    setFilterSetsBusy(true);
+    setFilterSetsError("");
+    try {
+      await request(`/personalized-jobs/filter-sets/${encodeURIComponent(filterSetId)}`, { method: "DELETE" });
+      setSavedFilterSets((current) => current.filter((item) => item.filter_set_id !== filterSetId));
+      if (activeFilterSetId === filterSetId) setActiveFilterSetId("");
+    } catch (error) {
+      setFilterSetsError(error?.message || "Unable to delete this filter.");
+    } finally {
+      setFilterSetsBusy(false);
+    }
+  }
+
+  async function openImproveResume() {
+    if (!selectedJob) return;
+    setImproveOpen(true);
+    setImproveResult(null);
+    try {
+      const result = await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/improve-resume`, { method: "POST", body: { mode: "review" } });
+      setImproveResult(result);
+    } catch (error) {
+      setFeedback(error?.message || "Evidence review is unavailable.");
+    }
+  }
+
+  async function requestRewrite() {
+    if (!selectedJob) return;
+    setImproveBusy(true);
+    try {
+      const result = await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/improve-resume`, { method: "POST", body: { mode: "rewrite" } });
+      setImproveResult(result);
+      setFeedback("Tailored resume generation has been queued.");
+      logPersonalizedEvent("application_preparation_requested", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
+    } catch (error) {
+      setFeedback(error?.message || "Runr Pro is required to create a tailored resume.");
+    } finally {
+      setImproveBusy(false);
+    }
+  }
+
+  async function loadMore() {
+    if (!canSearch || !feed?.next_cursor || loading || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
+    setLoadingMore(true);
+    try {
+      const cursor = feed.next_cursor;
+      const query = buildPersonalizedJobsQuery(filters, { cursor, limit: 25, view: "cards" });
+      const payload = await request(`/personalized-jobs?${query}`, { signal: controller.signal, timeoutMs: JOBS_FEED_TIMEOUT_MS });
+      setFeed((current) => current?.next_cursor === cursor
+        ? { ...payload, total: payload?.total ?? current.total, jobs: [...(current.jobs || []), ...(payload?.jobs || [])] } : current);
+    } catch (error) {
+      if (!controller.signal.aborted) setFeedback(error?.message || "Unable to load more jobs.");
+    } finally {
+      if (loadMoreAbortRef.current === controller) loadMoreAbortRef.current = null;
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }
+
+  useEffect(() => {
+    const root = listBodyRef.current;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!root || !sentinel || !feed?.next_cursor || typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) void loadMore();
+    }, { root, rootMargin: "0px 0px 150px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [feed?.next_cursor, loadingMore, jobs.length, showMobileList, routeJobId]);
+
+  function selectJob(job) {
+    setSelectedJobId(job.id);
+    setDetailJob(null);
+    navigate(`/jobs/${encodeURIComponent(job.id)}`, { state: { jobFilters: filters } });
+  }
+
+  function applyToJob() {
+    if (!selectedJob?.applicationEntryUrl) {
+      setFeedback("No application or original job link is available for this job.");
+      return;
+    }
+    logPersonalizedEvent(selectedJob.applicationEntryKind === "direct_apply" ? "apply_link_opened" : "job_posting_opened_for_apply", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
+  }
+
+  function openNetwork() {
+    setFeedback("Network connections are not available in this Jobs API response yet.");
+  }
+
+  const detailContent = selectedJob ? <>
+    <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><span>Job overview</span></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link" onClick={() => navigate("/jobs", { state: { jobFilters: filters } })} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View employer posting</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View employer posting</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
+    <div className="jobs-detail-scroll">
+      <ReadableJob company={{ name: selectedJob.company, profile: selectedJob.companyProfile }} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
+      {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
+      {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
+    </div>
+  </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
+
+  return <div className="jobs-experience">
+    <section aria-label="Company and title search" className="jobs-search-heading"><div><h1>Find your next opportunity</h1><p>Explore a company or find roles that fit you.</p></div><CompanySearch connected={isConnected} onClear={() => {
+      filtersTouchedRef.current = true;
+      setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
+    }} onQuery={(value) => {
+      filtersTouchedRef.current = true;
+      setFilters((current) => ({ ...current, query: value, companyId: "", companyLabel: "" }));
+    }} onSelect={(company) => {
+      filtersTouchedRef.current = true;
+      setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} /></section>
+    <section className="jobs-search-bar" aria-label="Job search filters">
+      <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
+      <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
+      {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}
+      <button className={["jobs-filter-pill", activeFilterCount ? "is-active" : ""].join(" ")} onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>tune</Icon><span>All Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button aria-expanded={showFilterSets} aria-label="Saved filters" className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>bookmark</Icon>Saved filters</button>
+      {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
+    </section>
+    {canSearch ? <CatalogStateBanner error={feedError} feed={feed} loading={loading} /> : null}
+    {canSearch && feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
+    {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
+    <div className="jobs-content-layout">
+    <AccountSetupPanel>
+      {!routeJobId && showFilterSets ? <SavedFiltersPanel onAdd={() => { setSaveFilterOnOpen(true); setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} activeId={activeFilterSetId} busy={filterSetsBusy || !filtersReady} error={filterSetsError} items={savedFilterSets} modified={Boolean(activeFilterSetId && JSON.stringify(toPersonalizedJobsFilterPayload(filters)) !== JSON.stringify(toPersonalizedJobsFilterPayload(filtersFromSavedSearch(savedFilterSets.find((item) => item.filter_set_id === activeFilterSetId)))))} onActivate={activateFilterSet} onDelete={deleteFilterSet} onEdit={(item) => {
+        filtersTouchedRef.current = true;
+        setFilters(filtersFromSavedSearch(item));
+      }} onSave={saveSearch} /> : null}
+    </AccountSetupPanel>
+    <div className={["jobs-workspace", routeJobId ? "jobs-workspace--detail-only" : "jobs-workspace--cards-only", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
+      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{canSearch ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} matching jobs` : "Matching jobs") : "Choose a Job Function"}</strong><label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="jobs-list-panel__body" ref={listBodyRef}>{!canSearch ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
+      {routeJobId ? <section className="jobs-detail-panel">{detailContent}</section> : null}
+
+    </div>
+    </div>
+    {filtersOpen ? <AllJobFilters request={request} filters={filters} initialSection={filterSection} initialSave={saveFilterOnOpen} onApply={async (next, name) => { if (name && !await saveSearch(name, undefined, next)) return false; filtersTouchedRef.current = true; setFilters(next); setFiltersOpen(false); setSaveFilterOnOpen(false); return true; }} onClose={() => { setFiltersOpen(false); setSaveFilterOnOpen(false); }} /> : null}
+    {reportOpen ? <ReportDialog onClose={() => setReportOpen(false)} onSubmit={reportJob} /> : null}
+  </div>;
+}

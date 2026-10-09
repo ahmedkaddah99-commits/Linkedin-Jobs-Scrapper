@@ -1,0 +1,55 @@
+{
+  "issue_id": "RUN-32",
+  "ticket": "T33",
+  "plan_version": "t33-2026-09-22-v1",
+  "base_revision": "8bc09a256b42898157bee656448ea34530568198",
+  "scope_fingerprint": "bab6a33610f92a7f10c3a6f5a1e81c2b0636f50f5f7146981eb929888d66cd6d",
+  "waves": [
+    [
+      "RUN-32"
+    ]
+  ],
+  "conflict_resources": [
+    "producer-state-read-only",
+    "runr-readiness-output-2026-09-22",
+    "publication-contract-scope"
+  ],
+  "implementation_dependencies": [
+    {
+      "issue_id": "RUN-25",
+      "kind": "implementation",
+      "integration_revision": "abd670407a8389a57d95d67bc909baa67e6237b9",
+      "verified_ancestor": true
+    },
+    {
+      "issue_id": "RUN-31",
+      "kind": "implementation",
+      "integration_revision": "abd670407a8389a57d95d67bc909baa67e6237b9",
+      "verified_ancestor": true
+    },
+    {
+      "issue_id": "RUN-44",
+      "kind": "implementation",
+      "integration_revision": "abd670407a8389a57d95d67bc909baa67e6237b9",
+      "verified_ancestor": true
+    },
+    {
+      "issue_id": "RUN-45",
+      "kind": "implementation",
+      "integration_revision": "891962eb22709d0c48079cfa7b4afe0e24a73220",
+      "verified_ancestor": true
+    }
+  ],
+  "release_dependencies": [
+    {
+      "issue_id": "RUN-24",
+      "kind": "release",
+      "required_state": "Ready for Production",
+      "blocks_promotion_only": true
+    }
+  ],
+  "execution_mode": "serial",
+  "implementation_ready": true,
+  "release_ready": false,
+  "validity_fingerprint": "83007a73629512fdb46f9ab9782009db2e01e06108f0b9a6a028e295823d4345"
+}

@@ -1,0 +1,44 @@
+[Unit]
+Description=Runr bounded LinkedIn acquisition
+After=network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+EnvironmentFile=-/opt/runr/.env.acquisition.provider
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+Environment=RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=true
+Environment=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ExecStart=/opt/runr/deploy/run-acquisition-source.sh linkedin
+CPUAccounting=true
+CPUQuota=250%
+MemoryAccounting=true
+MemoryHigh=6G
+MemoryMax=9G
+TasksMax=384
+TimeoutStartSec=2h
+TimeoutStopSec=300
+# Exit 75 means the source lock was busy; systemd treats that overlap as a
+# skipped scheduled run rather than a failed deployment.
+SuccessExitStatus=75
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups
+
+[Install]
+WantedBy=multi-user.target

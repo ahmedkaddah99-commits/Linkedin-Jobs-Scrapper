@@ -1,0 +1,9 @@
+{
+  "shortcuts": [
+    {
+      "label": "Kanban Autopilot",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\ahmed\\Scripts\\kanban-autopilot.ps1\" -ProjectPath \"C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\"",
+      "icon": "rocket"
+    }
+  ]
+}

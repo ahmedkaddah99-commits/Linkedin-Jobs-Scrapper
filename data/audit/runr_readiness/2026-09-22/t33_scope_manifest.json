@@ -1,0 +1,86 @@
+{
+  "issue_id": "RUN-32",
+  "ticket": "T33",
+  "subsystem": "acquisition",
+  "co_owners": [
+    "data-domain-model",
+    "deployment-release-ci",
+    "backend-test-suite",
+    "docs-and-repository-artifacts"
+  ],
+  "allowed_writes": [
+    "scripts/canonicalize_producer_states.py",
+    "scripts/audit_job_publication_completeness.py",
+    "scripts/audit_employer_coverage_real.py",
+    "scripts/publish_producer_states.py",
+    "backend/repositories/sqlite_acquisition.py",
+    "data/audit/runr_readiness/**",
+    "docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md"
+  ],
+  "allowed_reads": [
+    "AGENTS.md",
+    "docs/INDEX.md",
+    "docs/subsystems.yaml",
+    "docs/reverse-engineering/03-data/acquisition-source-state.md",
+    "docs/reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md",
+    "data/audit/runr_source_state/2026-09-19/critical_recovery_ticket_research.md",
+    "scripts/canonicalize_producer_states.py",
+    "scripts/audit_job_publication_completeness.py",
+    "scripts/audit_employer_coverage_real.py",
+    "scripts/publish_producer_states.py",
+    "backend/repositories/sqlite_acquisition.py",
+    "data/audit/runr_readiness/**",
+    "docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md"
+  ],
+  "denied_roots": [
+    "backend/api/**",
+    "workspace_runner.py",
+    "backend/worker/**",
+    "backend/orchestration/**",
+    "backend/adapters/**",
+    "backend/bootstrap.py",
+    "backend/__init__.py",
+    "backend/application/**",
+    "backend/capabilities/**",
+    "backend/career_memory/**",
+    "backend/evidence/**",
+    "backend/evidence_library/**",
+    "backend/master_cv/**",
+    "backend/profiles/**",
+    "backend/work_experience/**",
+    "backend/tools/**",
+    "backend/scripts/**",
+    "backend/repositories/sqlite_personalized_jobs.py",
+    "backend/repositories/assisted_apply_preparation.py",
+    "backend/repositories/document_payloads.py",
+    "backend/integrations/**",
+    "backend/security/**",
+    "frontend/**",
+    "apps/**",
+    "packages/**"
+  ],
+  "required_tests": [
+    ".venv\\Scripts\\python.exe scripts/audit_job_publication_completeness.py --help",
+    ".venv\\Scripts\\python.exe scripts/audit_employer_coverage_real.py --help"
+  ],
+  "external_verification": [
+    "Read-only VPS evidence follows docs/reverse-engineering/02-deployment/vps-predeployment-verification.md at workflow commit 5df438d7; no live acceptance is claimed locally."
+  ],
+  "base_revision": "8bc09a256b42898157bee656448ea34530568198",
+  "named_baseline": "405c70e7dbc3bc4853d39a46b88358e5d23c4f45",
+  "content_hashes": {
+    "AGENTS.md": "4a82ff8bba9070b16797a9ff1a1f4138a67d647bbd55c096f98afc2836c2e477",
+    "docs/INDEX.md": "a606216236cfc7ab84c18e1e091c8d2d3746f0e11331d3ad941a734751abf88a",
+    "docs/subsystems.yaml": "5d125408940b8c3eb3152256557f7d19817aae19bdbafdd5206a61e32887b1f2",
+    "docs/JOB_PUBLICATION_COMPLETENESS_CONTRACT.md": "060e703e4dfb0ec958b3cf27a114243b28ca55f0f9b5f1e741e82f2065fbe4f9",
+    "docs/reverse-engineering/03-data/acquisition-source-state.md": "13f262a57bbc8cc114b32783aa9f1907ce5178929138a9f714fe12557a24427f",
+    "docs/reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md": "2d6b24219eba45b2b21caee1f3a8bf4e581fca4de43e548fabe41524509d238f",
+    "data/audit/runr_source_state/2026-09-19/critical_recovery_ticket_research.md": "7a0d29955c7eb46286fe16ab030d69f3fc05239dad9f009ef57877a7b5c18345",
+    "scripts/canonicalize_producer_states.py": "de7d774b889967dcbbf3683b4a775c2e490a955c8fbbe8b2e2d96b9d9769ad47",
+    "scripts/audit_job_publication_completeness.py": "9f509e99940cc2a3080ea36d5a0d1407d778eb33e1a876877655ffa5f62e2d6f",
+    "scripts/audit_employer_coverage_real.py": "0a2610d6751d783252f80883fd55d2975d3619038444858b3cbbaa0927519b74",
+    "scripts/publish_producer_states.py": "721d2959f199b65ec5b2f60f80df68609f7b28c040ed95338f7107efad2da0f8",
+    "backend/repositories/sqlite_acquisition.py": "f84c3ef11254dfc0129a3a1cc00ccaba5004b1f20173da4d84b07dff31e7dde2"
+  },
+  "scope_fingerprint": "bab6a33610f92a7f10c3a6f5a1e81c2b0636f50f5f7146981eb929888d66cd6d"
+}

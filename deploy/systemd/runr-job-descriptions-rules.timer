@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare published Runr descriptions from employer text
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+Unit=runr-job-descriptions-rules.service
+
+[Install]
+WantedBy=timers.target
+
