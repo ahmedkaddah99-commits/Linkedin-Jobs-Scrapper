@@ -187,3 +187,28 @@ def test_recovery_fences_run_under_a_write_transaction(tmp_path,monkeypatch):
     monkeypatch.setattr(store,'_run_transaction',lambda fn:original(lambda conn:fn(AtomicFence(conn))))
     assert store.publish_pending_catalog_jobs(batch_size=1)['published']==1
 
+
+def test_http_batch_preserves_atomic_outcomes_and_rejects_stale_inputs(tmp_path,monkeypatch):
+    import backend.database.http_batch as batches
+    store=SqliteAcquisitionStore(tmp_path/'catalog.db');ingest(store)
+    monkeypatch.setenv('RUNR_PUBLICATION_RECOVERY_HTTP_BATCH','1')
+    def execute(statements):
+        def write(conn):
+            conn.execute('BEGIN IMMEDIATE')
+            for sql,args in statements:conn.execute(sql,args)
+        store._run_transaction(write)
+    monkeypatch.setattr(batches,'execute_atomic_batch',execute)
+    assert store.publish_pending_catalog_jobs(batch_size=10)['published']==1
+    assert store.publish_pending_catalog_jobs(batch_size=10)['processed']==0
+    ingest(store,cycle='next',jobs=[{'job_id':'second','title':'Engineer','company':'Employer',
+        'url':'https://employer.example/jobs/second','description':'Engineering responsibilities. '*8}])
+    def stale(statements):
+        with store._connect() as conn:
+            conn.execute("UPDATE acquisition_publication_queue SET revision=revision+1 WHERE status='pending'")
+        execute(statements)
+    monkeypatch.setattr(batches,'execute_atomic_batch',stale)
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):store.publish_pending_catalog_jobs(batch_size=10)
+    with store._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM acquisition_publication_jobs').fetchone()[0]==1
+

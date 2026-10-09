@@ -122,4 +122,36 @@ def publish_pending(store, *, batch_size, policy_version):
         return {'processed':len(candidates),'published':len(snapshot),'rejected':len(active)-len(snapshot),
                 'publication_id':publication_id if head or snapshot else ''}
 
+    if os.getenv('RUNR_PUBLICATION_RECOVERY_HTTP_BATCH')=='1':
+        from backend.database.http_batch import execute_atomic_batch
+        statements=[]
+        expected=[{'id':r['canonical_job_id'],'version':r['current_version_id'],
+                   'state':r['lifecycle_state'],'revision':r['queue_revision']} for r in candidates]
+        guard="""UPDATE acquisition_publication_queue SET version_id=CASE WHEN
+            COALESCE((SELECT publication_id FROM acquisition_publication_head WHERE head_id=1),'')=?
+            AND COALESCE((SELECT updated_at FROM acquisition_publication_head WHERE head_id=1),'')=?
+            AND (SELECT COUNT(*) FROM json_each(?) e JOIN canonical_jobs j
+                ON j.canonical_job_id=json_extract(e.value,'$.id')
+                JOIN acquisition_publication_queue q ON q.canonical_job_id=j.canonical_job_id
+                WHERE j.current_version_id IS json_extract(e.value,'$.version')
+                AND j.lifecycle_state=json_extract(e.value,'$.state')
+                AND q.revision=json_extract(e.value,'$.revision'))=?
+            THEN version_id ELSE NULL END WHERE canonical_job_id=?"""
+        statements.append((guard,(head.get('publication_id',''),head.get('updated_at',''),
+            json.dumps(expected),len(candidates),candidates[0]['canonical_job_id'])))
+        class Result:
+            def __init__(self,value):self.value=value
+            def fetchone(self):return self.value
+        class Recorder:
+            def execute(self,sql,parameters=()):
+                if sql=='BEGIN IMMEDIATE':return Result(None)
+                if sql.startswith('SELECT publication_id,updated_at'):
+                    return Result(head or None)
+                if sql.startswith('SELECT COUNT(*) AS jobs FROM json_each'):
+                    return Result({'jobs':len(candidates)})
+                statements.append((sql,parameters))
+                return Result(None)
+        outcome=commit(Recorder())
+        execute_atomic_batch(statements)
+        return outcome
     return store._run_transaction(commit)
