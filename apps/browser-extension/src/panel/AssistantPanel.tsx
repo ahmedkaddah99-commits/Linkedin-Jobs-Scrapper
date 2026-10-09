@@ -2,8 +2,16 @@ import { useState } from "react";
 import type { ApplicationJobContext, ApplicationPageDetection } from "@runr/ats-core/application-context";
 import { matchVerdict, type ProfileCompleteness, type ResumeMatch } from "@runr/ats-core/resume-match";
 import type { AutofillRunState, FieldResult } from "./autofill-run";
+import type { CandidateProfile } from "@runr/ats-core/generic-planner";
+import type { ApplicationPackagePayload } from "@runr/extension-messages";
+import ProfileQuickCopy from "./ProfileQuickCopy";
+import LocalDocumentPicker from "./LocalDocumentPicker";
+import ApplicationWorkspace from "./ApplicationWorkspace";
+import { workspaceRequest } from "./workspace";
+import type { DocumentRole } from "@runr/ats-core/generic-upload";
+import type { ProfileDetail } from "./profile-details";
 
-export type PanelTab = "autofill" | "resume" | "profile";
+export type PanelTab = "autofill" | "resume" | "profile" | "documents" | "answers";
 
 export interface AssistantPanelProps {
   job: ApplicationJobContext | null;
@@ -26,6 +34,19 @@ export interface AssistantPanelProps {
   completeness: ProfileCompleteness | null;
   onTailorResume: () => void;
   onCopyProfile: () => void;
+  profile?: CandidateProfile | null;
+  profileLoading?: boolean;
+  profileError?: string;
+  onRefreshProfile?: () => void;
+  applicationPackage?: ApplicationPackagePayload | null;
+  onOpenDocuments?: () => void;
+  onEditProfile?: () => void;
+  onOpenTracker?: () => void;
+  onReviewDocuments?: () => void;
+  onFocusField?: (fieldId: string) => void;
+  onAttachLocalDocument?: (role: DocumentRole, file: File, replace: boolean) => Promise<string>;
+  savedAnswers?: ProfileDetail[];
+  onScoreDescription?: (description: string) => void;
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -65,7 +86,7 @@ function initialFor(employer: string): string {
   return letter ? letter.toUpperCase() : "R";
 }
 
-function FieldRow({ result }: { result: FieldResult }) {
+function FieldRow({ result, onFocusField }: { result: FieldResult; onFocusField?: (fieldId: string) => void }) {
   const done = result.outcome === "filled" || result.outcome === "kept";
   return (
     <li className={`field-row field-${result.outcome}`} data-testid={`runr-field-${result.outcome}`}>
@@ -73,11 +94,12 @@ function FieldRow({ result }: { result: FieldResult }) {
         {done ? "✓" : "!"}
       </span>
       <span className="field-label">{result.label}</span>
+      {!done && onFocusField && !result.fieldId.startsWith("unsupported-") ? <button type="button" className="icon-button" onClick={() => onFocusField(result.fieldId)} aria-label={`Go to ${result.label}`}>Review</button> : null}
     </li>
   );
 }
 
-function ProgressBlock({ run }: { run: AutofillRunState }) {
+function ProgressBlock({ run, onFocusField }: { run: AutofillRunState; onFocusField?: (fieldId: string) => void }) {
   if (run.stage !== "complete") {
     return (
       <div className="card" data-testid="runr-panel-progress">
@@ -113,7 +135,7 @@ function ProgressBlock({ run }: { run: AutofillRunState }) {
         <>
           <p className="section-title">Need to review({review.length})</p>
           <ul className="field-list" data-testid="runr-panel-review-list">
-            {review.map((result) => <FieldRow key={result.fieldId} result={result} />)}
+            {review.map((result) => <FieldRow key={result.fieldId} result={result} onFocusField={onFocusField} />)}
           </ul>
         </>
       ) : null}
@@ -149,9 +171,43 @@ export default function AssistantPanel({
   completeness,
   onTailorResume,
   onCopyProfile,
+  profile,
+  profileLoading,
+  profileError,
+  onRefreshProfile,
+  applicationPackage,
+  onOpenDocuments,
+  onEditProfile,
+  onOpenTracker,
+  onReviewDocuments,
+  onFocusField,
+  onAttachLocalDocument,
+  savedAnswers = [],
+  onScoreDescription,
 }: AssistantPanelProps) {
   const [tab, setTab] = useState<PanelTab>("autofill");
   const [showKeywords, setShowKeywords] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportStatus, setReportStatus] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [matchDescription, setMatchDescription] = useState("");
+  async function copyReport() {
+    const report = [`Runr application support`, `Site: ${window.location.hostname}`, `Application site: ${providerLabel(detection.provider)}`, `Role: ${job?.title || "Unknown"}`, `Fields found: ${detection.fillableFieldCount}`, "", reportDescription.trim()].join("\n");
+    try { await navigator.clipboard.writeText(report); setReportStatus("Report copied. Share it with Runr support."); }
+    catch { setReportStatus("Couldn't copy. Select your description and copy it manually."); }
+  }
+  async function sendReport() {
+    setReportBusy(true); setReportStatus("");
+    try {
+      const result = await workspaceRequest<{ receipt: string }>("report", {
+        description: reportDescription.trim(), hostname: window.location.hostname,
+        provider: detection.provider, role: (job?.title || "").slice(0, 300),
+      });
+      setReportStatus(`Report saved to your Runr account. Reference: ${result.receipt}`);
+    } catch (error) { setReportStatus(error instanceof Error ? error.message : "Couldn't send the report. Retry or copy it."); }
+    finally { setReportBusy(false); }
+  }
 
   if (collapsed) {
     return (
@@ -177,7 +233,7 @@ export default function AssistantPanel({
           Runr
         </span>
         <span className="header-actions">
-          <button type="button" className="icon-button" onClick={onReport} data-testid="runr-panel-report">
+          <button type="button" className="icon-button" onClick={() => setShowReport((value) => !value)} data-testid="runr-panel-report" aria-expanded={showReport}>
             Report
           </button>
           <button
@@ -204,16 +260,30 @@ export default function AssistantPanel({
       <div className="tabs" role="tablist" aria-label="Runr sections">
         {([
           ["autofill", "Autofill"],
-          ["resume", "Resume Score"],
+          ["resume", "Match"],
           ["profile", "Profile"],
+          ["documents", "Documents"],
+          ["answers", "Answers"],
         ] as const).map(([value, label]) => (
           <button
             key={value}
             type="button"
             role="tab"
+            id={`runr-tab-${value}`}
+            aria-controls="runr-panel-tabpanel"
+            tabIndex={tab === value ? 0 : -1}
             className="tab"
             aria-selected={tab === value}
             onClick={() => setTab(value)}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const tabs = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+              const index = tabs.indexOf(event.currentTarget);
+              const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+              const target = tabs[next];
+              if (target) { setTab(target.id.replace("runr-tab-", "") as PanelTab); target.focus(); }
+            }}
             data-testid={`runr-panel-tab-${value}`}
           >
             {label}
@@ -221,7 +291,15 @@ export default function AssistantPanel({
         ))}
       </div>
 
-      <div className="body" role="tabpanel">
+      <div className="body" id="runr-panel-tabpanel" role="tabpanel" aria-labelledby={`runr-tab-${tab}`}>
+        {showReport ? <div className="card" data-testid="runr-panel-report-form">
+          <p className="progress-title">Report an application issue</p><label htmlFor="runr-report-description" className="job-meta">What didn't work?</label>
+          <textarea id="runr-report-description" className="profile-search" rows={4} maxLength={2000} value={reportDescription} onChange={(event) => { setReportDescription(event.target.value); setReportStatus(""); }} placeholder="Which field or step needs help?" />
+          <button type="button" className="primary" disabled={reportBusy || !reportDescription.trim()} onClick={() => void sendReport()}>{reportBusy ? "Sending…" : "Send report"}</button>
+          <button type="button" className="icon-button" disabled={reportBusy || !reportDescription.trim()} onClick={() => void copyReport()}>Copy support report</button>
+          <button type="button" className="icon-button" onClick={onReport}>Open application review</button><button type="button" className="icon-button" onClick={() => setShowReport(false)}>Close report</button>
+          {reportStatus ? <p className="job-meta" role="status">{reportStatus}</p> : null}
+        </div> : null}
         {tab === "autofill" ? (
           <div className="card">
             <div className="job">
@@ -239,7 +317,34 @@ export default function AssistantPanel({
           </div>
         ) : null}
 
-        {tab === "autofill" && run ? <ProgressBlock run={run} /> : null}
+        {tab === "autofill" && !run ? <div className="card setup-card">
+          <p className="progress-title">{profileLoading ? "Loading your profile…" : profile ? "Ready to autofill" : "Connect your profile"}</p>
+          <p className="job-meta">{profile ? "Fill this page, review the remaining fields, then continue." : profileError || "Connect Runr to use your saved details."}</p>
+          {!profile && !profileLoading ? <button type="button" className="primary" onClick={onOpenSettings}>Connect Runr</button> : null}
+          {onRefreshProfile && !profileLoading ? <button type="button" className="icon-button" onClick={onRefreshProfile}>Refresh profile</button> : null}
+          <div className="quick-actions"><button type="button" className="icon-button" onClick={() => setTab("documents")}>Choose documents</button><button type="button" className="icon-button" onClick={() => setTab("profile")}>View profile</button></div>
+        </div> : null}
+
+        {tab === "autofill" && run ? <ProgressBlock run={run} onFocusField={onFocusField} /> : null}
+
+        {tab === "autofill" && applicationPackage?.answers.length ? <details className="card"><summary className="progress-title">Application answers ({applicationPackage.answers.length})</summary><p className="job-meta">Review or update these answers in application review.</p><button type="button" className="icon-button" onClick={onReviewDocuments}>Open application review</button></details> : null}
+
+        <div className="card" data-testid="runr-panel-documents" hidden={tab !== "documents"}>
+          <p className="progress-title">Application documents</p>
+          {applicationPackage?.documents.length ? <ul className="field-list">{applicationPackage.documents.map((doc) => <li className="document-item" key={doc.documentId}><strong>{doc.documentKind === "cv" ? "Resume" : doc.documentKind === "cover_letter" ? "Cover letter" : "Supporting document"}</strong><span className="profile-value">{doc.fileName}</span></li>)}</ul> : <p className="job-meta">Choose a file below, or select your application documents in Runr.</p>}
+          {onAttachLocalDocument ? <p className="job-meta">PDF or Word (.docx), up to 20 MB.</p> : null}
+          {applicationPackage?.documents.length ? <button type="button" className="primary" onClick={onReviewDocuments}>Review and attach documents</button> : null}
+          <div className="quick-actions"><button type="button" className="icon-button" onClick={onOpenDocuments}>Manage documents</button><button type="button" className="icon-button" onClick={onTailorResume}>Tailor resume</button></div>
+          <ApplicationWorkspace key={`documents:${window.location.href}`} mode="documents" applicationUrl={window.location.href} description={job?.description || matchDescription} onAttach={onAttachLocalDocument} />
+          {onAttachLocalDocument ? <><LocalDocumentPicker role="cv" onAttach={onAttachLocalDocument} /><LocalDocumentPicker role="cover_letter" onAttach={onAttachLocalDocument} /></> : null}
+        </div>
+
+        <div className="card" data-testid="runr-panel-answers" hidden={tab !== "answers"}>
+          <p className="progress-title">Saved answers</p><p className="job-meta">Find an answer, copy it, and adjust it for this application.</p>
+          {profileLoading ? <p className="job-meta" role="status">Loading your answers…</p> : !profile && !applicationPackage ? <p className="job-meta">{profileError || "Connect your profile to see saved answers."}</p> : <ProfileQuickCopy answers details={[...savedAnswers, ...(applicationPackage?.answers ?? []).map((answer) => ({ section: "This application", label: answer.label, value: answer.proposedValue }))]} />}
+          <button type="button" className="icon-button" onClick={applicationPackage ? onReviewDocuments : onEditProfile}>{applicationPackage ? "Edit application answers" : "Edit profile answers"}</button>
+          <ApplicationWorkspace key={`answers:${window.location.href}`} mode="answers" applicationUrl={window.location.href} description={job?.description || matchDescription} />
+        </div>
 
         {tab === "autofill" && error ? (
           <p className="empty" role="alert" data-testid="runr-panel-error">{error}</p>
@@ -253,13 +358,14 @@ export default function AssistantPanel({
                   {resumeMatch.score}
                 </span>
                 <div>
-                  <p className="job-title">{matchVerdict(resumeMatch.score)} Resume Match</p>
+                  <p className="job-title">{matchVerdict(resumeMatch.score)} Profile Match</p>
                   <p className="job-meta" data-testid="runr-panel-keyword-count">
                     Matches {resumeMatch.matchedKeywords.length} of{" "}
                     {resumeMatch.matchedKeywords.length + resumeMatch.missingKeywords.length} keywords
                   </p>
                 </div>
               </div>
+              <p className="job-meta">Based on your saved profile and this job description.</p>
               <button
                 type="button"
                 className="icon-button"
@@ -283,9 +389,10 @@ export default function AssistantPanel({
               </button>
             </div>
           ) : (
-            <p className="empty" data-testid="runr-panel-resume-empty">
-              Runr needs this posting's description to score your resume. Open the job posting first.
-            </p>
+            <div className="card"><p className="empty" data-testid="runr-panel-resume-empty">Open the job posting or paste its description to compare your profile.</p>
+              {onScoreDescription ? <><label htmlFor="runr-match-description" className="section-title">Job description</label><textarea id="runr-match-description" className="profile-search" rows={6} maxLength={50000} placeholder="Paste the job description…" value={matchDescription} onChange={(event) => setMatchDescription(event.target.value)} /><button type="button" className="primary" disabled={!profile || !matchDescription.trim()} onClick={() => onScoreDescription(matchDescription)}>Compare profile</button>{!profile ? <p className="job-meta">Connect your profile to compare it with this role.</p> : null}</> : null}
+              <button type="button" className="icon-button" onClick={onTailorResume} data-testid="runr-panel-tailor">Tailor Resume</button>
+            </div>
           )
         ) : null}
 
@@ -311,19 +418,21 @@ export default function AssistantPanel({
                   </ul>
                 </>
               )}
-              <button type="button" className="icon-button" onClick={onCopyProfile} data-testid="runr-panel-copy-profile">
-                Copy profile details
-              </button>
+              <button type="button" className="icon-button" onClick={onEditProfile}>Edit profile</button>
+              {profile ? <ProfileQuickCopy profile={profile} /> : null}
             </div>
           ) : (
             <p className="empty" data-testid="runr-panel-profile-empty">
-              Connect your Runr account to see your profile here.
+              {profileLoading ? "Loading your profile…" : profileError || "Connect your Runr account to see your profile here."}
+              <button type="button" className="icon-button" onClick={onOpenSettings}>Connect Runr</button>
+              {onRefreshProfile ? <button type="button" className="icon-button" onClick={onRefreshProfile} disabled={profileLoading}>Refresh profile</button> : null}
             </p>
           )
         ) : null}
       </div>
 
       <footer className="footer">
+        {onOpenTracker ? <button type="button" className="icon-button" onClick={onOpenTracker}>Open application tracker</button> : null}
         {
           <button
             type="button"

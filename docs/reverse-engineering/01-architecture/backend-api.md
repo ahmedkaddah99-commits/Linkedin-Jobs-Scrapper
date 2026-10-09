@@ -615,6 +615,10 @@ The three deleted modules are absent at `58a96674` (intentionally; label REMOVED
 
 ## T49 implementation amendment (2026-09-23)
 
+### Assisted Apply workspace follow-up (2026-10-09)
+
+`assisted_apply_packages.register_routes` also registers `assisted_apply_workspace.py`. Its six extension-session POST actions under `/v1/assisted-apply/extension/workspace/` expose owned document listing/download, draft generation from server-side confirmed profile facts, reviewed DOCX/answer saving, and support-report receipts. Exact extension-origin/session authentication and Runr Pro checks are retained. `GET /v1/assisted-apply/support-reports` is a new admin-authenticated domain inbox, not a restored admin dashboard. It uses existing account metadata and object storage without a schema migration. See [workspace API and release notes](../../assisted-apply/workspace-api-2026-10-09.md) for contracts, verification, and the backend release dependency. Production deployment has not been performed by this local change.
+
 The Assisted Apply extension now has a dedicated approved profile-package route:
 
 - `POST /v1/assisted-apply/extension/profile-package` is registered as

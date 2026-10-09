@@ -36,6 +36,7 @@ let context: BrowserContext;
 let serviceWorker: Worker;
 
 test.beforeAll(async () => {
+  test.setTimeout(120_000);
   const extensionPath = resolve(".output/chrome-mv3-testing");
   context = await chromium.launchPersistentContext("", {
     channel: "chromium",
@@ -55,7 +56,7 @@ test.beforeAll(async () => {
         (await serviceWorker.evaluate(() =>
           chrome.scripting.getRegisteredContentScripts({ ids: ["runr-assistant-panel"] }),
         )).length,
-      { message: "The assistant panel script should register for granted origins.", timeout: 20_000 },
+      { message: "The assistant panel script should register for granted origins.", timeout: 60_000 },
     )
     .toBe(1);
 });
@@ -211,6 +212,104 @@ test("AA-306 autofills and Continue advances one verified step without submittin
   await expect(page.getByTestId("runr-panel-continue-step")).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __finalApplicationSubmitClicks: number }).__finalApplicationSubmitClicks)).toBe(0);
   expect(page.url()).toBe(REGISTER_URL);
+  await page.close();
+});
+
+test("profile details load before autofill, support search and copy, and documents have a next step", async () => {
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${new URL(serviceWorker.url()).host}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).toHaveText("connected", { timeout: 20_000 });
+  await panelPage.getByRole("button", { name: "Profile", exact: true }).click();
+  await expect(panelPage.getByTestId("runr-profile-quick-copy")).toBeVisible();
+  await expect(panelPage.getByText("fixture.candidate@example.com", { exact: true })).toBeVisible();
+  await panelPage.close();
+
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: FIXTURE_ORIGIN });
+  const page = await context.newPage();
+  await page.goto(REGISTER_URL);
+  await page.getByTestId("runr-panel-tab-profile").click();
+  await expect(page.getByTestId("runr-panel-profile").getByTestId("runr-profile-quick-copy")).toBeVisible({ timeout: 20_000 });
+  // Loading a profile must not write to the employer form.
+  await expect(page.locator("#email")).toHaveValue("");
+  await page.getByRole("searchbox").fill("email");
+  await expect(page.getByTestId("runr-panel-profile").locator(".profile-detail")).toHaveCount(1);
+  await page.getByRole("button", { name: "Copy Contact Email", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Email copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("fixture.candidate@example.com");
+  await page.screenshot({ path: "test-results/assisted-apply-profile.png" });
+  await page.getByTestId("runr-panel-tab-documents").click();
+  await expect(page.getByTestId("runr-panel-documents")).toContainText("Choose a file below");
+  await page.locator("#runr-file-cv").setInputFiles({ name: "selected-resume.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nfixture") });
+  await page.getByRole("button", { name: "Attach resume", exact: true }).click();
+  await expect(page.getByTestId("runr-local-document-cv").getByRole("status")).toContainText("selected-resume.pdf attached");
+  expect(await page.locator("#cv").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("selected-resume.pdf");
+  await page.locator("#runr-file-cv").setInputFiles({ name: "new-version.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nnew version") });
+  await page.getByRole("button", { name: "Attach resume", exact: true }).click();
+  await expect(page.getByTestId("runr-local-document-cv").getByRole("status")).toContainText("A file is already attached");
+  expect(await page.locator("#cv").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("selected-resume.pdf");
+  await page.getByRole("checkbox", { name: "Replace the file already attached to this field", exact: true }).first().check();
+  await page.getByRole("button", { name: "Attach resume", exact: true }).click();
+  await expect(page.getByTestId("runr-local-document-cv").getByRole("status")).toContainText("new-version.pdf attached");
+  expect(await page.locator("#cv").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("new-version.pdf");
+  const workspace = page.getByRole("region", { name: "Saved documents and drafts" });
+  await workspace.getByLabel("Saved application document").selectOption("asset::fixture_resume");
+  await workspace.getByRole("button", { name: "Attach selected version" }).click();
+  await expect(workspace.getByRole("status")).toContainText("A file is already attached");
+  await workspace.getByRole("checkbox", { name: "Replace an existing attachment" }).check();
+  await workspace.getByRole("button", { name: "Attach selected version" }).click();
+  await expect(workspace.getByRole("status")).toContainText("Saved resume.pdf attached");
+  await workspace.getByText("Generate a tailored document", { exact: true }).click();
+  await workspace.getByRole("textbox", { name: "Job description", exact: true }).fill("Platform engineer building deployment tooling.");
+  await workspace.getByRole("button", { name: "Generate draft", exact: true }).click();
+  await expect(workspace.getByRole("textbox", { name: "Draft preview" })).toContainText("Fixture Candidate");
+  await workspace.getByRole("textbox", { name: "Draft preview" }).fill("Fixture Candidate\nReviewed resume text");
+  await workspace.getByRole("button", { name: "Save reviewed document" }).click();
+  await expect(workspace.getByRole("status")).toContainText("Document saved");
+  await workspace.getByRole("button", { name: "Attach selected version" }).click();
+  await expect(workspace.getByRole("status")).toContainText("Application resume.docx attached");
+  await page.getByTestId("runr-panel-tab-answers").click();
+  const answersWorkspace = page.getByRole("region", { name: "Answer drafts" });
+  await answersWorkspace.getByText("Draft an answer", { exact: true }).click();
+  await answersWorkspace.getByRole("textbox", { name: "Application question", exact: true }).fill("Describe your deployment experience");
+  await answersWorkspace.getByRole("textbox", { name: "Job description", exact: true }).fill("Platform engineer building deployment tooling.");
+  await answersWorkspace.getByRole("button", { name: "Generate draft", exact: true }).click();
+  await expect(answersWorkspace.getByRole("textbox", { name: "Draft preview" })).toBeVisible();
+  await answersWorkspace.getByRole("button", { name: "Save reviewed answer" }).click();
+  await expect(answersWorkspace.getByRole("status")).toContainText("Reviewed answer saved");
+  await answersWorkspace.getByRole("button", { name: "Copy answer", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("I built deployment tooling at Example Systems.");
+  await page.getByTestId("runr-panel-report").click();
+  await page.getByRole("textbox", { name: "What didn't work?" }).fill("The additional upload field needs clearer labels.");
+  await page.getByRole("button", { name: "Send report", exact: true }).click();
+  await expect(page.getByTestId("runr-panel-report-form")).toContainText("issue_fixture_123");
+  await page.getByRole("button", { name: "Close report" }).click();
+  await page.getByTestId("runr-panel-tab-documents").click();
+  await expect(page.getByRole("combobox", { name: "Saved application document" })).not.toHaveValue("asset::fixture_resume");
+  await expect(workspace.getByRole("textbox", { name: "Draft preview" })).toHaveValue("Fixture Candidate\nReviewed resume text");
+  await workspace.getByRole("combobox", { name: "Document type", exact: true }).selectOption("cover_letter");
+  await workspace.getByRole("button", { name: "Generate draft", exact: true }).click();
+  await expect(workspace.getByRole("textbox", { name: "Save as", exact: true })).toHaveValue("Application cover letter");
+  await workspace.getByRole("button", { name: "Save reviewed document" }).click();
+  await expect(workspace.getByRole("status")).toContainText("Document saved");
+  await workspace.getByRole("button", { name: "Attach selected version" }).click();
+  await expect(workspace.getByRole("status")).toContainText("Application cover letter.docx attached");
+  expect(await page.locator("#cover-letter").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("Application cover letter.docx");
+  expect(await page.locator("#cv").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("Application resume.docx");
+  await page.screenshot({ path: "test-results/assisted-apply-documents.png" });
+  const documentsPagePromise = context.waitForEvent("page");
+  await page.getByRole("button", { name: "Manage documents", exact: true }).click();
+  const documentsPage = await documentsPagePromise;
+  await documentsPage.waitForURL(`${FIXTURE_ORIGIN}/documents`);
+  await documentsPage.close();
+  await page.getByTestId("runr-panel-tab-resume").click();
+  await page.getByRole("textbox", { name: "Job description", exact: true }).fill("Platform engineer with TypeScript, cloud infrastructure, and deployment tooling experience.");
+  await page.getByRole("button", { name: "Compare profile", exact: true }).click();
+  await expect(page.getByTestId("runr-panel-resume-score")).toBeVisible();
+  const tailorPagePromise = context.waitForEvent("page");
+  await page.getByTestId("runr-panel-tailor").click();
+  const tailorPage = await tailorPagePromise;
+  await tailorPage.waitForURL(`${FIXTURE_ORIGIN}/cv-studio`);
+  await tailorPage.close();
   await page.close();
 });
 

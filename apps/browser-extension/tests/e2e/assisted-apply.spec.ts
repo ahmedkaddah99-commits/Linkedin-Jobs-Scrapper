@@ -1096,6 +1096,7 @@ test("AA-09 review panel shows all sections, field evidence, and keyboard-access
 
   // Verify field rows show evidence data
   await expect(panelPage.getByText("ada@example.com")).toBeVisible();
+  await panelPage.locator(".evidence-row details").first().locator("summary").click();
   await expect(panelPage.getByText("profile verified", { exact: true }).first()).toBeVisible();
 
   // Verify document section shows document

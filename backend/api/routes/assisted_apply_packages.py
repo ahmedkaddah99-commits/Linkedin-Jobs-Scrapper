@@ -28,6 +28,8 @@ _OUTCOME_KEYS = {
 
 
 def register_routes(registry: RouteRegistry) -> None:
+    from backend.api.routes.assisted_apply_workspace import register_routes as register_workspace_routes
+    register_workspace_routes(registry)
     # Web (Clerk-authenticated)
     registry.exact(
         "POST",

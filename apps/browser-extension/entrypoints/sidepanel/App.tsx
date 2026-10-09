@@ -15,6 +15,12 @@ import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/ext
 import { browser } from "wxt/browser";
 import { buildReviewPanelModel, type ReviewFieldRow, type DocumentRow } from "../../src/review/panel-model";
 import { requestPortalPermissionFromUserGesture } from "../../src/permissions/host-permissions";
+import { toCandidateProfile } from "../../src/panel/profile-package";
+import ProfileQuickCopy from "../../src/panel/ProfileQuickCopy";
+import ApplicationWorkspace from "../../src/panel/ApplicationWorkspace";
+import type { CandidateProfile } from "@runr/ats-core/generic-planner";
+import { assistedApplyRuntimeConfig } from "../../src/auth/config";
+import type { ProfileDetail } from "../../src/panel/profile-details";
 
 async function send(message: PanelRequest) {
   const response: unknown = await browser.runtime.sendMessage(message);
@@ -84,6 +90,28 @@ export default function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingApplicationConfirmation | null>(null);
   const [trackerConfirmation, setTrackerConfirmation] = useState<TrackerConfirmationResult | null>(null);
   const [preparation, setPreparation] = useState<PreparationPanelState | null>(null);
+  const [profile, setProfile] = useState<CandidateProfile | null>(null);
+  const [profileError, setProfileError] = useState("");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<"application" | "profile" | "answers" | "documents">("application");
+  const [profileAnswers, setProfileAnswers] = useState<ProfileDetail[]>([]);
+  async function refreshProfile(): Promise<void> {
+    setProfileLoading(true);
+    setProfileError("");
+    try {
+      const response: unknown = await browser.runtime.sendMessage({ type: "ASSISTED_APPLY_PANEL_PROFILE" });
+      const next = isPanelResponse(response) && response.ok ? toCandidateProfile(response.profilePackage) : null;
+      setProfile(next);
+      setProfileAnswers(next && isPanelResponse(response) && response.profilePackage ? response.profilePackage.answers
+        .filter((answer) => Boolean(answer.proposed_value.trim()))
+        .map((answer) => ({ section: "Saved answer", label: answer.label, value: answer.proposed_value })) : []);
+      if (!next) setProfileError("Couldn't load your profile. Connect Runr, then try again.");
+    } catch { setProfile(null); setProfileAnswers([]); setProfileError("Couldn't load your profile. Try again."); }
+    finally { setProfileLoading(false); }
+  }
+  function openRunr(path: "/profile" | "/documents" | "/cv-studio" | "/tracker") {
+    void browser.tabs.create({ url: `${assistedApplyRuntimeConfig().frontendOrigin}${path}` });
+  }
   const reviewModel = useMemo(
     () => buildReviewPanelModel(applicationPackage, state, documentUpload),
     [applicationPackage, state, documentUpload],
@@ -111,6 +139,14 @@ export default function App() {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
   }, []);
+
+  async function connectRunr(): Promise<void> {
+    setConnectionBusy(true);
+    setConnectionError("");
+    try { setConnection(await requestConnection({ type: "CONNECT_RUNR" })); }
+    catch (nextError) { setConnectionError(nextError instanceof Error ? nextError.message : "Couldn't connect. Try again."); }
+    finally { setConnectionBusy(false); }
+  }
 
   useEffect(() => {
     void load(false);
@@ -141,6 +177,11 @@ export default function App() {
     const interval = window.setInterval(() => void loadPreparation(), 1000);
     return () => window.clearInterval(interval);
   }, [loadPreparation]);
+
+  useEffect(() => {
+    if (connection?.status === "connected") void refreshProfile();
+    else { setProfile(null); setProfileAnswers([]); }
+  }, [connection?.status]);
 
   useEffect(() => {
     const refresh = () => void requestPendingConfirmation().then(setPendingConfirmation).catch(() => undefined);
@@ -259,16 +300,16 @@ export default function App() {
         </div>
       </header>
 
-      <section className="boundary" aria-label="Submission boundary">
-        <strong>Autofill by design</strong>
-        <p>Runr fills approved fields and documents. You review the application and submit it yourself.</p>
+      <section className="boundary" aria-label="Application steps">
+        <strong>Your application workspace</strong>
+        <p>Fill your details, attach your documents, and review the remaining questions.</p>
       </section>
 
       {pendingConfirmation ? (
         <section className="connection-card" aria-label="Confirm application outcome" data-testid="application-confirmation">
-          <p className="eyebrow">Possible application success</p>
+          <p className="eyebrow">Application tracker</p>
           <h2>Did you submit this application?</h2>
-          <p>Runr observed a possible success signal after your action. Confirm before anything is added to Tracker.</p>
+          <p>Add this application to your tracker?</p>
           <div className="button-row">
             <button type="button" disabled={packageBusy} onClick={() => void respondToPossibleSuccess("confirmed")}>
               Yes, add to Tracker
@@ -293,7 +334,7 @@ export default function App() {
         <div className="status-heading">
           <div>
             <p className="eyebrow">Autofill status</p>
-            <h2>{connection?.status === "connected" ? "Ready" : "Preparing connection"}</h2>
+            <h2>{connection?.status === "connected" ? "Ready to apply" : connectionBusy ? "Connecting…" : "Connect your account"}</h2>
           </div>
           <span className={`status-chip connection-${connection?.status || "loading"}`} data-testid="connection-status">
             {connection?.status || "loading"}
@@ -301,24 +342,49 @@ export default function App() {
         </div>
         <p className="muted">
           {connection?.status === "connected"
-            ? "Runr is ready to prepare supported applications automatically."
-            : "Runr is preparing its secure account connection. Start an application from Runr to continue."}
+            ? "Your profile is connected. Open an application to get started."
+            : "Connect Runr to use your profile and application documents."}
         </p>
         {connectionError ? <p className="error" role="alert">{connectionError}</p> : null}
+        {connection?.status !== "connected" ? <button type="button" disabled={connectionBusy} onClick={() => void connectRunr()} data-testid="connect-runr">{connectionBusy ? "Connecting…" : "Connect Runr"}</button> : null}
       </section>
 
+      <nav className="workspace-nav" aria-label="Application tools">
+        <button type="button" className="secondary" aria-pressed={workspaceTab === "application"} onClick={() => setWorkspaceTab("application")}>Application</button>
+        <button type="button" className="secondary" aria-pressed={workspaceTab === "profile"} onClick={() => setWorkspaceTab("profile")}>Profile</button>
+        <button type="button" className="secondary" aria-pressed={workspaceTab === "answers"} onClick={() => setWorkspaceTab("answers")}>Answers</button>
+        <button type="button" className="secondary" aria-pressed={workspaceTab === "documents"} onClick={() => setWorkspaceTab("documents")}>Documents</button>
+        <button type="button" className="secondary" onClick={() => openRunr("/tracker")}>Tracker</button>
+      </nav>
+      {workspaceTab === "profile" ? <section className="connection-card" aria-label="Profile quick copy">
+        <h2>Your profile</h2><p className="muted">Copy individual details into any application, including forms without autofill.</p>
+        {profile ? <ProfileQuickCopy profile={profile} /> : <p className="muted" role="status">{profileLoading ? "Loading your profile…" : profileError || "Connect Runr to use your saved details."}</p>}
+        <div className="button-row"><button className="secondary" type="button" disabled={profileLoading} onClick={() => void refreshProfile()}>Refresh profile</button><button className="secondary" type="button" onClick={() => openRunr("/profile")}>Edit profile</button></div>
+      </section> : null}
+
+      {workspaceTab === "answers" ? <section className="connection-card" aria-label="Saved answers"><h2>Saved answers</h2><p className="muted">Copy an answer and adjust it for the question you're answering.</p>{profileLoading ? <p className="muted" role="status">Loading your answers…</p> : profile ? <ProfileQuickCopy answers details={profileAnswers} /> : <p className="muted">{profileError || "Connect your profile to see saved answers."}</p>}<button type="button" className="secondary" onClick={() => openRunr("/profile")}>Edit profile answers</button></section> : null}
+
+      <section className="connection-card" hidden={workspaceTab !== "documents"} aria-label="Document workspace">
+        <h2>Documents</h2><p className="muted">Create a document here, then attach it from Documents on your application page.</p>
+        <ApplicationWorkspace mode="documents" applicationUrl={applicationPackage?.job.url || "runr-sidepanel"} description="" />
+        <button type="button" className="secondary" onClick={() => openRunr("/documents")}>Manage documents</button>
+      </section>
+      <section className="connection-card" hidden={workspaceTab !== "answers"} aria-label="Answer drafting workspace">
+        <ApplicationWorkspace mode="answers" applicationUrl={applicationPackage?.job.url || "runr-sidepanel"} description="" />
+      </section>
+      <div className="application-workspace" hidden={workspaceTab !== "application"}>
       {connection?.status === "connected" && applicationPackage ? (
         <section className="package-card">
           <div className="status-heading">
             <div>
-              <p className="eyebrow">Application package</p>
+              <p className="eyebrow">Current application</p>
               <h2>{applicationPackage.job.title || "Untitled role"}</h2>
             </div>
             <span className="status-chip status-recognized">v{applicationPackage.version}</span>
           </div>
           <dl>
             <div><dt>Company</dt><dd data-testid="package-company">{applicationPackage.job.company || "Unknown"}</dd></div>
-            <div><dt>ATS</dt><dd data-testid="package-portal">{applicationPackage.job.portal || "Unknown"}</dd></div>
+            <div><dt>Application site</dt><dd data-testid="package-portal">{applicationPackage.job.portal || "Unknown"}</dd></div>
             <div><dt>Location</dt><dd>{applicationPackage.job.location || "Not specified"}</dd></div>
             <div><dt>Answers</dt><dd>{applicationPackage.answers.length} ready</dd></div>
             <div><dt>Documents</dt><dd>{applicationPackage.documents.length} available</dd></div>
@@ -329,13 +395,13 @@ export default function App() {
           {applicationPackage.job.portal === "greenhouse" || applicationPackage.job.portal === "lever" ? (
             <button type="button" data-testid="fill-package" disabled={packageBusy}
               onClick={() => void fillApplicationPackage()}>
-              {packageBusy ? "Filling and verifying���" : "Fill verified standard facts"}
+              {packageBusy ? "Filling your details…" : "Autofill application"}
             </button>
           ) : null}
         </section>
       ) : connection?.status === "connected" && !applicationPackage ? (
         <section className="package-card muted">
-          <p className="eyebrow">Application package</p>
+          <p className="eyebrow">Current application</p>
           <p>Launch a job from Runr to review and fill this application.</p>
         </section>
       ) : null}
@@ -360,7 +426,7 @@ export default function App() {
           </div>
           {!reviewModel.enabled ? (
             <p className="warning" role="status" data-testid="review-disabled">
-              This package does not match the active supported application tab. Review controls are disabled.
+              Open this application's form to review and fill its details.
             </p>
           ) : null}
           {(["ready", "review", "missing", "manual"] as const).map((section) => (
@@ -398,7 +464,7 @@ export default function App() {
               ) : <p className="muted">No fields in this section.</p>}
               {section === "manual" && reviewModel.manualControls.length ? (
                 <ul className="manual-controls">
-                  {reviewModel.manualControls.map((reason) => <li key={reason}>{reason.replaceAll("_", " ")}</li>)}
+                  <li>Complete the remaining questions on the application form.</li>
                 </ul>
               ) : null}
             </section>
@@ -437,7 +503,7 @@ export default function App() {
 
       {packageExecution ? (
         <section className="result-card" data-testid="package-execution-result">
-          <p className="eyebrow">Verified package results</p>
+          <p className="eyebrow">Autofill results</p>
           <h2>{packageExecution.executions.length} fields checked</h2>
           <ul>{packageExecution.executions.map((result, index) => (
             <li key={`${result.fieldLabel}-${index}`}>
@@ -486,7 +552,7 @@ export default function App() {
         ) : (
           <p className="muted">
             {state?.ats
-              ? "Portal recognized. Start preparation from Runr; filling and document verification run on the owned application tab."
+              ? "Application found. Open a job from Runr to fill your details and attach documents."
               : "Open a supported application page, then refresh this panel."}
           </p>
         )}
@@ -515,19 +581,12 @@ export default function App() {
 
       {state?.manualReasons.length ? (
         <section className="manual-card">
-          <p className="eyebrow">Manual-only controls observed</p>
-          <ul>
-            {state.manualReasons.map((reason) => (
-              <li key={reason}>{reason.replaceAll("_", " ")}</li>
-            ))}
-          </ul>
+          <p className="eyebrow">Remaining steps</p>
+          <p>Some questions need your input. Complete them on the application form.</p>
         </section>
       ) : null}
+      </div>
 
-      <footer>
-        No CAPTCHA solving, declarations, assessments, signatures, terms acceptance,
-        or final submission capability exists in this build.
-      </footer>
     </main>
   );
 }
@@ -551,15 +610,15 @@ function PreparationLifecycleCard({
     idle: "No preparation is active.",
     permission_required: "Grant access to the employer portal to continue.",
     queued: "The application page is opening and will be prepared automatically.",
-    preparing: "Runr is inspecting, reconciling, and verifying supported fields.",
+    preparing: "Filling your application details…",
     ready_for_review: "Preparation is complete. Review the filled application before submitting.",
-    review_activated: "The prepared tab is active for your review. No submission occurred.",
+    review_activated: "Your application is ready to review.",
     needs_attention: "Preparation stopped and needs your review.",
-    interrupted: "Preparation was interrupted because the owned tab closed, was discarded, or changed location.",
-    retry_required: "An explicit retry is required. Runr will revalidate the application before continuing.",
+    interrupted: "The application page changed or closed. Open it again to continue.",
+    retry_required: "Try preparing this application again.",
     auth_lost: "Runr authentication expired. Reconnect before retrying.",
-    expired: "This preparation expired. Use a current package before retrying.",
-    cancelled: "Preparation was cancelled. No application was submitted.",
+    expired: "Open this job from Runr again to prepare the application.",
+    cancelled: "Application preparation cancelled.",
   };
   const canRetry = ["needs_attention", "interrupted", "retry_required", "auth_lost", "expired"].includes(preparation.status);
   return (
@@ -624,13 +683,13 @@ function EvidenceRow({
         {row.proposedValue || <em className="empty-answer">No answer available</em>}
         {row.requiredAndEmpty ? <span className="required-badge">Required</span> : null}
       </p>
-      <dl className="field-evidence">
+      <details><summary className="muted">Answer details</summary><dl className="field-evidence">
         <div><dt>Source</dt><dd>{row.source.replaceAll("_", " ")}</dd></div>
         <div><dt>Scope</dt><dd>{row.scope.replaceAll("_", " ")}</dd></div>
         <div><dt>Confidence</dt><dd>{Math.round(row.confidence * 100)}%</dd></div>
         <div><dt>Review</dt><dd>{row.requiresReview ? "Required" : "Not required"}</dd></div>
-      </dl>
-      {row.reasons.length ? <p className="field-reason">{row.reasons.join(" ")}</p> : null}
+      </dl></details>
+      {row.reasons.length ? <p className="field-reason">{row.section === "manual" ? "Complete this question on the application form." : row.section === "missing" ? "Add this detail to your profile or enter it on the form." : "Check this answer for this application."}</p> : null}
       {row.section === "review" ? (
         <div className="field-actions" role="group" aria-label={`Review actions for ${row.label || row.fieldIntent}`}>
           <button

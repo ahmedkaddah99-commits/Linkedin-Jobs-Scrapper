@@ -4,6 +4,10 @@
 
 # Assisted Apply — extension-side subsystem
 
+## Frontend usability update (2026-10-09)
+
+The [frontend competitor matrix](../../assisted-apply/frontend-competitor-matrix-2026-10-09.md) compares documented Simplify and Jobright flows with the current UI. The panel loads profile details before autofill, offers searchable individual profile/answer copy actions, exposes application documents and local resume/cover-letter pickers, and links to Runr editing and tracking workspaces. Extension 0.3.1 adds a native saved-document selector, in-panel resume and cover-letter drafting with editable previews and reviewed DOCX saving, reusable reviewed answer drafts, and support-report receipts. Document attachment preserves an occupied field unless replacement is selected. Drafts survive in-page tab switches. The side panel includes document and answer workspaces independently of ATS recognition. Customer-facing safety boilerplate is removed; runtime boundaries remain enforced. The [workspace API/release notes](../../assisted-apply/workspace-api-2026-10-09.md) describe the new authenticated routes, storage, checks, and required backend release. Local implementation and fixture verification do not establish production deployment or universal live ATS support.
+
 **Scope note (audit N-11).** This document covers Assisted Apply **from the browser extension's point of view**: the WXT extension in `apps/browser-extension`, the shared packages `packages/ats-core` and `packages/extension-messages`, the never-submit boundary, supported ATS adapters, the connection and token handshake as the extension performs it, and host permissions.
 - Backend Assisted Apply **services** (connection service, package, preparation, document-grant, telemetry and tracker-confirmation services under `backend/application/`) are owned by WS-4 and described in [personalized-jobs-and-customer-app-services.md](personalized-jobs-and-customer-app-services.md).
 - Backend Assisted Apply **routes** (`backend/api/routes/assisted_apply*.py`) are owned by WS-1 and described in [backend-api.md](../01-architecture/backend-api.md).

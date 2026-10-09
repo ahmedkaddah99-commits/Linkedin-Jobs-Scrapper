@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
@@ -251,6 +251,30 @@ const server = createServer(async (request, response) => {
       if (!record) return;
       counters.sessionReads += 1;
       json(response, 200, { session: session(record), preferences: preferences(record) }, origin);
+      return;
+    }
+
+    if (url.pathname.startsWith("/assisted-apply/extension/workspace/") && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      const action = url.pathname.split("/").at(-1);
+      record.workspaceDocuments ??= [{ id: "asset::fixture_resume", name: "Saved resume.pdf", role: "cv" }];
+      record.workspaceAnswers ??= [];
+      if (action === "library") json(response, 200, { documents: record.workspaceDocuments, answers: record.workspaceAnswers }, origin);
+      else if (action === "document") {
+        const doc = record.workspaceDocuments.find((item) => item.id === payload.document_id);
+        if (!doc) { json(response, 404, { error: "Document not found." }, origin); return; }
+        json(response, 200, { id: doc.id, name: doc.name, base64: Buffer.from("%PDF-1.4\nfixture library document").toString("base64") }, origin);
+      } else if (action === "draft") json(response, 200, { text: payload.kind === "answer" ? "I built deployment tooling at Example Systems." : "Fixture Candidate\nPlatform Engineer\nBuilt deployment tooling at Example Systems." }, origin);
+      else if (action === "save-document") {
+        const doc = { id: `asset::${randomUUID()}`, name: `${payload.name}.docx`, role: payload.kind };
+        record.workspaceDocuments.push(doc); json(response, 200, { document: doc }, origin);
+      } else if (action === "save-answer") {
+        const answer = { question: payload.question, text: payload.text };
+        record.workspaceAnswers.push(answer); json(response, 200, { answer }, origin);
+      } else if (action === "report") json(response, 200, { receipt: "issue_fixture_123" }, origin);
+      else json(response, 400, { error: "Unknown action" }, origin);
       return;
     }
 

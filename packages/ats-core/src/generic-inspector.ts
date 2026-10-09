@@ -225,6 +225,8 @@ function collectRoots(document: Document): Array<Document | ShadowRoot> {
   while (queue.length) {
     const root = queue.shift()!;
     for (const element of Array.from(root.querySelectorAll("*"))) {
+      // The extension's search boxes and file pickers are not employer fields.
+      if (element.tagName.toLowerCase() === "runr-assisted-apply-panel") continue;
       const shadow = (element as HTMLElement).shadowRoot;
       if (shadow) {
         roots.push(shadow);

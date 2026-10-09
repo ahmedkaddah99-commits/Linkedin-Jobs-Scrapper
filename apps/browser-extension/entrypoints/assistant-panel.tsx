@@ -7,7 +7,10 @@ import {
   type ApplicationPageDetection,
 } from "@runr/ats-core/application-context";
 import { installSubmissionGuard } from "@runr/ats-core";
-import { isPanelResponse } from "@runr/extension-messages";
+import { isPanelResponse, type ApplicationPackagePayload } from "@runr/extension-messages";
+import { inspectApplicationForm, controlResolver } from "@runr/ats-core/generic-inspector";
+import { profileDetails, type ProfileDetail } from "../src/panel/profile-details";
+import { attachDocument, type DocumentRole } from "@runr/ats-core/generic-upload";
 import { browser } from "wxt/browser";
 import { defineUnlistedScript } from "wxt/utils/define-unlisted-script";
 import AssistantPanel from "../src/panel/AssistantPanel";
@@ -37,6 +40,7 @@ import {
 const HOST_TAG = "runr-assisted-apply-panel";
 const REEVALUATE_DEBOUNCE_MS = 250;
 const URL_POLL_MS = 500;
+function pageMargin(): string { return window.innerWidth <= 600 ? "0px" : `${PANEL_WIDTH_PX}px`; }
 
 interface PanelHandle {
   host: HTMLElement;
@@ -112,7 +116,7 @@ function ensureHost(): PanelHandle {
   // Reflow the page the way a browser side panel does, remembering the previous
   // inline value so unmounting leaves the page exactly as it was found.
   const previousMarginRight = document.documentElement.style.marginRight;
-  document.documentElement.style.marginRight = `${PANEL_WIDTH_PX}px`;
+  document.documentElement.style.marginRight = pageMargin();
 
   handle = { host, root: createRoot(container), previousMarginRight };
   return handle;
@@ -130,29 +134,89 @@ let navigationMessage = "";
 let candidateProfile: CandidateProfile | null = null;
 let resumeMatch: ResumeMatch | null = null;
 let completeness: ProfileCompleteness | null = null;
+let profileLoading = false;
+let profileError = "";
+let applicationPackage: ApplicationPackagePayload | null = null;
+let requestedProfileUrl = "";
+let profileRequest: Promise<boolean> | null = null;
+let savedAnswers: ProfileDetail[] = [];
+let manualJobDescription = "";
+
+function renderCurrent(): void {
+  if (!handle) return;
+  const url = window.location.href;
+  const detection = classifyApplicationPage({ document, url });
+  const job = extractApplicationJobContext({ document, url }, detection, new Date().toISOString());
+  resumeMatch = candidateProfile && job?.description ? computeResumeMatch(job.description, candidateProfile) : null;
+  render(detection, job);
+}
+
+function loadProfile(): Promise<boolean> {
+  if (profileRequest) return profileRequest;
+  profileLoading = true;
+  profileError = "";
+  renderCurrent();
+  profileRequest = (async () => {
+    try {
+      const response: unknown = await browser.runtime.sendMessage({ type: "ASSISTED_APPLY_PANEL_PROFILE" });
+      const profile = isPanelResponse(response) && response.ok ? toCandidateProfile(response.profilePackage) : null;
+      if (!profile) {
+        candidateProfile = null;
+        savedAnswers = [];
+        completeness = null;
+        resumeMatch = null;
+        profileError = isPanelResponse(response) && response.error === "not_connected"
+          ? "Connect Runr to use your saved details."
+          : "Couldn't load your profile. Try refreshing it.";
+        return false;
+      }
+      candidateProfile = profile;
+      savedAnswers = isPanelResponse(response) && response.profilePackage ? response.profilePackage.answers
+        .filter((answer) => Boolean(answer.proposed_value.trim()))
+        .map((answer) => ({ section: "Saved answer", label: answer.label, value: answer.proposed_value })) : [];
+      completeness = profileCompleteness(profile);
+      return true;
+    } catch {
+      candidateProfile = null;
+      savedAnswers = [];
+      completeness = null;
+      resumeMatch = null;
+      profileError = "Couldn't load your profile. Try refreshing it.";
+      return false;
+    } finally {
+      profileLoading = false;
+      profileRequest = null;
+      renderCurrent();
+    }
+  })();
+  return profileRequest;
+}
+
+async function loadApplicationPackage(): Promise<void> {
+  const url = window.location.href;
+  try {
+    const response: unknown = await browser.runtime.sendMessage({ type: "ASSISTED_APPLY_PANEL_PACKAGE" });
+    if (url !== window.location.href) return;
+    applicationPackage = isPanelResponse(response) && response.ok ? response.package ?? null : null;
+  } catch { applicationPackage = null; }
+  renderCurrent();
+}
 
 async function startAutofill(detection: ApplicationPageDetection, job: ApplicationJobContext | null): Promise<void> {
   if (busy || navigationBusy) return;
   busy = true;
+  const applicationUrl = window.location.href;
   runError = "";
   navigationMessage = "";
   render(detection, job);
 
   try {
-    const response: unknown = await browser.runtime.sendMessage({ type: "ASSISTED_APPLY_PANEL_PROFILE" });
-    if (!isPanelResponse(response) || !response.ok || !response.profilePackage) {
-      const detail = isPanelResponse(response) ? response.error : undefined;
-      runError = detail === "not_connected"
-        ? "Connect your Runr account to autofill this application."
-        // Surface what actually went wrong rather than one catch-all message.
-        : `Runr could not load your profile.${detail ? ` ${detail}` : ""}`;
+    if (!await loadProfile() || !candidateProfile) {
+      runError = profileError;
       return;
     }
-    const profile = toCandidateProfile(response.profilePackage);
-    if (!profile) {
-      runError = "Runr could not read your profile.";
-      return;
-    }
+    const profile = candidateProfile;
+    if (window.location.href !== applicationUrl) { runError = "The application page changed. Autofill this page again."; return; }
     candidateProfile = profile;
     completeness = profileCompleteness(profile);
     // Scoring needs the posting text; application steps rarely carry it, so the
@@ -198,7 +262,7 @@ async function continueToNextStep(detection: ApplicationPageDetection, job: Appl
     } else if (result.status === "unverified") {
       navigationMessage = `Continue was activated, but Runr could not verify ${result.nextStepLabel}. Review the page and continue manually.`;
     } else {
-      navigationMessage = result.reason || "Runr could not safely verify the next step. Continue manually.";
+      navigationMessage = "Review this page, then continue on the application form.";
     }
   } catch {
     navigationMessage = "Runr could not verify the next step. Review the page and continue manually.";
@@ -216,28 +280,20 @@ async function continueToNextStep(detection: ApplicationPageDetection, job: Appl
  */
 async function copyProfileToClipboard(): Promise<void> {
   if (!candidateProfile) return;
-  const { contact, locations } = candidateProfile;
-  const lines = [
-    ["Name", [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.fullName],
-    ["Email", contact.email],
-    ["Phone", contact.phone],
-    ["City", locations.city],
-    ["Country", locations.residenceCountry],
-    ["Postal code", locations.postalCode],
-    ["Current title", candidateProfile.preferences.currentTitle],
-  ]
-    .filter(([, value]) => Boolean(value))
-    .map(([label, value]) => `${label}: ${value}`);
+  const lines = profileDetails(candidateProfile).map((row) => `${row.section} · ${row.label}: ${row.value}`);
   try {
     await navigator.clipboard.writeText(lines.join("\n"));
   } catch {
-    // Clipboard access can be denied; the panel simply does nothing.
+    runError = "Couldn't copy your profile. Copy individual details from the Profile tab.";
+    renderCurrent();
   }
 }
 
 function render(detection: ApplicationPageDetection, job: ApplicationJobContext | null): void {
   const current = ensureHost();
   const origin = window.location.origin;
+  const description = job?.description || manualJobDescription;
+  resumeMatch = candidateProfile && description ? computeResumeMatch(description, candidateProfile) : null;
   current.root.render(
     createElement(AssistantPanel, {
       detection,
@@ -251,13 +307,46 @@ function render(detection: ApplicationPageDetection, job: ApplicationJobContext 
       navigationMessage: navigationMessage || undefined,
       resumeMatch,
       completeness,
+      profile: candidateProfile,
+      profileLoading,
+      profileError,
+      applicationPackage,
+      savedAnswers,
+      onScoreDescription: (description: string) => { manualJobDescription = description.slice(0, 50000).trim(); renderCurrent(); },
+      onAttachLocalDocument: async (role: DocumentRole, file: File, replace: boolean) => {
+        if (file.size > 20 * 1024 * 1024) return "Choose a file smaller than 20 MB.";
+        if (!/\.(pdf|docx)$/iu.test(file.name)) return "Choose a PDF or Word (.docx) file.";
+        const applicationUrl = window.location.href;
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (window.location.href !== applicationUrl) return "The application page changed. Choose the file again on this page.";
+        const inspection = inspectApplicationForm({ document, url: window.location.href });
+        const outcome = attachDocument(document, inspection, { role, fileName: file.name,
+          mimeType: file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"), bytes }, { preserveExisting: !replace });
+        if (outcome.status === "uploaded") return `${file.name} attached. Check the upload on the application form.`;
+        if (outcome.status === "preserved_existing") return "A file is already attached. Select Replace to use this version.";
+        if (outcome.status === "ambiguous") return "More than one upload field matches. Choose the field on the application form.";
+        return "Couldn't attach this file here. Upload it on the application form.";
+      },
+      onRefreshProfile: () => { void loadProfile(); void loadApplicationPackage(); },
+      onOpenDocuments: () => notify("ASSISTED_APPLY_PANEL_DOCUMENTS"),
+      onEditProfile: () => notify("ASSISTED_APPLY_PANEL_EDIT_PROFILE"),
+      onOpenTracker: () => notify("ASSISTED_APPLY_PANEL_TRACKER"),
+      onReviewDocuments: () => notify("ASSISTED_APPLY_PANEL_OPEN_SETTINGS"),
+      onFocusField: (fieldId: string) => {
+        const inspection = inspectApplicationForm({ document, url: window.location.href });
+        const element = controlResolver(document, inspection)(fieldId);
+        if (element instanceof HTMLElement) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+          element.focus({ preventScroll: true });
+        } else { runError = "This field has changed. Autofill again to refresh the review list."; renderCurrent(); }
+      },
       onTailorResume: () => notify("ASSISTED_APPLY_PANEL_TAILOR_RESUME"),
       onCopyProfile: () => void copyProfileToClipboard(),
       onCollapsedChange: (value: boolean) => {
         collapsed = value;
         document.documentElement.style.marginRight = value
           ? current.previousMarginRight
-          : `${PANEL_WIDTH_PX}px`;
+          : pageMargin();
         writeCollapsed(origin, value);
         render(detection, job);
       },
@@ -308,7 +397,17 @@ function evaluate(): void {
     return;
   }
   if (!decision.mount) return;
-  render(detection, extractApplicationJobContext({ document, url }, detection, new Date().toISOString()));
+  if (requestedProfileUrl !== url) {
+    requestedProfileUrl = url;
+    manualJobDescription = "";
+    applicationPackage = null;
+    runState = null;
+    runError = "";
+    navigationMessage = "";
+    render(detection, extractApplicationJobContext({ document, url }, detection, new Date().toISOString()));
+    void loadProfile();
+    void loadApplicationPackage();
+  } else render(detection, extractApplicationJobContext({ document, url }, detection, new Date().toISOString()));
 }
 
 declare global {
@@ -333,6 +432,12 @@ export default defineUnlistedScript(async () => {
   collapsed = initial.collapsed;
 
   evaluate();
+  window.addEventListener("focus", () => {
+    if (handle && !busy) { void loadProfile(); void loadApplicationPackage(); }
+  });
+  window.addEventListener("resize", () => {
+    if (handle && !collapsed) document.documentElement.style.marginRight = pageMargin();
+  });
 
   // Application forms render late, grow as repeater rows are added, and move
   // between steps without a full navigation. Re-evaluate on all three.

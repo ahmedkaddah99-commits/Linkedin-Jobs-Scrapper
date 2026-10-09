@@ -1107,7 +1107,7 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(async (
     message: unknown,
     sender,
-  ): Promise<PanelResponse | PanelBootstrapResponse | undefined> => {
+  ): Promise<PanelResponse | PanelBootstrapResponse | { ok: true; result: unknown } | undefined> => {
     if (message && typeof message === "object" &&
         (message as { type?: unknown }).type === "ASSISTED_APPLY_CONTENT_READY") {
       const tabId = sender.tab?.id;
@@ -1148,9 +1148,26 @@ export default defineBackground(() => {
       return { ok: true };
     }
     if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_WORKSPACE") {
+      const isPanel = isExactSidePanelSender(sender, browser.runtime.id, browser.runtime.getURL("/sidepanel.html"));
+      if (!isPanel && (sender.id !== browser.runtime.id || sender.tab?.id == null || sender.frameId !== 0)) return undefined;
+      const request = message as { action?: unknown; payload?: unknown };
+      if (typeof request.action !== "string" || !["library", "document", "draft", "save-document", "save-answer", "report"].includes(request.action)) return { ok: false, error: "Unknown workspace action." };
+      if (!request.payload || typeof request.payload !== "object" || Array.isArray(request.payload) || JSON.stringify(request.payload).length > 90000) return { ok: false, error: "Check the request and try again." };
+      try {
+        const token = await currentSessionToken();
+        const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+        const result = await api.request(`/assisted-apply/extension/workspace/${request.action}`, "POST", request.payload, token);
+        return { ok: true, result };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : "Couldn't complete this action. Try again." };
+      }
+    }
+    if (message && typeof message === "object" &&
         (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_PROFILE") {
       const tabId = sender.tab?.id;
-      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const isPanel = isExactSidePanelSender(sender, browser.runtime.id, browser.runtime.getURL("/sidepanel.html"));
+      if (!isPanel && (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0)) return undefined;
       let token: string;
       try {
         token = await currentSessionToken();
@@ -1165,6 +1182,28 @@ export default defineBackground(() => {
       } catch {
         return { ok: false, error: "profile_unavailable" };
       }
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_PANEL_PACKAGE") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const applicationPackage = await readTabPackage(tabId);
+      // A package belongs to an exact application URL, not every page in the tab.
+      if (!applicationPackage || !sender.url || !preparedApplicationUrlMatches(applicationPackage.job.url, sender.url)) return { ok: true };
+      return { ok: true, package: applicationPackage };
+    }
+    if (message && typeof message === "object" &&
+        ["ASSISTED_APPLY_PANEL_TAILOR_RESUME", "ASSISTED_APPLY_PANEL_DOCUMENTS", "ASSISTED_APPLY_PANEL_EDIT_PROFILE", "ASSISTED_APPLY_PANEL_TRACKER"]
+          .includes(String((message as { type?: unknown }).type))) {
+      if (sender.id !== browser.runtime.id || sender.tab?.id == null || sender.frameId !== 0) return undefined;
+      const paths: Record<string, string> = {
+        ASSISTED_APPLY_PANEL_TAILOR_RESUME: "/cv-studio",
+        ASSISTED_APPLY_PANEL_DOCUMENTS: "/documents",
+        ASSISTED_APPLY_PANEL_EDIT_PROFILE: "/profile",
+        ASSISTED_APPLY_PANEL_TRACKER: "/tracker",
+      };
+      await browser.tabs.create({ url: `${runtimeConfig.frontendOrigin}${paths[String((message as { type?: unknown }).type)]}` });
+      return { ok: true };
     }
     if (message && typeof message === "object" &&
         (message as { type?: unknown }).type === "ASSISTED_APPLY_PAGE_DETECTED") {

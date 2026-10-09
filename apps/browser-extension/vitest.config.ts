@@ -30,7 +30,7 @@ export default defineConfig(async () => {
     plugins,
     test: {
       environment: "jsdom",
-      include: ["tests/unit/**/*.test.ts"],
+      include: ["tests/unit/**/*.test.{ts,tsx}"],
       restoreMocks: true,
       testTimeout: 30_000,
     },

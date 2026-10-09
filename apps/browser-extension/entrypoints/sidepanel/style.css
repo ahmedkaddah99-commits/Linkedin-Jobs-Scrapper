@@ -7,6 +7,24 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
+.workspace-nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-nav button[aria-pressed="true"] { background: #e2f3ec; border-color: #1f9d8f; }
+.application-workspace { display: grid; gap: 14px; }
+.application-workspace[hidden] { display: none; }
+.profile-search { display: block; width: 100%; padding: 9px; margin: 8px 0 12px; border: 1px solid #d8e0d8; border-radius: 8px; font: inherit; }
+.profile-details { list-style: none; padding: 0; }
+.profile-detail { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 9px 0; border-bottom: 1px solid #e3e6ea; }
+.profile-detail > span { min-width: 0; flex: 1; }
+.profile-detail .icon-button { width: auto; padding: 5px 9px; }
+.profile-value { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; user-select: text; }
+.job-meta { color: #58635b; font-size: 12px; }
+.profile-search:focus-visible { outline: 2px solid #1f9d8f; outline-offset: 1px; }
+label.section-title { display: block; }
+.workspace-tools { margin: 14px 0; padding: 12px 0; border-top: 1px solid #d8e0d8; }
+.workspace-tools .primary { margin: 8px 0; }
+.workspace-tools details { margin-top: 14px; }
+.workspace-tools textarea { resize: vertical; }
+.workspace-tools .profile-search { font-weight: 400; }
 button { font: inherit; }
 
 .panel-shell {
