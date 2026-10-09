@@ -12,9 +12,10 @@ def publish_pending(store, *, batch_size, policy_version):
     from backend.repositories.sqlite_acquisition import _publication_payload_sql, _insert_publication_jobs_batched
 
     started=time.monotonic()
+    recording=False
     def trace(stage):
         if os.getenv('RUNR_PUBLICATION_RECOVERY_TRACE')=='1':
-            print(json.dumps({'event':'publication_recovery_phase','phase':stage,
+            print(json.dumps({'event':'publication_recovery_phase','phase':('record_'+stage if recording else stage),
                 'elapsed_seconds':round(time.monotonic()-started,3)}),flush=True)
     trace('prepare_start')
     policy = get_publication_policy(policy_version)
@@ -151,7 +152,11 @@ def publish_pending(store, *, batch_size, policy_version):
                     return Result({'jobs':len(candidates)})
                 statements.append((sql,parameters))
                 return Result(None)
+        recording=True
         outcome=commit(Recorder())
+        recording=False
+        trace('http_atomic_write_start')
         execute_atomic_batch(statements)
+        trace('http_atomic_write_committed')
         return outcome
     return store._run_transaction(commit)
