@@ -78,6 +78,7 @@ subsystems:
       - backend/application/company_registry_reconciliation.py
       - backend/application/company_operations.py
       - backend/application/source_eligibility_manifest.py
+      - backend/application/employer_acquisition_policy.py
       - backend/application/expansion_wave_manifest.py
       - backend/application/duplicate_decisions.py
       - backend/repositories/sqlite_acquisition.py
@@ -93,6 +94,12 @@ subsystems:
       - scripts/build_master_jobs_catalog.py
       - scripts/reduce_catalog_storage.py
       - scripts/maintain_catalog_storage.py
+      - scripts/snapshot_title_collar_audit.py
+      - scripts/audit_title_collars.py
+      - scripts/enrich_title_occupations.py
+      - scripts/classify_unresolved_title_nemo.py
+      - scripts/recheck_blue_employer_samples.py
+      - scripts/title_occupation_dictionary.json
       - backend/acquisition/producer_adapters.py
     documentation:
       - docs/reverse-engineering/05-subsystems/acquisition-and-collectors.md
@@ -104,11 +111,13 @@ subsystems:
     verification_commands:
       - .venv\Scripts\python.exe -m pytest -q tests/test_producer_state_delivery.py tests/test_job_publication_completeness.py tests/test_job_source_merging.py
       - node scripts/run-python.cjs -m pytest -q tests/test_company_identity_canonicalization.py
+      - .venv\Scripts\python.exe -m pytest -q tests/test_title_collar_audit.py
     key_invariants:
       - No NET-OPS script runs against a live provider outside an authorized host or without --dry-run/--help in review.
       - RUNR_ACQUISITION_LIVE_NETWORK_ENABLED is never set true in tests.
       - Catalog source evidence must be written and verified in shared private object storage before hot JSON is compacted; explicit replay restores evidence, feed readers do not.
       - CompanyEnrich autocomplete is a distinct free, bounded, fail-closed domain-seed path; it never calls paid enrichment and never creates a career URL.
+      - Title-only collar audits call no model, record explicit owner overrides and original match evidence, and never mutate publication, producer or employer eligibility state.
       - Employer collection unions every independent validated career source (distinct host or ATS tenant) within the target/request budget; every discovered source persists in coverage.source_inventory with per-source counts and an explicit deferral reason.
       - Migrations, deploy/**, and admin acquisition surfaces are never edited or restored from this subsystem.
 
@@ -134,6 +143,9 @@ subsystems:
       - backend/repositories/document_payloads.py
       - scripts/classify_published_catalog.py
       - backend/domain/job_function_taxonomy.json
+      - backend/domain/job_filter_choices.json
+      - backend/domain/job_filter_countries.json
+      - backend/domain/job_filter_contract.py
     exclusions:
       - backend/application/{acquisition_scheduler,company_*,source_eligibility_manifest,expansion_wave_manifest,duplicate_decisions}.py  # WS-3
     entry_points:
@@ -145,6 +157,8 @@ subsystems:
     dependencies: [data-domain-model, integrations-security, acquisition]
     verification_commands:
       - .venv\Scripts\python.exe -m pytest -q tests/test_backend_application.py tests/test_career_profile_evidence.py tests/test_master_cv.py
+      - .venv\Scripts\python.exe -m pytest -q tests/test_jobs_company_search_and_saved_filters.py
+      - .venv\Scripts\python.exe -m pytest -q tests/test_job_filter_reference_contract.py tests/test_job_filter_source_cache.py tests/test_jobs_feed_performance.py
     key_invariants:
       - No re-registration of /dashboard or analytics/events (retired).
       - No live Gemini/DeepSeek/ScrapeOps calls in tests.
@@ -264,6 +278,7 @@ subsystems:
     verification_commands:
       - npm --prefix frontend run test
       - npm --prefix frontend run check
+      - npm --prefix frontend exec -- playwright test e2e/jobs-reference-filters.spec.ts
     key_invariants:
       - No restoring admin routes/pages (retired).
       - The Profile page has no profile preview or print action.

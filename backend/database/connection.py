@@ -72,6 +72,7 @@ _TRANSIENT_ERROR_MARKERS = (
     ("connection reset", "network"),
     ("connection refused", "network"),
     ("connection aborted", "network"),
+    ("connection closed before message completed", "network"),
     ("broken pipe", "network"),
     ("network", "network"),
     ("transport", "network"),

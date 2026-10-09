@@ -17,6 +17,7 @@ Start with [reverse-engineering/00-overview.md](reverse-engineering/00-overview.
 | Work on the customer web frontend | [reverse-engineering/01-architecture/frontend-app.md](reverse-engineering/01-architecture/frontend-app.md) |
 | Work on the browser extension or shared TS packages | [reverse-engineering/01-architecture/apps-and-extensions.md](reverse-engineering/01-architecture/apps-and-extensions.md), [shared-packages.md](reverse-engineering/01-architecture/shared-packages.md) |
 | Work on Render deploy config | [reverse-engineering/02-deployment/render.md](reverse-engineering/02-deployment/render.md) |
+| Plan migration from Render to Contabo | [reverse-engineering/02-deployment/render-to-contabo-migration-report.md](reverse-engineering/02-deployment/render-to-contabo-migration-report.md) |
 | Work on the VPS / systemd acquisition timers | [reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md](reverse-engineering/02-deployment/vps-runtime-and-acquisition-timers.md) |
 | Operate VPS Grafana Alloy observability | [reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md](reverse-engineering/02-deployment/grafana-cloud-vps-alloy-observability.md) |
 | Check scraper outcomes or change VPS execution | [reverse-engineering/02-deployment/vps-acquisition-operating-policy.md](reverse-engineering/02-deployment/vps-acquisition-operating-policy.md) — owner instruction, timer guard, agent JSON access, shared catalog binding |

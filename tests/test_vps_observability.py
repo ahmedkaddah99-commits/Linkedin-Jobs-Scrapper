@@ -50,6 +50,19 @@ def test_publisher_degraded_and_no_change_are_distinct_from_failure():
     assert observe.summarize([{"status": "completed", "run_outcome": "PARTIAL"}])[1] == "partial"
 
 
+def test_capped_publisher_is_partial_and_failed_stop_is_failed():
+    assert observe.summarize([{'status':'stopped','stop_reason':'max_companies'}])[1]=='partial'
+    assert observe.summarize([{'status':'stopped','stop_reason':'max_failures'}])[1]=='failed'
+
+
+def test_backlog_metrics_report_actual_pending_work():
+    data={'timestamp':'2026-10-09T01:00:00Z','paused':False,'sources':{},
+          'catalog':{'access_ok':True,'publication_queue':{'pending':12,'rejected':3,'last_evaluated_at':'2026-10-09T00:50:00Z'}}}
+    text=observe.prometheus(data)
+    assert 'runr_publication_pending_jobs 12' in text
+    assert 'runr_publication_rejected_jobs 3' in text
+
+
 def test_running_progress_cannot_be_taken_from_an_earlier_run(tmp_path, monkeypatch):
     receipts(tmp_path)
     def states(unit):

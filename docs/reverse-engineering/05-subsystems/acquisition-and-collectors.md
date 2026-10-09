@@ -2,6 +2,66 @@
 
 # Acquisition and collectors (WS-3 primary)
 
+## Deterministic title-only collar audit (2026-10-08)
+
+`scripts/snapshot_title_collar_audit.py` captures title-only records from the
+Turso catalog (including unpublished canonical jobs and ingest staging) and
+the active VPS employer/LinkedIn producer databases. The producer helper,
+`scripts/export_title_audit_producers.py`, runs through SSH stdin with read-only
+SQLite connections; it also captures latest search-only cards, employer
+checkpoints, coverage receipts and the current eligibility manifest. Each
+source's read window and resolved database path are recorded. No model is
+called and no acquisition, publication or visibility state is changed.
+
+`scripts/audit_title_collars.py` evaluates German/English occupational title
+rules and preserves matched terms and rule versions. The owner's annotation 1
+overrides Aushilfe, German/English service technicians, placeholder headings
+and conflicting white/blue matches to blue; the reason and original evidence
+remain explicit. Other unmatched or ambiguous titles remain unresolved. It merges only exact recorded
+identities/URLs within the same employer; title similarity is never identity
+evidence. Employer review candidates use explicitly active jobs and retain
+scan completeness as a separate fact. Outputs and reproducible rules are in
+`data/audit/title_collar_2026-10-08/`; focused checks are in
+`tests/test_title_collar_audit.py`. The revised run is in
+`data/audit/title_collar_2026-10-08/annotation_1/`, preserving the baseline
+snapshot and report. It includes `unresolved_title_blockers.csv`, which names
+the remaining missing occupation rules, generic work relationships and policy
+boundaries. Placeholder policy exclusions stay blue in the job audit, but are
+counted separately and excluded from employer occupational percentages because
+headings do not establish an employer's job mix. This is an operator audit, not a publication
+gate or automatic employer exclusion policy.
+
+The web-enriched rerun in `data/audit/title_collar_2026-10-08/web_enriched/`
+adds official German/English ESCO occupation labels and O*NET 31.0 job-title
+aliases. `scripts/enrich_title_occupations.py` saves raw source responses and
+builds `scripts/title_occupation_dictionary.json` with source codes and hashes.
+Category mappings are Runr policy, not labels supplied by those sources.
+Explicit rules take precedence; dictionary matching uses whole normalized
+word phrases only when explicit rules have no evidence. Nested aliases use
+the longest phrase; contradictory dictionary aliases remain unresolved.
+Opticians, building service technicians and tire replacement follow the
+owner's explicit blue policy. The rerun reuses the original snapshots and
+does not establish whether a vacancy is still open.
+
+`scripts/classify_unresolved_title_nemo.py` is an explicitly authorized paid
+OpenRouter operator audit using `mistralai/mistral-nemo` on remaining unique
+titles only. Local resumable responses, reasons, usage and combined exports
+are in `data/audit/title_collar_2026-10-08/nemo_resolved/`. It adds
+`not_a_job` and `insufficient_role_information` without treating either as
+blue collar. Model evidence may be paraphrased and is marked separately from
+the original title. Failed API/schema results remain unresolved pending retry.
+It never updates production classification, visibility or employer eligibility.
+
+`scripts/recheck_blue_employer_samples.py` performs the user's local Webshare-only
+sample recheck of >60% blue employers with 1–19 white/blue jobs. It requests
+up to ten additional URL-identified jobs per employer, excludes known job URLs,
+uses exact company identities, and saves every request outcome locally under
+`data/audit/blue_employer_recheck_2026-10-09/`. A minimum of three additional
+white/blue jobs is required for a conclusion; missing sources, too few jobs,
+blocked responses and model failures remain inconclusive. It reuses Nemo title
+decisions and classifies new titles with Nemo. Prior placeholder-blue baseline
+counts remain an explicit limitation. No production or VPS mutation occurs.
+
 ## Compact durable job payloads (2026-10-08)
 
 The catalog storage release additionally archives original source and normalization
@@ -431,6 +491,16 @@ Never run the manifested runners without `--dry-run` outside an authorized host.
 | CLOSED (T56, 2026-09-21) | First-success source selection in `collect_company` (early `break` after the first complete snapshot; only skipped ATS tenants recorded). Replaced by bounded source union with a durable `coverage.source_inventory`; see §5.2 and §6.3. |
 
 ## Agent context and remaining work
+
+Owner-approved employer exclusions are loaded by
+`backend/application/employer_acquisition_policy.py` from
+`RUNR_EMPLOYER_EXCLUSION_POLICY` (default `/etc/runr/employer-exclusions.json`).
+Both manifested collectors filter validated tasks through this policy, so a
+manifest refresh cannot re-enable an excluded employer. Explicitly configured
+missing or invalid policy files fail closed. The publisher also checks the
+resolved company identity after its crosswalk. Preserve this persistent policy
+file and these hooks when promoting a new VPS release. The October 9 cleanup
+scope and evidence live in `data/audit/blue_employer_cleanup_2026-10-09/`.
 
 **(a) Agent context packet — acquisition & collectors**
 - Required reading: this doc; [publication-and-catalog.md](publication-and-catalog.md); [../03-data/acquisition-source-state.md](../03-data/acquisition-source-state.md); `backend/acquisition/producer_adapters.py`; `backend/application/source_eligibility_manifest.py`; `scripts/run_manifested_linkedin.py`; `scripts/run_manifested_employer.py`; `deploy/run-acquisition-source.sh` (read-only, WS-7).

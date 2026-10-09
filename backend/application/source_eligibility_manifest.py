@@ -945,6 +945,8 @@ def validate_manifest_for_source(
     }
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
+    from backend.application.employer_acquisition_policy import excluded_company_ids
+    excluded = excluded_company_ids()
     for item in tasks:
         if not isinstance(item, Mapping) or item.get("source") != source:
             continue
@@ -963,6 +965,8 @@ def validate_manifest_for_source(
         if source == SOURCE_LINKEDIN and not task.get("organization_associations"):
             raise ValueError(f"LinkedIn task {task_key} has no reviewed organization association")
         seen.add(task_key)
+        if canonical_id in excluded:
+            continue
         selected.append(task)
     return selected
 

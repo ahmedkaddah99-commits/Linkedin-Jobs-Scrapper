@@ -189,3 +189,22 @@ drop-in with a `.disabled` suffix and reload systemd. Record that publication is
 now local staging. Do not delete either database. Use rollback for an explained
 failure, not silent end-of-session cleanup; enabled timers and intended binding
 are the normal state.
+
+### Owner employer exclusions (2026-10-09)
+
+Preserve `/etc/runr/employer-exclusions.json` across deployments. This policy
+contains the corrected 555 employer IDs approved for exclusion using
+blue/(blue+white)>60%, excluding placeholder titles. Collectors and both
+publication paths read it; manifest refreshes do not override it.
+`zzzz-owner-employer-exclusions.conf` selects the isolated policy overlays for
+LinkedIn, employer, publisher, and catalog-publication services. Systemd sorts
+drop-in names lexically: a `100-` filename precedes `99-` and does not override it.
+Before promoting another release, include the shared policy module, manifest
+filter, publisher crosswalk check, and publication gate in that release. Then
+update this final override to its new path (or remove the path override once the
+normal release override contains those hooks). Verify effective WorkingDirectory
+and ExecStart, policy hashes, and all active/enabled timers after reloading.
+Operation receipts and backups: `/srv/runr/ops/blue-employer-cleanup-2026-10-09/`;
+local audit: `data/audit/blue_employer_cleanup_2026-10-09/`. Consult that operation's
+report for the actual catalog deletion outcome; policy deployment alone is not
+proof that existing published jobs were removed.

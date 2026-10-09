@@ -809,6 +809,8 @@ def _manifest_companies(
     pilot_only: bool,
     crosswalk: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, object]]:
+    from backend.application.employer_acquisition_policy import excluded_company_ids
+    excluded = excluded_company_ids()
     tasks = validate_manifest_for_source(manifest, source, pilot_only=pilot_only)
     rows = [item for item in (manifest.get("rows") or []) if isinstance(item, Mapping)]
     representatives: dict[str, Mapping[str, object]] = {}
@@ -838,6 +840,8 @@ def _manifest_companies(
         if source == SOURCE_LINKEDIN and linkedin_company_ids:
             identity_payload["linkedin_company_id"] = linkedin_company_ids[0]
         company_id = _text(resolve_company_identity(identity_payload, crosswalk or {})) or original_company_id
+        if company_id in excluded:
+            continue
         by_id[company_id] = {
             "canonical_company_id": company_id,
             "canonical_company_name": _text(representative.get("company_name")) or company_id,
@@ -1122,22 +1126,29 @@ def _bulk_complete_empty_tasks(
         return
 
     def write(connection) -> None:
-        connection.executemany(
-            """
+        for offset in range(0,len(parameters),100):
+            batch=parameters[offset:offset+100]
+            values=','.join('(?,?,?,?,?,?,?)' for _ in batch)
+            connection.execute(
+            f"""
+            WITH inputs(status,completed_at,valid_snapshot,credible_evidence,metadata,updated_at,task_id)
+            AS (VALUES {values})
             UPDATE acquisition_tasks
-            SET status=?, completed_at=?, complete_snapshot=1,
-                valid_snapshot=?, credible_evidence=?,
+            SET status=(SELECT status FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id),
+                completed_at=(SELECT completed_at FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id), complete_snapshot=1,
+                valid_snapshot=(SELECT valid_snapshot FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id),
+                credible_evidence=(SELECT credible_evidence FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id),
                 requests_avoided=0, credits_avoided=0,
                 jobs_observed=0, jobs_new=0, jobs_updated=0,
                 jobs_unchanged=0, jobs_closed=0, jobs_rejected=0,
-                jobs_duplicates=0, reconciliation_json='{}',
-                quality_warnings_json='[]', collection_metadata_json=?,
+                jobs_duplicates=0, reconciliation_json='{{}}',
+                quality_warnings_json='[]', collection_metadata_json=(SELECT metadata FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id),
                 error_code='', error_message='', last_error_code='',
                 last_error_message='', lease_owner='', lease_token='',
-                lease_expires_at='', updated_at=?
-            WHERE task_id=?
+                lease_expires_at='', updated_at=(SELECT updated_at FROM inputs WHERE inputs.task_id=acquisition_tasks.task_id)
+            WHERE task_id IN (SELECT task_id FROM inputs)
             """,
-            parameters,
+            tuple(value for row in batch for value in row),
         )
 
     store._run_transaction(write)
@@ -1757,8 +1768,8 @@ def run_delivery(
     marker = "|".join(
         [
             _text(manifest.get("manifest_hash")),
-            linkedin_marker,
-            employer_marker,
+            # Collector round IDs change independently of this durable source
+            # window. They must not abandon a capped/failed cycle on retry.
             str(linkedin_checkpoint.get("source_rowid") or 0),
             str(employer_checkpoint.get("source_rowid") or 0),
             _text(linkedin_checkpoint.get("source_watermark")),
@@ -1787,6 +1798,15 @@ def run_delivery(
             started_monotonic=started_monotonic,
         )
     cycle_id = _text(cycle.get("cycle_id"))
+    # Retrying a window can skip already committed targets. Keep the next
+    # incremental watermark no later than the first attempt so later source
+    # changes for those targets are picked up in the following window.
+    window_started = _text(cycle.get("started_at"))
+    if window_started:
+        window_started=datetime.fromisoformat(window_started.replace('Z','+00:00')).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+    for checkpoint in (next_linkedin_checkpoint,next_employer_checkpoint):
+        if checkpoint.get("source_watermark") and window_started:
+            checkpoint['source_watermark']=min(_text(checkpoint['source_watermark']),window_started)
     _progress("task_registration", targets=len(targets))
     store.ensure_cycle_tasks(cycle_id, targets)
     cycle_task_ids = store.list_cycle_task_ids(cycle_id)

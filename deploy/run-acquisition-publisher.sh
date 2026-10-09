@@ -47,6 +47,15 @@ if ! flock -n 9; then
   emit_telemetry lock_overlap 75
   exit 75
 fi
+# Drain committed catalog jobs independently of current source windows. This
+# precedes source locks so collectors cannot prevent publication recovery.
+recovery_path="$receipt_root/publication-recovery-latest.jsonl"
+if ! timeout --kill-after=15 240 /usr/bin/env RUNR_PUBLICATION_RECOVERY_HTTP_BATCH=1 "$python_bin" scripts/process_catalog_publication.py \
+  --data-dir "$data_dir" --max-seconds 120 > "$recovery_path" 2>&1; then
+  echo "catalog publication recovery failed; inspect $recovery_path" >&2
+  emit_telemetry publication_recovery_failed 1
+  exit 1
+fi
 # Producer state is SQLite and this read uses one consistent snapshot. Run the
 # public-head quality repair before the collector locks, so long source scans
 # cannot defer removal of pages already known to be invalid.

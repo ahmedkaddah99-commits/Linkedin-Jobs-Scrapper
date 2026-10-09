@@ -1,0 +1,20 @@
+[Unit]
+Description=Runr cumulative employer counters and blue collar cleanup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/runr/releases/employer-job-counts-20261009
+EnvironmentFile=/opt/runr/.env.acquisition
+EnvironmentFile=-/opt/runr/.env.acquisition.provider
+EnvironmentFile=/etc/runr/acquisition-catalog.env
+EnvironmentFile=/etc/runr/catalog-storage.env
+ExecStart=/bin/sh /srv/runr/releases/employer-job-counts-20261009/deploy/run-employer-job-counts.sh
+TimeoutStartSec=600
+SuccessExitStatus=75
+Nice=10
+MemoryMax=1G
+CPUQuota=50%
+UMask=0077
