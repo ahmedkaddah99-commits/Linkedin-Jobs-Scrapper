@@ -174,3 +174,16 @@ def test_recovery_transaction_does_not_stream_candidate_rows(tmp_path,monkeypatc
     monkeypatch.setattr(store,'_run_transaction',lambda fn:original(lambda conn:fn(BoundedRead(conn))))
     assert store.publish_pending_catalog_jobs(batch_size=3)['published']==3
 
+
+def test_recovery_fences_run_under_a_write_transaction(tmp_path,monkeypatch):
+    store=SqliteAcquisitionStore(tmp_path/'catalog.db');ingest(store)
+    original=store._run_transaction
+    class AtomicFence:
+        def __init__(self,conn):self.conn=conn
+        def execute(self,sql,*args):
+            if sql.lstrip().upper().startswith('SELECT'):
+                assert self.conn._connection.in_transaction,'Fences must run after acquiring the write transaction'
+            return self.conn.execute(sql,*args)
+    monkeypatch.setattr(store,'_run_transaction',lambda fn:original(lambda conn:fn(AtomicFence(conn))))
+    assert store.publish_pending_catalog_jobs(batch_size=1)['published']==1
+

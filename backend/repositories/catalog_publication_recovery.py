@@ -59,6 +59,8 @@ def publish_pending(store, *, batch_size, policy_version):
 
     def commit(conn):
         trace('transaction_start')
+        conn.execute('BEGIN IMMEDIATE')
+        trace('write_transaction_acquired')
         current = conn.execute('SELECT publication_id,updated_at FROM acquisition_publication_head WHERE head_id=1').fetchone()
         if (dict(current) if current else {}) != head:
             raise StalePublicationHeadError('Publication head changed during recovery preparation.')
