@@ -45,7 +45,7 @@ Technical safety explanations belong in developer documentation, rather than the
 
 The four implementation gaps from the first pass are implemented locally: saved-library selection, in-panel document generation and handoff, AI answer drafts with reviewed reuse, and a durable support-report destination. The document and answer workspaces also work in the extension side panel. Draft previews survive switching in-page tabs. Generated documents use a plain DOCX layout; richer template design stays in CV Studio. Reports are available through an admin-authenticated inbox endpoint, not an email integration or a new admin dashboard.
 
-The new API module must be released with extension 0.3.1 before testing these features against production. It reuses the existing DeepSeek key, account metadata, and document object storage; no database migration is introduced. Backend deployment has not been performed by this local implementation task. See [workspace API and release notes](workspace-api-2026-10-09.md).
+The new API module and worker were deployed to production at `8e9d5d73` on 2026-10-09 and verified live. Extension 0.3.1 is rebuilt for testing. The implementation reuses the existing DeepSeek key, account metadata, and document object storage; no database migration is introduced. See [workspace API and release notes](workspace-api-2026-10-09.md) for deployment IDs, the corrected release pin, and live smoke-check evidence.
 
 Live browser coverage for upload and multiple steps across additional providers remains unverified. Local fixture acceptance does not establish universal live ATS coverage.
 

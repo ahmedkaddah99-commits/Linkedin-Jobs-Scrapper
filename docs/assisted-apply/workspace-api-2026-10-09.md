@@ -21,7 +21,11 @@ Asset downloads reuse existing ownership/export resolvers. Private assets and as
 
 Release the new backend module and its registration in `assisted_apply_packages.py` together with extension 0.3.1. Existing `DEEPSEEK_API_KEY`, object storage, and account metadata storage are reused. No schema migration, new secret, or new extension permission is needed. Generation runs synchronously with a bounded provider timeout; unavailable service responses remain retryable in the panel.
 
-Production API deployment is not part of the local verification recorded here. An extension-only reload against an older API will show an error on the new workspace operations. Profile copying, existing package review, and local document attachment remain available independently.
+Production deployment completed on 2026-10-09 at commit `8e9d5d73df768fc315ae3ffa9fb49f147fa0894f`. API deploy `dep-db4girnlot8c738u9uv0` and worker deploy `dep-db4gghu0tbcc73d3bt0g` were both verified live. API runtime release metadata confirms that exact commit and migration head `075_catalog_storage_retention`.
+
+The first API attempt failed because its service-level `RUNR_RELEASE_COMMIT` still pinned `62214ac4…`. The pin was aligned with `8e9d5d73…` and the API redeployed successfully; release validation was retained. Before the next backend code deployment, align that service-level pin with the intended commit. Render build filters were verified to exclude docs-only changes.
+
+Live smoke checks: `/health/live` and `/health/ready` returned 200 with `ok`/`ready`. All six new workspace routes and the support inbox returned 401 without credentials. Runtime logs confirm the new workspace route names, rather than a missing-route response. Signed-in candidate generation/attachment remains covered by local fixtures, not claimed as a live account test. Reload extension 0.3.1 to test the production flows.
 
 ## Verification
 
