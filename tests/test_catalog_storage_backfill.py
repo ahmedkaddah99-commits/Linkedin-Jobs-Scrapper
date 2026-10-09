@@ -5,6 +5,23 @@ from backend.storage.local import LocalObjectStorage
 from scripts.reduce_catalog_storage import reduce_catalog_storage, apply_rows
 
 
+def test_native_transaction_preserves_payload_literals_and_rolls_back_guards():
+    from scripts.reduce_catalog_storage import native_transaction_script, NativeMaintenanceConnection
+    connection = sqlite3.connect(':memory:')
+    connection.executescript("CREATE TABLE example(body TEXT); CREATE TRIGGER frozen BEFORE UPDATE ON example BEGIN SELECT RAISE(ABORT,'immutable'); END;")
+    adapter = NativeMaintenanceConnection.__new__(NativeMaintenanceConnection)
+    adapter.native = connection
+    body = "quotes ' ? ; DROP TABLE example; -- café 🐈\n\x00"
+    adapter.atomic([('INSERT INTO example VALUES(?)', (body,))])
+    assert connection.execute('SELECT body FROM example').fetchone()[0] == body
+    with pytest.raises(sqlite3.OperationalError):
+        adapter.atomic([('DROP TRIGGER frozen', ()), ('UPDATE missing SET body=?', (body,))])
+    assert connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchone()[0] == 'frozen'
+    assert not connection.in_transaction
+    with pytest.raises(ValueError):
+        native_transaction_script([('SELECT ?,?', ('one',))])
+
+
 def fixture_database(tmp_path):
     connection = sqlite3.connect(tmp_path / 'catalog.db')
     connection.executescript('''CREATE TABLE job_source_observations(observation_id TEXT, content_hash TEXT, payload_json TEXT, raw_payload_json TEXT, current_id TEXT); CREATE TABLE job_posting_versions(version_id TEXT, content_hash TEXT, payload_json TEXT, description_text TEXT); CREATE TRIGGER frozen BEFORE UPDATE ON job_source_observations BEGIN SELECT RAISE(ABORT,'immutable'); END; CREATE TRIGGER versions_frozen BEFORE UPDATE ON job_posting_versions BEGIN SELECT RAISE(ABORT,'immutable'); END;''')

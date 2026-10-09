@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,59 @@ TABLES = {'job_source_observations': ('payload_json', 'raw_payload_json'), 'job_
 MARKER = 'catalog_storage_version'
 MAX_BATCH_WIRE_BYTES = 8 * 1024 * 1024
 MAX_BATCH_BODY_BYTES = 3 * 1024 * 1024
+
+
+def native_transaction_script(statements):
+    """Bind generated maintenance SQL without interpreting payload text as SQL."""
+    parts = ['BEGIN IMMEDIATE;']
+    for sql, parameters in statements:
+        if parameters:
+            segments = sql.split('?')
+            if len(segments) != len(parameters) + 1:
+                raise ValueError('Unexpected maintenance SQL parameter count')
+            rendered = segments[0]
+            for value, segment in zip(parameters, segments[1:]):
+                if value is None:
+                    literal = 'NULL'
+                elif isinstance(value, int):
+                    literal = str(value)
+                elif isinstance(value, str):
+                    literal = "CAST(X'" + value.encode('utf-8').hex() + "' AS TEXT)"
+                else:
+                    raise TypeError('Unsupported maintenance parameter')
+                rendered += literal + segment
+            sql = rendered
+        parts.append(sql.rstrip(';') + ';')
+    parts.append('COMMIT;')
+    script = '\n'.join(parts)
+    if len(script.encode('utf-8')) > MAX_BATCH_WIRE_BYTES:
+        raise RuntimeError('Native maintenance batch exceeds safe request limit')
+    return script
+
+
+class NativeMaintenanceConnection(HttpMaintenanceConnection):
+    """Fast bounded HTTP reads with a single native transaction for writes."""
+    def __init__(self, timeout=180):
+        super().__init__(timeout=timeout)
+        self.native = importlib.import_module('libsql').connect(
+            database=os.environ['TURSO_DATABASE_URL'], auth_token=self.token,
+            isolation_level=None)
+
+    def atomic(self, statements):
+        # Validate size/types before opening the transaction. Explicit native
+        # statements are used because multi-statement remote scripts can stall.
+        native_transaction_script(statements)
+        self.native.execute('BEGIN IMMEDIATE')
+        try:
+            for sql, values in statements:
+                self.native.execute(sql, values)
+            self.native.execute('COMMIT')
+        except BaseException:
+            self.native.rollback()
+            raise
+
+    def close(self):
+        self.native.close()
 
 
 def _json(value):
@@ -259,6 +313,8 @@ def main():
     parser.add_argument('--overlay')
     parser.add_argument('--storage-env', help='Shared evidence storage environment overrides')
     parser.add_argument('--sqlite', help='Explicit existing local SQLite database')
+    parser.add_argument('--transport', choices=('http', 'native'), default='http',
+                        help='Remote maintenance transport; native uses the installed libSQL driver')
     parser.add_argument('--checkpoint', required=True)
     parser.add_argument('--batch-size', type=int, default=10)
     parser.add_argument('--max-seconds', type=float, default=60)
@@ -280,7 +336,10 @@ def main():
         if not os.environ.get('TURSO_DATABASE_URL'):
             parser.error('Remote URL or explicit --sqlite is required')
         identity = os.environ['TURSO_DATABASE_URL']
-        connection = HttpMaintenanceConnection()
+        if args.transport == 'native':
+            connection = NativeMaintenanceConnection()
+        else:
+            connection = HttpMaintenanceConnection()
     try:
         result = reduce_catalog_storage(connection, database_identity=identity, checkpoint=args.checkpoint, apply=args.apply, batch_size=args.batch_size, max_seconds=args.max_seconds, archive_workers=args.archive_workers, compact_intelligence=args.compact_intelligence)
         print(_json(result))

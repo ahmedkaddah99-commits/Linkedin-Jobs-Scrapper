@@ -1,0 +1,10 @@
+[Unit]
+Description=Resume Runr catalog JSON deduplication every five minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00 UTC
+Persistent=true
+Unit=runr-catalog-json-deduplication.service
+
+[Install]
+WantedBy=timers.target

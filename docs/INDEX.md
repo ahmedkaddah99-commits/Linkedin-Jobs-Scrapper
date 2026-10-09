@@ -26,6 +26,7 @@ Start with [reverse-engineering/00-overview.md](reverse-engineering/00-overview.
 | Understand what's actually deployed where | [reverse-engineering/02-deployment/release-process-and-production-records.md](reverse-engineering/02-deployment/release-process-and-production-records.md) |
 | Work on database schema / migrations | [reverse-engineering/03-data/schema-and-migrations.md](reverse-engineering/03-data/schema-and-migrations.md) |
 | Work on the Turso/libSQL connection layer | [reverse-engineering/03-data/turso-and-libsql.md](reverse-engineering/03-data/turso-and-libsql.md) |
+| Remove exact catalog JSON duplicates in place | [reverse-engineering/03-data/catalog-json-deduplication.md](reverse-engineering/03-data/catalog-json-deduplication.md) |
 | Work on R2 object storage | [reverse-engineering/03-data/object-storage-r2.md](reverse-engineering/03-data/object-storage-r2.md) |
 | Work on acquisition source-state / producer inputs | [reverse-engineering/03-data/acquisition-source-state.md](reverse-engineering/03-data/acquisition-source-state.md) |
 | Find or run a test | [reverse-engineering/04-testing/test-suite-map.md](reverse-engineering/04-testing/test-suite-map.md) |
