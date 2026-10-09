@@ -39,4 +39,6 @@ def execute_atomic_batch(statements, *, timeout=30):
             raise StalePublicationHeadError('Publication inputs changed before the atomic HTTP batch.')
     if result['step_results'][commit_index] is None:
         error=next((e for e in errors[:commit_index+1] if e),{})
+        if 'local diskless state diverged from S3' in error.get('message',''):
+            raise RuntimeError('Turso storage failure: local diskless state diverged from S3 (SQLITE_IOERR).')
         raise RuntimeError('Atomic publication batch rolled back: '+error.get('code','unknown'))
