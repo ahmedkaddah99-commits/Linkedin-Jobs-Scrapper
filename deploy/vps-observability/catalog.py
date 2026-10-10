@@ -12,17 +12,26 @@ def check_catalog(env_path):
         from dotenv import dotenv_values
         env = dotenv_values(env_path)
         overlay = Path('/etc/runr/acquisition-catalog.env')
-        if overlay.is_file():
+        if overlay.is_file() and env.get('DATABASE_BACKEND') != 'sqlite':
             env.update(dotenv_values(overlay))
-        for key in ("DATABASE_BACKEND", "RUNR_ENV", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
+        for key in ("DATABASE_BACKEND", "RUNR_ENV", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "SQLITE_DATABASE_PATH"):
             if env.get(key) is not None:
                 os.environ[key] = str(env[key])
         # Never accidentally inspect/create an empty local DB and call it Turso.
-        if not os.environ.get("TURSO_DATABASE_URL"):
+        local = env.get('DATABASE_BACKEND') == 'sqlite'
+        if not local and not os.environ.get("TURSO_DATABASE_URL"):
             return {"checked_at": checked_at, "access_ok": False, "error": "remote_binding_missing"}
-        sys.path.insert(0, "/opt/runr")
-        from backend.database.connection import connect_database
-        connection = connect_database(Path('/var/lib/runr/acquisition-data/runr.sqlite3'))
+        if local:
+            import sqlite3
+            target = Path(env['SQLITE_DATABASE_PATH'])
+            if not target.is_absolute():
+                raise ValueError('SQLite observer path must be absolute')
+            connection = sqlite3.connect(target.as_uri()+'?mode=ro', uri=True, timeout=5)
+            connection.row_factory = sqlite3.Row
+        else:
+            sys.path.insert(0, "/opt/runr")
+            from backend.database.connection import connect_database
+            connection = connect_database(Path('/var/lib/runr/acquisition-data/runr.sqlite3'))
         head = connection.execute('SELECT h.publication_id,h.updated_at,p.status FROM acquisition_publication_head h LEFT JOIN acquisition_publications p ON p.publication_id=h.publication_id WHERE h.head_id=1').fetchone()
         count = connection.execute('SELECT COUNT(*) AS jobs FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id AND h.head_id=1').fetchone()
         checkpoints = connection.execute('SELECT source,source_rowid,source_watermark,bootstrap_complete,updated_at FROM acquisition_publisher_checkpoints ORDER BY source LIMIT 3').fetchall()
@@ -32,7 +41,7 @@ def check_catalog(env_path):
         if connection.execute("SELECT name FROM sqlite_master WHERE name='acquisition_publication_queue'").fetchone():
             queue={row['status']:int(row['jobs']) for row in connection.execute('SELECT status,COUNT(*) AS jobs FROM acquisition_publication_queue GROUP BY status').fetchall()}
             queue['last_evaluated_at']=connection.execute('SELECT MAX(evaluated_at) AS at FROM acquisition_publication_queue').fetchone()['at'] or ''
-        return {"checked_at": checked_at, "access_ok": True, "binding": "vps_configured_turso",
+        return {"checked_at": checked_at, "access_ok": True, "binding": "vps_configured_sqlite" if local else "vps_configured_turso",
                 "head": dict(head) if head else {}, "head_jobs": int(count['jobs']),
                 "checkpoints": [dict(row) for row in checkpoints],
                 "latest_cycle": dict(cycle) if cycle else {},
