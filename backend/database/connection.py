@@ -713,7 +713,7 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
     else:
         if _runtime_environment() in {"prod", "production"}:
             # Fail closed: a typo must never create an empty production database.
-            raw_connection = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=30)
+            raw_connection = sqlite3.connect(f"file:{path}?mode=rw", uri=True, timeout=30)
             try:
                 mode = raw_connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
                 if mode != "wal":
