@@ -36,7 +36,8 @@ plans and progress notes remain available in Git history.
 - Public homepage and private readiness passed after release activation.
 - Real Chromium PDF generation passed under the application service account.
 - Frontend API regression tests: 24 passed. Signed-in customer journeys still
-  require acceptance verification with an authenticated session.
+  require acceptance verification. Browser access is currently blocked because the
+  administrator policy could not be verified.
 
 ## Backups and storage
 
@@ -82,6 +83,20 @@ now reads the VPS SQLite database, rather than the former Turso database.
    customer-table, publication-head and queue checks above.
 6. Rehearse a bounded producer-to-publication cycle, then resume the dedicated
    collectors with resource limits. Owner pause remains active during this work.
+
+## Queued autonomous work
+
+- Running: `runr-customer-backup.service` (first snapshot integrity scan).
+- Next: `runr-offload-historical-acquisition-v2-20261010.service` archives
+  four historical/rehearsal directories, verifies full R2 readback and only then
+  removes their local copies.
+- Then: `runr-customer-restore-drill-v2-20261010.service` restores the newly
+  verified backup from R2 into isolation, verifies the exact database hash,
+  schema, structural checks and customer counts, then removes the temporary copy.
+- Both follow-up jobs require their predecessor to succeed. These jobs are queued,
+  not completed. Acquisition local backup retention is now two generations;
+  remote policy remains seven. Heavy pipeline snapshots resume after the first
+  verified customer-backup receipt exists.
 
 ## Evidence locations
 
