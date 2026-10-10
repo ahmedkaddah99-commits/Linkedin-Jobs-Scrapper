@@ -637,17 +637,32 @@ def _runtime_environment() -> str:
 
 
 def _remote_database_required() -> bool:
-    return _database_backend() == "turso" or _runtime_environment() in {"prod", "production"}
+    return _database_backend() == "turso"
+
+
+def _local_database_path(local_path: str | Path) -> Path:
+    configured = os.getenv("SQLITE_DATABASE_PATH", "").strip()
+    production = _runtime_environment() in {"prod", "production"}
+    if production and _database_backend() == "sqlite":
+        if not configured or not Path(configured).is_absolute():
+            raise DatabaseConfigurationError("Production SQLite requires an absolute SQLITE_DATABASE_PATH.")
+        if _remote_database_url():
+            raise DatabaseConfigurationError("Remove TURSO_DATABASE_URL when using production SQLite.")
+    if configured and not Path(configured).is_absolute():
+        raise DatabaseConfigurationError("SQLITE_DATABASE_PATH must be absolute.")
+    return Path(configured or local_path).expanduser().resolve()
 
 
 def database_target_key(local_path: str | Path) -> str:
+    path = _local_database_path(local_path)
     remote_url = _remote_database_url()
     if remote_url or _remote_database_required():
         return f"libsql:{remote_url}"
-    return f"sqlite:{Path(local_path).expanduser().resolve()}"
+    return f"sqlite:{path}"
 
 
 def database_target_info(local_path: str | Path) -> dict[str, str | bool]:
+    path = _local_database_path(local_path)
     remote_url = _remote_database_url()
     required_remote = _remote_database_required()
     target_backend = "libsql" if remote_url or required_remote else "sqlite"
@@ -659,7 +674,7 @@ def database_target_info(local_path: str | Path) -> dict[str, str | bool]:
         "remote_configured": bool(remote_url),
     }
     if target_backend == "sqlite":
-        payload["local_path"] = str(Path(local_path).expanduser().resolve())
+        payload["local_path"] = str(path)
     elif remote_url:
         payload["remote_url_prefix"] = remote_url.split("://", 1)[0] if "://" in remote_url else "libsql"
     return payload
@@ -669,11 +684,12 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
     """Connect to Turso when configured, otherwise preserve local sqlite3 behavior."""
 
     validate_release_provenance()
+    path = _local_database_path(local_path)
     remote_url = _remote_database_url()
     if remote_url or _remote_database_required():
         if not remote_url:
             raise DatabaseConfigurationError(
-                "TURSO_DATABASE_URL is required when DATABASE_BACKEND=turso or RUNR_ENV=production."
+                "TURSO_DATABASE_URL is required when DATABASE_BACKEND=turso."
             )
         auth_token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
         if not auth_token:
@@ -695,9 +711,22 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
         raw_connection = reconnect()
         connection = DatabaseConnection(raw_connection, backend="libsql", reconnect=reconnect)
     else:
-        path = Path(local_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        raw_connection = sqlite3.connect(path, timeout=30)
+        if _runtime_environment() in {"prod", "production"}:
+            # Fail closed: a typo must never create an empty production database.
+            raw_connection = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=30)
+            try:
+                mode = raw_connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                if mode != "wal":
+                    raise DatabaseConfigurationError("Production SQLite requires WAL mode.")
+                raw_connection.execute("PRAGMA synchronous=FULL")
+                raw_connection.execute("PRAGMA wal_autocheckpoint=1000")
+                raw_connection.execute("PRAGMA journal_size_limit=67108864")
+            except BaseException:
+                raw_connection.close()
+                raise
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw_connection = sqlite3.connect(path, timeout=30)
         connection = DatabaseConnection(raw_connection, backend="sqlite")
 
     connection.execute("PRAGMA foreign_keys = ON")
@@ -763,6 +792,7 @@ def database_read_session(
     local_path: str | Path, *, deadline: float | None = None,
 ) -> Iterator[DatabaseConnection | _HttpReadSession]:
     validate_release_provenance()
+    _local_database_path(local_path)
     if _remote_database_url() or _remote_database_required():
         yield _HttpReadSession(deadline if deadline is not None else time.monotonic() + 15.0)
     else:

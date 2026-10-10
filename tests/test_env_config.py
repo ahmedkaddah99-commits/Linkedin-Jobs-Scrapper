@@ -112,12 +112,11 @@ class EnvironmentConfigTests(unittest.TestCase):
         self.assertEqual(settings.object_storage_backend, "local")
         self.assertFalse(settings.is_production)
 
-    def test_production_requires_turso_and_remote_object_storage(self):
+    def test_production_requires_explicit_database_and_remote_object_storage(self):
         errors = get_environment_validation_errors({"RUNR_ENV": "production"})
 
-        self.assertIn("Production requires DATABASE_BACKEND=turso", errors)
+        self.assertIn("Production SQLite requires an absolute SQLITE_DATABASE_PATH", errors)
         self.assertIn("Production requires OBJECT_STORAGE_BACKEND=s3 or r2", errors)
-        self.assertIn("TURSO_DATABASE_URL is required for Turso and production", errors)
         self.assertIn("S3_BUCKET is required for S3-compatible and production object storage", errors)
         self.assertIn(
             "Production requires RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS with the exact Web Store extension origin",

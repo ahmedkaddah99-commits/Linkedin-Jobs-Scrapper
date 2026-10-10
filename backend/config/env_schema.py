@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -24,17 +25,22 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "required": False,
         "scope": "backend",
         "default": "sqlite",
-        "description": "Database backend. Local development defaults to sqlite; production must use turso.",
+        "description": "Database backend: sqlite or turso. Production SQLite requires a shared absolute SQLITE_DATABASE_PATH.",
+    },
+    "SQLITE_DATABASE_PATH": {
+        "required": False,
+        "scope": "backend",
+        "description": "Absolute shared SQLite database path; required for production SQLite. File must already exist.",
     },
     "TURSO_DATABASE_URL": {
         "required": False,
         "scope": "backend",
-        "description": "Turso/libSQL database URL. Required in production.",
+        "description": "Turso/libSQL database URL. Required for the turso backend.",
     },
     "TURSO_AUTH_TOKEN": {
         "required": False,
         "scope": "backend",
-        "description": "Turso authentication token. Required in production.",
+        "description": "Turso authentication token. Required for the turso backend.",
     },
     "OBJECT_STORAGE_BACKEND": {
         "required": False,
@@ -388,7 +394,7 @@ def get_environment_validation_errors(
     if settings.s3_signed_url_ttl_seconds <= 0:
         errors.append("S3_SIGNED_URL_TTL_SECONDS must be a positive integer")
 
-    if settings.database_backend == "turso" or settings.is_production:
+    if settings.database_backend == "turso":
         if not settings.turso_database_url:
             errors.append("TURSO_DATABASE_URL is required for Turso and production")
         if not settings.turso_auth_token:
@@ -408,8 +414,12 @@ def get_environment_validation_errors(
         )
 
     if settings.is_production:
-        if settings.database_backend != "turso":
-            errors.append("Production requires DATABASE_BACKEND=turso")
+        if settings.database_backend == "sqlite":
+            sqlite_path = _mapping_value(source, "SQLITE_DATABASE_PATH").strip()
+            if not sqlite_path or not Path(sqlite_path).is_absolute():
+                errors.append("Production SQLite requires an absolute SQLITE_DATABASE_PATH")
+            if settings.turso_database_url:
+                errors.append("Remove TURSO_DATABASE_URL when using production SQLite")
         if settings.object_storage_backend not in {"s3", "r2"}:
             errors.append("Production requires OBJECT_STORAGE_BACKEND=s3 or r2")
         if "*" in {
