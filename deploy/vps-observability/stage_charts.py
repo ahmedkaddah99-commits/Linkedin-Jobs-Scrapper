@@ -160,10 +160,17 @@ def summarize(records, *, as_of=None):
 def collect(env=None, *, as_of=None):
     """Collect bounded metrics from producer SQLite and shared remote catalog."""
     env = env or os.environ
-    if not env.get('TURSO_DATABASE_URL') or not env.get('TURSO_AUTH_TOKEN'):
+    local = env.get('DATABASE_BACKEND') == 'sqlite'
+    if not local and (not env.get('TURSO_DATABASE_URL') or not env.get('TURSO_AUTH_TOKEN')):
         raise RuntimeError('shared_catalog_binding_missing')
-    import libsql
-    conn = libsql.connect(database=env['TURSO_DATABASE_URL'], auth_token=env['TURSO_AUTH_TOKEN'])
+    if local:
+        target = Path(env['SQLITE_DATABASE_PATH'])
+        if not target.is_absolute():
+            raise ValueError('SQLite observer path must be absolute')
+        conn = sqlite3.connect(target.as_uri() + '?mode=ro', uri=True, timeout=5)
+    else:
+        import libsql
+        conn = libsql.connect(database=env['TURSO_DATABASE_URL'], auth_token=env['TURSO_AUTH_TOKEN'])
     try:
         totals, grouped = summarize(chain(source_records(env), catalog_records(conn)), as_of=as_of)
     finally:

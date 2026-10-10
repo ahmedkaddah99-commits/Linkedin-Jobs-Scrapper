@@ -62,7 +62,7 @@ def render(sections, attempted_at):
 
 def load_env():
     from dotenv import dotenv_values
-    for path in ('/opt/runr/.env.acquisition', '/etc/runr/acquisition-catalog.env'):
+    for path in ('/opt/runr/.env.acquisition', '/etc/runr/acquisition-catalog.env', '/etc/runr/publisher-sqlite.env'):
         for key, value in dotenv_values(path).items():
             if value is not None:
                 os.environ[key] = value
@@ -142,13 +142,20 @@ def company_flags_sql():
 
 
 def catalog():
-    if not os.environ.get('TURSO_DATABASE_URL'):
+    local = os.environ.get('DATABASE_BACKEND') == 'sqlite'
+    if not local and not os.environ.get('TURSO_DATABASE_URL'):
         raise RuntimeError('remote_binding_missing')
     # Avoid backend package initializers: they import the entire application,
     # which is unnecessary overhead for a read-only observer. No migrations or
     # database initialization are permitted here.
-    import libsql
-    conn = libsql.connect(database=os.environ['TURSO_DATABASE_URL'], auth_token=os.environ['TURSO_AUTH_TOKEN'])
+    if local:
+        target = Path(os.environ['SQLITE_DATABASE_PATH'])
+        if not target.is_absolute():
+            raise ValueError('SQLite observer path must be absolute')
+        conn = sqlite3.connect(target.as_uri() + '?mode=ro', uri=True, timeout=5)
+    else:
+        import libsql
+        conn = libsql.connect(database=os.environ['TURSO_DATABASE_URL'], auth_token=os.environ['TURSO_AUTH_TOKEN'])
     try:
         def rows(sql, params=()):
             cursor = conn.execute(sql, params)
