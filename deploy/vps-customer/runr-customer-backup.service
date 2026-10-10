@@ -1,0 +1,14 @@
+[Unit]
+Description=Runr consistent customer database backup to R2
+After=network-online.target
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/runr/customer-candidate-20261010/api.env
+Environment=LD_LIBRARY_PATH=/usr/local/lib/runr/sqlite-3.54.0
+ExecStart=/opt/runr/.venv/bin/python /opt/runr-ops/customer-backup.py
+UMask=0077
+MemoryMax=1G
+CPUQuota=100%
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
