@@ -2,6 +2,22 @@
 
 # Personalized jobs and customer application services (WS-4, primary)
 
+## Published network discovery and contact email (2026-10-11)
+
+Migration `078_published_network_discovery` stores one public-web discovery
+result per immutable published posting version and a two-attempt daily email
+lookup ledger per user. `scripts/process_published_network_discovery.py` reads
+the serving SQLite catalog, searches once through Webshare, asks Nemo to select
+at most three likely people, and discards any profile URL absent from the web
+results. A separate bounded timer can run while acquisition is paused. The
+Jobs detail API reads the version-bound result and the user's saved contacts;
+school and prior-employer signals require evidence in a public snippet.
+`POST /personalized-jobs/{id}/email-lookup` validates a LinkedIn profile URL
+and optionally uses Hunter's found-only email endpoint. Without
+`HUNTER_API_KEY`, it returns an unavailable state. A lookup consumes
+one of at most two attempts per user per UTC day; repeated lookups reuse the
+stored result. Provider errors remain visible as unavailable.
+
 ## Company selection and remembered filters (2026-10-08)
 
 `GET /personalized-jobs/companies?q=...` returns up to ten canonical employers

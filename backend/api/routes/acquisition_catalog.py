@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import requests
+
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 
 
@@ -177,6 +179,10 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
                 mode=_text(body.get("mode") or "review"),
                 plan_id=_plan_id(context, user_id),
             )
+        elif action == "email-lookup":
+            result = context.application.find_personalized_job_contact_email(
+                user_id, posting_id, _text(body.get("linkedin_url")),
+            )
         else:
             return False
     except KeyError:
@@ -185,6 +191,8 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
         return _error(context, 400, "invalid_job_action", str(exc))
     except PermissionError as exc:
         return _error(context, 403, "runr_pro_required", str(exc))
+    except requests.RequestException:
+        return _error(context, 503, "email_provider_unavailable", "Email lookup is temporarily unavailable")
     context.send_json(result)
     return True
 

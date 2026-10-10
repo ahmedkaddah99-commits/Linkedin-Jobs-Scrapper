@@ -4208,6 +4208,41 @@ MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
 ))
 
 
+def _apply_published_network_discovery(connection):
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS published_job_network_discovery (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            state TEXT NOT NULL,
+            candidates_json TEXT NOT NULL DEFAULT '[]',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            error_code TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_published_job_network_job
+            ON published_job_network_discovery(canonical_job_id);
+        CREATE TABLE IF NOT EXISTS job_email_lookups (
+            user_id TEXT NOT NULL,
+            lookup_day TEXT NOT NULL,
+            linkedin_handle TEXT NOT NULL,
+            state TEXT NOT NULL,
+            email TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, lookup_day, linkedin_handle)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_email_lookup_daily
+            ON job_email_lookups(user_id, lookup_day);
+    """)
+
+
+MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
+    '078_published_network_discovery',
+    'Store one-pass public-web hiring candidates by immutable published job version.',
+    _apply_published_network_discovery,
+))
+
+
 def current_migration_head() -> str:
     """Return the registry head used by release compatibility checks."""
 
