@@ -12,7 +12,17 @@ if snapshot.exists() or archive.exists(): raise RuntimeError('Previous temporary
 started=time.time();stamp=time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())
 print(json.dumps({'phase':'snapshot','started':stamp}),flush=True)
 with sqlite3.connect(db.as_uri()+'?mode=ro',uri=True,timeout=30) as src:
- with sqlite3.connect(snapshot) as dst: src.backup(dst,pages=2048,sleep=0.05)
+ # Pin the WAL read snapshot so concurrent heartbeats cannot restart the copy.
+ src.execute('BEGIN')
+ src.execute('SELECT migration_id FROM schema_migrations LIMIT 1').fetchone()
+ last_progress=[0.0]
+ def progress(status,remaining,total):
+  now=time.monotonic()
+  if now-last_progress[0]>=15 or remaining==0:
+   print(json.dumps({'phase':'snapshot','percent':round(100*(total-remaining)/total,1) if total else 0}),flush=True)
+   last_progress[0]=now
+ with sqlite3.connect(snapshot) as dst: src.backup(dst,pages=2048,sleep=0.05,progress=progress)
+ src.rollback()
 with sqlite3.connect(snapshot) as c:
  assert c.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
  assert c.execute('PRAGMA foreign_key_check').fetchone() is None

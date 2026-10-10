@@ -7,8 +7,9 @@ EnvironmentFile=/etc/runr/customer-candidate-20261010/api.env
 Environment=LD_LIBRARY_PATH=/usr/local/lib/runr/sqlite-3.54.0
 ExecStart=/opt/runr/.venv/bin/python /opt/runr-ops/customer-backup.py
 UMask=0077
-MemoryMax=1G
-CPUQuota=100%
+MemoryMax=2G
+CPUQuota=150%
 Nice=10
-IOSchedulingClass=idle
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
 TimeoutStartSec=4h

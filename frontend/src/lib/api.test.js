@@ -1,5 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { loadStoredConnection } from "./api.js";
+
+test("returning production customers stop using the retired Render endpoint", () => {
+  const originalWindow = globalThis.window;
+  const store = new Map([["runr.api.baseUrl", "https://runr-api.onrender.com/v1"]]);
+  globalThis.window = { location: { hostname: "app.userunr.com" }, localStorage: {
+    getItem: key => store.get(key), removeItem: key => store.delete(key),
+  } };
+  try {
+    assert.equal(loadStoredConnection().baseUrl, "/v1");
+    assert.equal(store.has("runr.api.baseUrl"), false);
+    store.set("runr.api.baseUrl", "https://custom.example.com/v1");
+    assert.equal(loadStoredConnection().baseUrl, "https://custom.example.com/v1");
+  } finally { globalThis.window = originalWindow; }
+});
 
 import { apiRequest, apiRequestWithRetry, cancelAllDedupedRequests, createDedupedAbortController, diagnosticPathShape, markJobsPhase, resolveApiUrl, resolveDefaultApiBaseUrl, settleDedupedAbortController } from "./api.js";
 

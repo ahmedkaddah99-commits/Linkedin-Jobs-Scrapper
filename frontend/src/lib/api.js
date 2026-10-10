@@ -67,7 +67,13 @@ export function getDefaultApiBaseUrl() {
 }
 
 export function loadStoredConnection() {
-  const storedBaseUrl = window.localStorage.getItem(STORAGE_KEYS.baseUrl) || "";
+  let storedBaseUrl = window.localStorage.getItem(STORAGE_KEYS.baseUrl) || "";
+  // Retire the former production endpoint for returning customers after cutover.
+  if (window.location.hostname === "app.userunr.com" &&
+      /^https:\/\/runr-api\.onrender\.com(?:\/|$)/i.test(storedBaseUrl)) {
+    window.localStorage.removeItem(STORAGE_KEYS.baseUrl);
+    storedBaseUrl = "";
+  }
   return {
     baseUrl: storedBaseUrl || getDefaultApiBaseUrl(),
     accessToken: "",
