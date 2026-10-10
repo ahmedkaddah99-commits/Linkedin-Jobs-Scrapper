@@ -75,7 +75,9 @@ now reads the VPS SQLite database, rather than the former Turso database.
 2. Check signed-in customer workflows, uploads, billing callbacks and exports.
 3. Missing-object classification verified against the live VPS and current
    frontend/repository hydration: two missing objects have current Career Assets
-   entries (one real uploaded CV and one test resume). Seven only have retained
+   entries (one real uploaded CV and one test resume). The test resume was restored
+   from a local copy with its original stored content hash and full R2 readback
+   verified. Eight objects remain missing: one current CV and seven retained
    document records; one also has a workspace text binding. Preserve all retained
    text. Missing originals are not frontend code assets or company logos.
    Do not classify all nine as current downloadable files or fabricate originals.
