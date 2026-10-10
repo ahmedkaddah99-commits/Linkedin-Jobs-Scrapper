@@ -52,9 +52,9 @@ plans and progress notes remain available in Git history.
 - R2 keeps seven verified customer backup generations. Local snapshot/archive
   files are temporary. A failed attempt preserves its temporary files for
   inspection and cannot overwrite them silently.
-- First scheduled-backup rehearsal is still validating its completed snapshot;
-  do not claim it verified until `/var/lib/runr/customer-backups/latest.json`
-  records successful off-host readback and restore hash verification.
+- First customer backup completed successfully: full integrity check passed,
+  foreign key violations zero, compressed restore hash verified and full R2
+  readback verified. The durable latest.json receipt now exists.
 - Temporary first snapshot uses about 32 GiB. Additional historical cleanup must
   wait for its verification/removal to preserve operating headroom.
 
@@ -71,12 +71,14 @@ now reads the VPS SQLite database, rather than the former Turso database.
 
 ## Remaining acceptance work
 
-1. Finish the first customer backup, verify its receipt and perform a separate
-   restore drill. Verify backup metrics reach Grafana.
+1. Finish the separate isolated restore drill. Verify backup metrics reach Grafana.
 2. Check signed-in customer workflows, uploads, billing callbacks and exports.
-3. Recover nine missing original R2 objects. Their prefixes have no siblings;
-   stored records do not provide original content hashes. Preserve the records
-   and retained text; do not fabricate original files.
+3. Missing-object classification verified against the live VPS and current
+   frontend/repository hydration: two missing objects have current Career Assets
+   entries (one real uploaded CV and one test resume). Seven only have retained
+   document records; one also has a workspace text binding. Preserve all retained
+   text. Missing originals are not frontend code assets or company logos.
+   Do not classify all nine as current downloadable files or fabricate originals.
 4. Continue verified off-host historical storage cleanup and bounded retention.
    Preserve active producer state, manifests, exclusions and rollback evidence.
 5. Complete any broader catalog payload reconciliation needed beyond the count,
@@ -86,15 +88,16 @@ now reads the VPS SQLite database, rather than the former Turso database.
 
 ## Queued autonomous work
 
-- Running: `runr-customer-backup.service` (first snapshot integrity scan).
-- Next: `runr-offload-historical-acquisition-v2-20261010.service` archives
+- Completed: `runr-customer-backup.service`, with verified receipt.
+- Completed: `runr-offload-historical-acquisition-v2-20261010.service` archived
   four historical/rehearsal directories, verifies full R2 readback and only then
-  removes their local copies.
-- Then: `runr-customer-restore-drill-v2-20261010.service` restores the newly
+  removed their local copies.
+- Running: `runr-customer-restore-drill-v2-20261010.service` restores the newly
   verified backup from R2 into isolation, verifies the exact database hash,
   schema, structural checks and customer counts, then removes the temporary copy.
-- Both follow-up jobs require their predecessor to succeed. These jobs are queued,
-  not completed. Acquisition local backup retention is now two generations;
+- The isolated restore drill is not complete yet. Historical archive receipt
+  verifies full R2 readback and archive listing. Acquisition local backup retention
+  is now two generations;
   remote policy remains seven. Heavy pipeline snapshots resume after the first
   verified customer-backup receipt exists.
 
