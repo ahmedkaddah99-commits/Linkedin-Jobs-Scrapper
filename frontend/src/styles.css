@@ -2594,6 +2594,56 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 1rem;
 }
+.referral-connections-bar {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--referral-line);
+  border-radius: 0.8rem;
+  color: var(--referral-muted);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+}
+.referral-connections-bar strong { color: var(--referral-ink); font-size: 1.1rem; }
+.referral-connections-bar .referral-form__actions { margin: 0; }
+
+.job-connections { background: #fff; border: 1px solid var(--jobs-line); border-radius: 0.8rem; margin: 1rem 1.5rem 2rem; padding: 1.25rem; }
+.job-connections__heading { align-items: start; display: flex; gap: 1rem; justify-content: space-between; }
+.job-connections h2 { color: var(--jobs-ink); font-size: 1.1rem; font-weight: 800; margin: 0; }
+.job-connections__heading p, .job-connections__card p { color: var(--jobs-muted); font-size: 0.78rem; margin: 0.3rem 0 0; }
+.job-connections__tip { color: var(--jobs-cyan-dark); cursor: help; font-size: 0.72rem; white-space: nowrap; }
+.job-connections__grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 1rem; }
+.job-connections__card { border: 1px solid var(--jobs-line); border-radius: 0.65rem; min-height: 10rem; padding: 0.8rem; }
+.job-connections__card--beyond { border-top: 3px solid #20b983; }
+.job-connections__card--known { border-top: 3px solid var(--jobs-cyan); }
+.job-connections__card--shared { border-top: 3px solid #9477cf; }
+.job-connections__card h3 { font-size: 0.8rem; font-weight: 800; margin: 0 0 0.7rem; }
+.job-connections__card > small, .job-connections__card > div > small { color: var(--jobs-muted); display: block; font-size: 0.65rem; margin-top: 0.6rem; }
+.job-connection-person { align-items: center; display: flex; gap: 0.55rem; margin-top: 0.6rem; min-width: 0; }
+.job-connection-avatar { align-items: center; background: #dff6f9; border-radius: 50%; color: #087f9f; display: inline-flex; flex: 0 0 1.8rem; font-size: 0.75rem; font-weight: 800; height: 1.8rem; justify-content: center; }
+.job-connection-person > div:nth-child(2) { min-width: 0; }
+.job-connection-person strong, .job-connection-person small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-connection-person strong { font-size: 0.72rem; }
+.job-connection-person small { color: var(--jobs-muted); font-size: 0.65rem; }
+.job-connection-person__actions { display: flex; gap: 0.25rem; margin-left: auto; }
+.job-connection-person__actions button { background: #fff; border: 1px solid var(--jobs-line); border-radius: 50%; cursor: pointer; font-size: 0.65rem; font-weight: 800; height: 1.8rem; width: 1.8rem; }
+.job-connections__email { margin-top: 1rem; }
+.job-connections__email label { display: block; font-size: 0.75rem; font-weight: 800; margin-bottom: 0.4rem; }
+.job-connections__email > div { display: flex; }
+.job-connections__email input { border: 1px solid var(--jobs-line); border-radius: 0.5rem 0 0 0.5rem; flex: 1; font-size: 0.75rem; min-width: 0; padding: 0.65rem; }
+.job-connections__email button, .job-connections__result button, .job-connections__dialog-actions a { background: var(--jobs-cyan); border: 0; border-radius: 0 0.5rem 0.5rem 0; color: #fff; cursor: pointer; font-size: 0.75rem; font-weight: 800; padding: 0.65rem 1rem; text-decoration: none; }
+.job-connections__result { align-items: center; background: #f3f9fa; border-radius: 0.5rem; display: flex; gap: 0.75rem; justify-content: space-between; margin-top: 0.6rem; padding: 0.7rem; }
+.job-connections__result button { border-radius: 0.4rem; }
+.job-connections__backdrop { align-items: center; background: rgba(11,28,42,.55); display: flex; inset: 0; justify-content: center; padding: 1rem; position: fixed; z-index: 100; }
+.job-connections__dialog { background: #fff; border-radius: 0.9rem; max-width: 29rem; padding: 1.4rem; width: 100%; }
+.job-connections__dialog p { color: var(--jobs-muted); font-size: 0.78rem; margin: 0.65rem 0 0.8rem; }
+.job-connections__dialog textarea { border: 1px solid var(--jobs-line); border-radius: 0.5rem; min-height: 8rem; padding: 0.65rem; resize: vertical; width: 100%; }
+.job-connections__dialog small { color: var(--jobs-muted); display: block; text-align: right; }
+.job-connections__dialog > button { background: #edf8fa; border: 0; border-radius: 0.4rem; cursor: pointer; font-size: 0.75rem; font-weight: 800; margin-top: 0.6rem; padding: 0.6rem; width: 100%; }
+.job-connections__dialog-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.job-connections__dialog-actions button, .job-connections__dialog-actions a { border: 1px solid var(--jobs-line); border-radius: 0.4rem; flex: 1; font-size: 0.75rem; text-align: center; }
+.job-connections__dialog-actions button { background: #fff; cursor: pointer; }
+@media (max-width: 850px) { .job-connections__grid { grid-template-columns: 1fr; } .job-connections__heading { flex-direction: column; } }
 .referral-tab {
   align-items: flex-start;
   background: #fff;
@@ -2834,6 +2884,7 @@ html.dark .referral-import,
 html.dark .referral-tab,
 html.dark .referral-outreach__item,
 html.dark .referral-sync__row { background-color: #10213a; }
+html.dark .referral-connections-bar { background: #10213a; }
 html.dark .referral-input,
 html.dark .referral-select,
 html.dark .referral-outreach__item { background: #0c1b30; color: var(--referral-ink); }
@@ -2909,6 +2960,7 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
   .referral-sync__header { flex-direction: column; }
   .referral-tabs,
   .referral-metrics { grid-template-columns: 1fr 1fr; }
+  .referral-connections-bar { align-items: flex-start; flex-direction: column; gap: 0.75rem; }
   .referral-tab { min-height: 0; }
   .referral-target-grid { grid-template-columns: 1fr; }
   .referral-finder__header-action { width: 100%; }

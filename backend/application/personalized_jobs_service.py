@@ -1530,7 +1530,7 @@ class PersonalizedJobsService:
         evaluation_payload["match_intelligence"] = match_intelligence
         include_pro = normalize_plan_id(plan_id) != DEFAULT_PLAN_ID
         applicant_intelligence = build_applicant_competition(row, include_pro=include_pro)
-        return _job_projection(
+        result = _job_projection(
             row,
             disposition,
             evaluation_payload,
@@ -1540,6 +1540,10 @@ class PersonalizedJobsService:
             applicant_intelligence,
             {"state": "pending", "score": None},
         )
+        result["network_discovery"] = self.store.get_published_network_discovery(
+            _text(row.get("current_version_id")), _text(row.get("content_hash"))
+        )
+        return result
 
     def _company_job_projection(
         self,

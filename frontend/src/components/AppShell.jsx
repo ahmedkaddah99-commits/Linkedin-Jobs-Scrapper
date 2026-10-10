@@ -77,7 +77,7 @@ const navItems = [
     ],
   },
   {
-    label: "Referrals",
+    label: "Connections",
     icon: "group_add",
     to: "/referrals",
     matchers: [{ path: "/referrals", end: false }],

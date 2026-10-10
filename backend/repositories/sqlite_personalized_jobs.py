@@ -1848,6 +1848,47 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             ).fetchone()
         return _row_payload(row) if row is not None else None
 
+    def get_published_network_discovery(self, version_id: str, content_hash: str) -> dict[str, Any]:
+        with database_read_session(self.db_path) as connection:
+            row = connection.execute(
+                "SELECT state,candidates_json,updated_at FROM published_job_network_discovery "
+                "WHERE version_id=? AND content_hash=?",
+                (str(version_id), str(content_hash)),
+            ).fetchone()
+        if row is None:
+            return {"state": "pending", "candidates": []}
+        candidates = _decode(row["candidates_json"], [])
+        return {"state": str(row["state"] or "unavailable"),
+                "candidates": candidates if isinstance(candidates, list) else [],
+                "updated_at": str(row["updated_at"] or "")}
+
+    def reserve_email_lookup(self, user_id: str, handle: str) -> dict[str, str]:
+        day = datetime.now(timezone.utc).date().isoformat()
+        timestamp = utc_now_iso()
+        def reserve(connection):
+            prior = connection.execute(
+                "SELECT state,email FROM job_email_lookups WHERE user_id=? AND lookup_day=? AND linkedin_handle=?",
+                (user_id, day, handle),
+            ).fetchone()
+            if prior is not None:
+                return {"state": str(prior["state"]), "email": str(prior["email"] or "")}
+            inserted = connection.execute(
+                "INSERT OR IGNORE INTO job_email_lookups(user_id,lookup_day,linkedin_handle,state,updated_at) "
+                "SELECT ?,?,?,'pending',? WHERE (SELECT COUNT(*) FROM job_email_lookups "
+                "WHERE user_id=? AND lookup_day=?) < 2 RETURNING state",
+                (user_id, day, handle, timestamp, user_id, day),
+            ).fetchone()
+            return {"state": "reserved" if inserted is not None else "limit_reached"}
+        return self._run_transaction(reserve)
+
+    def complete_email_lookup(self, user_id: str, handle: str, state: str, email: str = "") -> None:
+        day = datetime.now(timezone.utc).date().isoformat()
+        self._run_transaction(lambda connection: connection.execute(
+            "UPDATE job_email_lookups SET state=?,email=?,updated_at=? "
+            "WHERE user_id=? AND lookup_day=? AND linkedin_handle=?",
+            (state, email, utc_now_iso(), user_id, day, handle),
+        ))
+
     def get_published_company_rows(self, company_id: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         with self._connect() as connection:
             publication_id = self._head_publication_id(connection)

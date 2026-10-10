@@ -1219,7 +1219,65 @@ class BackendApplication:
         return self._personalized_jobs_service.delete_filter_set(user_id, filter_set_id)
 
     def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
-        return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+        detail = self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+        if detail is None:
+            return None
+        company = " ".join(str(detail.get("company") or "").casefold().split())
+        connections = []
+        shared_background = []
+        for contact in self.list_referral_contacts(user_id):
+            if not contact.is_active:
+                continue
+            payload = {"contact_id": contact.contact_id, "name": contact.name,
+                       "company": contact.primary_company(), "role": next(
+                           (str(item.get("role_title") or "") for item in contact.companies
+                            if str(item.get("company_name") or "").casefold() == company), ""),
+                       "linkedin_url": contact.linkedin_url,
+                       "connection_strength": contact.relationship_note}
+            if company and any(" ".join(name.casefold().split()) == company for name in contact.company_names()):
+                connections.append(payload)
+                if contact.metadata.get("shared_school") or contact.metadata.get("shared_previous_company"):
+                    shared_background.append({**payload, "shared_school": str(contact.metadata.get("shared_school") or ""),
+                                              "shared_previous_company": str(contact.metadata.get("shared_previous_company") or "")})
+        profiles = self.list_career_profiles(user_id=user_id)
+        if profiles:
+            profile = profiles[0].to_dict() if hasattr(profiles[0], "to_dict") else {}
+            metadata = profile.get("metadata") if isinstance(profile.get("metadata"), Mapping) else {}
+            def labels(items, keys):
+                return [str(item.get(key) or "").strip() for item in (items or []) if isinstance(item, Mapping)
+                        for key in keys if len(str(item.get(key) or "").strip()) >= 5]
+            schools = labels(metadata.get("education"), ("school", "institution", "university"))
+            previous_companies = labels(metadata.get("experience") or metadata.get("recent_experience"),
+                                        ("company", "employer"))
+            for candidate in detail.get("network_discovery", {}).get("candidates", []):
+                evidence = str(candidate.get("evidence_snippet") or "").casefold()
+                school = next((name for name in schools if name.casefold() in evidence), "")
+                previous = next((name for name in previous_companies if name.casefold() in evidence), "")
+                if school or previous:
+                    shared_background.append({**candidate, "shared_school": school,
+                                              "shared_previous_company": previous})
+        detail["network_connections"] = connections
+        detail["shared_background_connections"] = shared_background
+        return detail
+
+    def find_personalized_job_contact_email(self, user_id: str, posting_id: str, linkedin_url: str) -> dict[str, str]:
+        if self._personalized_jobs_service.detail(user_id, posting_id) is None:
+            raise KeyError("job_not_found")
+        from backend.capabilities.networking.email_lookup import find_work_email, linkedin_handle
+        handle = linkedin_handle(linkedin_url)
+        if not os.getenv("HUNTER_API_KEY"):
+            return {"state": "unavailable", "reason": "email_provider_not_configured"}
+        store = self._personalized_jobs_service.store
+        reserved = store.reserve_email_lookup(user_id, handle)
+        if reserved["state"] != "reserved":
+            return reserved
+        try:
+            result = find_work_email(linkedin_url)
+        except Exception:
+            store.complete_email_lookup(user_id, handle, "unavailable")
+            raise
+        store.complete_email_lookup(user_id, handle, result["state"], result.get("email", ""))
+        return result
 
     def process_next_personalized_intelligence(
         self,

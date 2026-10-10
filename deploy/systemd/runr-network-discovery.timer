@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh published job network candidates
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=30min
+Unit=runr-network-discovery.service
+
+[Install]
+WantedBy=timers.target

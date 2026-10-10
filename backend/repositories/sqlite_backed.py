@@ -1436,6 +1436,7 @@ class SqliteAuthRepository(_SqliteStore):
             connection.execute("DELETE FROM assisted_apply_connections WHERE user_id = ?", (user_id,))
             connection.execute("DELETE FROM candidate_assets WHERE user_id = ?", (user_id,))
             connection.execute("DELETE FROM candidate_documents WHERE user_id = ?", (user_id,))
+            connection.execute("DELETE FROM job_email_lookups WHERE user_id = ?", (user_id,))
             row_count = connection.execute("DELETE FROM users WHERE user_id = ?", (user_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"User '{user_id}' not found.")

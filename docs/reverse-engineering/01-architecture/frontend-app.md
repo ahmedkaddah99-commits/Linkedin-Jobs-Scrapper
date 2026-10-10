@@ -617,6 +617,18 @@ git grep -n '"/analytics/events"' 58a96674 -- frontend backend/api/routes
 7. Signed-in visual verification of `/jobs` (U10).
 8. Owner decision on the unmerged feature-branch frontend commits (U5).
 
+## Connections in job details (2026-10-11)
+
+The Connections page combines manually saved and LinkedIn imported contacts.
+The editor accepts a name and connection strength; existing company and role
+facts are displayed from the saved contact. Each loaded Jobs detail now shows
+version-bound likely public profiles, saved contacts at the employer, and
+evidence-backed shared school or previous-company signals. The LinkedIn action
+opens an editable, copyable connection note before opening the profile. The
+email action calls the authenticated job API; an unconfigured provider and
+unfound address have explicit empty states. The UI makes no comparative
+response-rate claim.
+
 ## Compact Jobs tools rail (2026-10-08)
 
 The supplied compact layout replaces the large setup cards with three small
