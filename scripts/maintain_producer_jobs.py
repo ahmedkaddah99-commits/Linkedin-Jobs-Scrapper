@@ -22,7 +22,7 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
     db.execute('PRAGMA foreign_keys=ON')
     # Producer payloads are large. Keep SQLite's page cache and temporary JSON
     # work off the process heap so this maintenance job stays small on the VPS.
-    db.execute('PRAGMA cache_size=-16384')
+    db.execute('PRAGMA cache_size=-4096')
     db.execute('PRAGMA temp_store=FILE')
     db.execute('PRAGMA mmap_size=0')
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -80,7 +80,7 @@ def main():
     parser.add_argument('--state-root',type=Path,default=Path('/srv/runr/state/active'))
     parser.add_argument('--lock-root',type=Path,default=Path('/srv/runr/state/locks'))
     parser.add_argument('--apply',action='store_true')
-    parser.add_argument('--batch-size',type=int,default=100)
+    parser.add_argument('--batch-size',type=int,default=10)
     parser.add_argument('--max-seconds',type=int,default=30)
     parser.add_argument('--receipt',type=Path)
     args = parser.parse_args()
@@ -103,6 +103,7 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
 
 
 
