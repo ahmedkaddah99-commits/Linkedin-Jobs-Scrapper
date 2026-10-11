@@ -15,7 +15,7 @@ current deployment instructions.
 The storage budget timer runs hourly through `/opt/runr-ops/run-storage-budget.sh`.
 It overwrites a fixed-size receipt under `/var/lib/runr/storage-budget/`, publishes
 Alloy textfile metrics, and flags free space below 48 GiB, exports above 6 GiB or
-release copies above 4 GiB. It never deletes unarchived files. Historical cleanup
+release copies above 6 GiB. It never deletes unarchived files. Historical cleanup
 requires a verified local archive before source removal; see
 [the cleanup inventory](../../reports/runr-cleanup-inventory-2026-10-11.md).
 Acquisition backups retain two local and seven remote generations; LinkedIn

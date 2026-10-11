@@ -13,12 +13,17 @@ bounded policy until an automatic, verified replacement destination is available
 
 Deployed `/opt/runr-ops/run-storage-budget.sh` and the hourly
 `runr-storage-budget.timer`: fixed-size receipt/metrics, 48 GiB minimum headroom,
-6 GiB export budget and 4 GiB release budget. These limits flag excess history;
+6 GiB export budget and 6 GiB release budget. These limits flag excess history;
 they do not automatically delete unarchived files. Existing acquisition backups
 retain two local and seven remote generations, LinkedIn exports retain two
 generations, and journald is capped at 1 GiB. The historical architecture note
 was replaced by a recovery pointer; stale subsystem baseline claims received
 current corrections. Product services were not replaced by the cleanup deployment.
+
+The release warning budget was increased from 4 to 6 GiB after the separate
+external-jobs deployment added a referenced release, bringing preserved release
+storage to 4.27 GiB. This allows current component references and rollback copies;
+it does not authorize additional unverified deletion.
 
 ### Verified release cleanup
 
