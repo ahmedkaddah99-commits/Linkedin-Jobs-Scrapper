@@ -13,7 +13,15 @@ a published URL preserves its existing enrichment without another provider call.
 Imported IDs resolve through the existing job detail, disposition, reporting,
 resume review and document worker paths. They never enter the public catalog.
 
-Fetch failures return `manual_required`, a short message and bounded extracted
+`preview: true` returns `review_required` and editable extracted fields without
+persisting a job. Nemo separates title, company, location and grounded metadata;
+unknown metadata stays blank. The labelled employer parser supports Siemens/Avature
+headings and metadata. Confirmation uses `manual: true` and the shared enrichment pipeline.
+Migration `080_external_job_preview_quota` gives previews a separate daily counter,
+so the final allowed preview can still be saved. Preview fetch failures use the
+same drawer with a short message and bounded extracted fields.
+
+Legacy direct fetch failures return `manual_required`, a short message and bounded extracted
 fields. Manual submissions require a job title, at least 100 description
 characters and job-content signals. Limits are URL 2,048; title/company 200;
 location 300; description 50,000. Network/model attempts are limited to 20 per

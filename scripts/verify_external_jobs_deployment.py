@@ -71,7 +71,22 @@ def main():
         assert status == 200 and manual.get('job'), ('manual', status)
         status, _ = request(tokens[0], 'POST', '/quick-apply/runs', {})
         assert status == 404, ('retired endpoint', status)
+        siemens_url = 'https://jobs.siemens.com/en_US/externaljobs/JobDetail/524459'
+        status, preview = request(tokens[0], 'POST', '/personalized-jobs/import', {'url': siemens_url, 'preview': True})
+        assert status == 200 and preview['state'] == 'review_required', ('preview', status)
+        fields = preview['fields']
+        assert fields['title'].startswith('Advanced Digital Engineer'), ('title', fields['title'])
+        assert fields['company'] == 'Siemens AG', ('company', fields['company'])
+        assert 'Erlangen' in fields['location'], ('location', fields['location'])
+        assert fields['employment_type'] == 'full_time', ('type', fields['employment_type'])
+        assert fields['experience_level'] == 'mid', ('level', fields['experience_level'])
+        assert fields['work_arrangement'] == 'onsite', ('work', fields['work_arrangement'])
+        assert preview['message'] == '', ('unexpected warning', preview['message'])
+        status, confirmed = request(tokens[0], 'POST', '/personalized-jobs/import', {**fields, 'manual': True})
+        assert status == 200 and confirmed.get('job'), ('confirmation', status)
+        assert confirmed['job']['description_intelligence']['model'] == 'mistralai/mistral-nemo'
         results = {'state': 'passed', 'scrape': 'passed', 'nemo_enrichment': 'passed',
+                   'siemens_ai_preview_and_confirmation': 'passed',
                    'shared_reader_api': 'passed', 'owner_isolation': 'passed', 'save': 'passed',
                    'external_list': 'passed', 'non_job_fallback': 'passed', 'manual_completion': 'passed',
                    'quick_apply_retired': 'passed', 'release': os.getenv('RUNR_RELEASE_COMMIT')}

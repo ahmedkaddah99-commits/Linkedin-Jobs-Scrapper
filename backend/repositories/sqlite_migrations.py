@@ -4269,6 +4269,15 @@ MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
 ))
 
 
+def _apply_external_job_preview_quota(connection):
+    connection.execute('ALTER TABLE external_job_import_attempts ADD COLUMN previews INTEGER NOT NULL DEFAULT 0')
+
+
+MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
+    '080_external_job_preview_quota', 'Keep preview and confirmation quotas independent.', _apply_external_job_preview_quota,
+))
+
+
 def current_migration_head() -> str:
     """Return the registry head used by release compatibility checks."""
 
