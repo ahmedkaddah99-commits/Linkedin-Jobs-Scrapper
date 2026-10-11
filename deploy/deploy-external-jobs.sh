@@ -69,13 +69,27 @@ systemd-run --wait --pipe --collect --unit="runr-external-migrate-$short" \
 cp /etc/nginx/sites-available/runr-public "$evidence/nginx-before.conf"
 for role in api worker; do
     systemctl cat "runr-$role-candidate.service" > "$evidence/$role-before.service"
+    dropin="/etc/systemd/system/runr-$role-candidate.service.d/external-jobs-release.conf"
+    if [[ -f "$dropin" ]]; then cp "$dropin" "$evidence/$role-before-dropin.conf"; fi
 done
+if [[ -f /etc/runr/external-jobs-release.env ]]; then
+    cp /etc/runr/external-jobs-release.env "$evidence/release-before.env"
+fi
 switched=false
 rollback() {
     if [[ "$switched" == true ]]; then
         cp "$evidence/nginx-before.conf" /etc/nginx/sites-available/runr-public
-        rm -f /etc/systemd/system/runr-api-candidate.service.d/external-jobs-release.conf
-        rm -f /etc/systemd/system/runr-worker-candidate.service.d/external-jobs-release.conf
+        for role in api worker; do
+            dropin="/etc/systemd/system/runr-$role-candidate.service.d/external-jobs-release.conf"
+            if [[ -f "$evidence/$role-before-dropin.conf" ]]; then
+                cp "$evidence/$role-before-dropin.conf" "$dropin"
+            else
+                rm -f "$dropin"
+            fi
+        done
+        if [[ -f "$evidence/release-before.env" ]]; then
+            cp "$evidence/release-before.env" /etc/runr/external-jobs-release.env
+        fi
         systemctl daemon-reload
         systemctl restart runr-api-candidate.service runr-worker-candidate.service
         nginx -t && systemctl reload nginx

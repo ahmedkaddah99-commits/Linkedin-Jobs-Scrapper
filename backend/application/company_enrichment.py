@@ -142,7 +142,7 @@ class OfficialWebsiteProvider:
             assert_public_official_host(urlparse(final_url).hostname or "")
             headers = dict(response.headers.items())
             try:
-                declared_size = int(str(headers.get("Content-Length") or "").strip())
+                declared_size = int(str(response.headers.get("Content-Length") or "").strip())
             except ValueError:
                 declared_size = 0
             if declared_size > max_bytes:
@@ -150,7 +150,7 @@ class OfficialWebsiteProvider:
             body = bytes(response.read(max_bytes + 1))
             if len(body) > max_bytes:
                 raise LogoValidationError("official_response_too_large")
-            return body, str(headers.get("content-type") or ""), final_url, headers
+            return body, str(response.headers.get("Content-Type") or ""), final_url, headers
 
     @staticmethod
     def _json_ld(html: str) -> Mapping[str, Any]:
