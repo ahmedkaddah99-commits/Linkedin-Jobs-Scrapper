@@ -1,5 +1,15 @@
 import importlib
 
+
+def test_explicit_mid_level_position_survives_model_metadata_omission():
+    from backend.application.catalog_job_filters import validate_classification
+    raw = {'collar': 'white', 'roles': ['Software Engineer'], 'evidence': 'Software Engineer'}
+    source = 'Software Engineer. ' + 'Build reliable customer services. ' * 8
+    result = validate_classification(raw, source + 'This is a full-time mid-level position working on-site in Berlin.')
+    assert result['experience_level'] == ['mid']
+    assert result['source_evidence']['level_evidence'] == 'mid-level position'
+    assert validate_classification(raw, source + 'Collaborate with mid-level colleagues.')['experience_level'] == []
+
 def test_experience_prompts_select_highest_separate_required_minimum():
     from backend.application.catalog_job_filters import classification_prompt, metadata_prompt
     row = {'id': 'job', 'title': 'Analyst', 'description': 'Requirements: 5 years experience. 2 years SQL experience.'}
