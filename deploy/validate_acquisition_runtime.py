@@ -119,6 +119,7 @@ def _validate_state(
         actual_tables = {
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if not str(row[0]).startswith('runr_')
         }
         schema = item.get("schema") or {}
         expected_tables = set(schema.get("tables", {}))
