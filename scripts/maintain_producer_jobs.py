@@ -25,6 +25,11 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
     db.execute('PRAGMA cache_size=-4096')
     db.execute('PRAGMA temp_store=FILE')
     db.execute('PRAGMA mmap_size=0')
+    date_expr = ("coalesce(json_extract(job_json,'$.posted_at_estimated'),json_extract(job_json,'$.first_seen_at'))"
+                 if source == 'linkedin' else
+                 "coalesce(json_extract(payload_json,'$.date_posted'),json_extract(payload_json,'$.first_seen_at'))")
+    db.execute(f"ALTER TABLE jobs ADD COLUMN retention_date TEXT GENERATED ALWAYS AS ({date_expr}) VIRTUAL") if 'retention_date' not in {r[1] for r in db.execute('PRAGMA table_info(jobs)')} else None
+    db.execute('CREATE INDEX IF NOT EXISTS idx_jobs_retention_date ON jobs(retention_date)')
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if apply:
         with db:
@@ -42,7 +47,8 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
     deadline = time.monotonic()+max_seconds
     try:
         while time.monotonic() < deadline:
-            rows = db.execute(f'SELECT rowid,{key},{field} FROM jobs WHERE rowid>? ORDER BY rowid LIMIT ?', (cursor,batch_size)).fetchall()
+            cutoff = (current.date().toordinal() - 30)
+            rows = db.execute(f"SELECT rowid,{key},{field} FROM jobs WHERE rowid>? AND retention_date IS NOT NULL AND date(retention_date) < date(?) ORDER BY rowid LIMIT ?", (cursor, current.date().isoformat(), batch_size)).fetchall()
             if not rows:
                 result['pass_complete'] = True
                 if apply:
