@@ -146,7 +146,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
     { label: "External jobs", icon: "add_link", to: "/external-jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
-    { label: "Refer", icon: "group_add", to: "/refer" },
+    { label: "Connection", icon: "group_add", to: "/refer" },
   ];
   const location = useLocation();
 
@@ -163,7 +163,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
             : link.label === "Documents"
                 ? location.pathname === "/documents" || location.pathname === "/master-cv"
               : location.pathname.startsWith(link.to);
-          return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}{link.label === "Refer" ? <span className="material-symbols-outlined jobs-top-nav__down">expand_more</span> : null}</NavLink>;
+          return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}</NavLink>;
         })}
       </nav>
       <div className="jobs-top-nav__utilities">

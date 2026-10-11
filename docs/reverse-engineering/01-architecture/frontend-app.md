@@ -2,6 +2,30 @@
 
 # Customer web frontend (WS-8)
 
+## Connections workspace correction (2026-10-11)
+
+The `/refer` navigation tab is labelled Connection and has no dropdown arrow.
+`ReferralsPage.jsx` defaults to a full-width connection directory with separate
+name, job title, company and connection-strength columns. Independent name,
+job-title and company searches combine before the 50-row rendering limit.
+Add connection opens an editor with LinkedIn URL, job title, company, notes and
+strength. Notes and strength persist independently in contact metadata through
+the existing authenticated referral endpoints; company/title pairs retain the
+existing companies contract. Editing preserves additional company records and
+import provenance. Sync explicitly invalidates the directory cache.
+
+`connectionDetails.js` separates legacy extension headlines from names where a
+stored headline suffix or profile-URL-confirmed joined boundary establishes the
+split; ambiguous names remain editable. Imported connected dates omit the old
+Message suffix. The extension extractor now separates nested name/headline
+nodes and excludes action text instead of reading the entire profile link as a
+name. Extension source changes require an updated installed extension for future
+syncs; the web compatibility layer immediately handles corroborated old rows.
+
+Focused Node tests cover filtering and legacy repair. Playwright covers the
+add/save payload, filters, desktop/mobile layout and screenshots. The extension
+unit tests cover nested profile links without whitespace.
+
 ## Shared external job reader (2026-10-11)
 
 `/external-jobs/:jobId?` renders the same `PersonalizedJobsPage` and

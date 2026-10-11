@@ -66,7 +66,10 @@ function splitOccupation(value: string): { company: string; position: string } {
 }
 
 function textLinesFrom(element: Element): string[] {
-  return String(element.textContent || "")
+  const copy = element.cloneNode(true) as Element;
+  copy.querySelectorAll("button, time").forEach((node) => node.remove());
+  copy.querySelectorAll("div, p, span, h2, h3").forEach((node) => node.append("\n"));
+  return String(copy.textContent || "")
     .split(/\r?\n/gu)
     .map((line) => line.replace(/\s+/gu, " ").trim())
     .filter(Boolean);
@@ -87,14 +90,14 @@ function connectionFromCard(card: Element, origin: string): LinkedInConnectionRo
     card.querySelector(
       ".mn-connection-card__name, [data-view-name='connection-card-name'], .t-16, h3, h2",
     ),
-  ) || textFrom(profileAnchor.anchor);
+  ) || textLinesFrom(profileAnchor.anchor)[0] || "";
   if (!name) return null;
 
   const occupation = textFrom(
     card.querySelector(
       ".mn-connection-card__occupation, [data-view-name='connection-card-occupation'], .t-14",
     ),
-  ) || textLinesFrom(card).find((line) => line !== name && !/\bconnected\s+on\b/iu.test(line)) || "";
+  ) || textLinesFrom(card).find((line) => line !== name && !/\bconnected\s+on\b/iu.test(line) && !/^(message|connect|remove)$/iu.test(line)) || "";
   const connectedOn = textFrom(
     card.querySelector("time, .mn-connection-card__connection-date, [data-view-name*='connected' i]"),
   ) || connectedDateFromLines(textLinesFrom(card));
