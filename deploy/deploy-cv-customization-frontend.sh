@@ -57,10 +57,20 @@ path.write_text(text.replace(sys.argv[2],sys.argv[3]))
 PY
 nginx -t
 systemctl reload nginx
-curl --fail --silent https://app.userunr.com/runr-release.json > "$evidence/frontend-release.json"
 "$python_bin" - "$evidence/frontend-release.json" "$commit" <<'PY'
-import json,pathlib,sys
-assert json.loads(pathlib.Path(sys.argv[1]).read_text())['commit']==sys.argv[2]
+import json,pathlib,sys,time,urllib.request
+for attempt in range(15):
+    try:
+        with urllib.request.urlopen('https://app.userunr.com/runr-release.json', timeout=10) as response:
+            payload=response.read()
+        if json.loads(payload)['commit']==sys.argv[2]:
+            pathlib.Path(sys.argv[1]).write_bytes(payload)
+            break
+    except (OSError, ValueError, KeyError):
+        pass
+    time.sleep(2)
+else:
+    raise SystemExit('Public release did not converge after nginx reload')
 PY
 curl --fail --silent https://app.userunr.com/jobs > "$evidence/jobs.html"
 trap - ERR
