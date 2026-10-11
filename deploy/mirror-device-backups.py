@@ -83,7 +83,7 @@ def download(item):
     partial.replace(target)
     return item['key']
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
     verified = list(pool.map(download, manifest['objects']))
 receipt = {'verified_at': time.time(), 'objects': [
     {k: obj[k] for k in ('key', 'bytes', 'sha256')} for obj in manifest['objects']]}
