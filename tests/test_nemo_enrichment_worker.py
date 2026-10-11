@@ -37,6 +37,25 @@ def test_uncertain_stage_spend_is_not_replayed(tmp_path):
  client.db.close()
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_english_overview_only_rule_fallback_requires_enrichment(self):
+  import tempfile
+  app=self.classified();store=app.repositories.personalized_jobs_store
+  with tempfile.TemporaryDirectory() as directory, store._connect() as c:
+   row=c.execute('SELECT version_id,canonical_job_id,content_hash FROM job_enrichment_queue LIMIT 1').fetchone()
+   summary=json.dumps({'overview':'We are looking for talented people to join our team.','output_language':'en'})
+   c.execute('INSERT INTO job_description_intelligence VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+             (row['version_id'],row['canonical_job_id'],row['content_hash'],summary,'{}','{}','runr_rules','rules','runr_description_v1','now','now','now'))
+   c.execute("UPDATE job_enrichment_queue SET state='completed' WHERE version_id=?",(row['version_id'],))
+   def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
+   client=worker.NemoClient(Path(directory)/'ledger.db',10)
+   with patch.object(worker,'execute',sql):
+    self.assertEqual(worker.requeue_repairable(client,10),1)
+    token,rows=worker.claim(10,maintain=False)
+    target=next(value for value in rows if value['current_version_id']==row['version_id'])
+    self.assertFalse(target['description_ready'])
+    self.assertFalse(worker.complete_if_ready(target,token))
+   client.db.close()
+
  def test_termination_drains_claimed_jobs_without_claiming_more(self):
   import tempfile
   from unittest.mock import Mock
