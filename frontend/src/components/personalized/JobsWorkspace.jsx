@@ -110,16 +110,12 @@ function ReferralSection({ onOpenNetwork }) {
 
 function CatalogStateBanner({ error, feed, loading }) {
   if (error) return null;
-  const hasPendingIntelligence = Array.isArray(feed?.jobs) && feed.jobs.some((job) => (
-    String(job?.match_intelligence?.state || job?.evaluation?.match_intelligence?.state || "").toLowerCase() === "pending"
-  ));
   // While a refresh runs, an already loaded feed stays visible; the banner
   // says results are being updated instead of implying an empty catalog.
-  const state = loading && !feed ? "loading" : loading && feed ? "refreshing" : error ? "failure" : hasPendingIntelligence ? "partial" : String(feed?.evaluation?.state || "unavailable");
+  const state = loading && !feed ? "loading" : loading && feed ? "refreshing" : error ? "failure" : String(feed?.evaluation?.state || "unavailable");
   const labels = {
     loading: "Loading the shared jobs catalog…",
     refreshing: "Updating results with the latest catalog…",
-    partial: "Some job fields are unknown. Runr is showing only verified values.",
     stale: "The shared catalog is stale. Results remain visible with their last verification time.",
     unavailable: "The shared jobs catalog is currently unavailable.",
     failure: "The shared jobs catalog could not be loaded.",
