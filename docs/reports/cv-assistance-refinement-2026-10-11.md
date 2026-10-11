@@ -23,3 +23,11 @@ The owner is on Free; the deployment config enables the explicitly requested pre
 Backend tests cover exact evidence, source preservation, selected sections, unsupported keyword/number rejection, quick scope, asset ownership, revision conflicts, paid gating and preview scope. Frontend tests cover full-description extraction; browser checks cover desktop/mobile generation, supported selections, side editing, draft recovery, export and expandable connection cards. Final test counts and deployment evidence are recorded after activation.
 
 Browser connector connected, but navigation to Runr was denied because its admin-enforced security policy could not be verified. No bypass was attempted. Signed-in production browser interaction is not claimed; local Playwright tests and direct provider/server verification are separate evidence.
+
+## Deployment verification
+
+Deployed `687599a4a1bb5805a94a16ec529685799d39528b`; public release generated at 19:12 Europe/Berlin. Public metadata matches, readiness reports ready with the existing SQLite/R2 targets, and nginx, API and customer worker are active. The deployed route registry dispatched `cv_customization.generate` with the owner context and actual PERI job/CV: DeepSeek returned 17 keywords and changed summary and experience. This exercised the deployed handler and provider, not browser authentication. Private receipt: `/srv/runr/ops/cv-live-v2/deployed-route.json`.
+
+Final checks: 194 frontend tests; lint, production build and production-mode check; 10 desktop/mobile browser checks; 28 targeted backend tests plus 4 subtests covering CV assistance, environment validation and production SQLite.
+
+The initial API activation failed because this branch lacked the SQLite compatibility code already running in release `96868ca0`. The previous API was restored, then the four deployed compatibility modules and their tests were reconciled into this branch. Deployment now validates the live environment and route imports before restart. The corrected activation passed. No database migration, worker restart or acquisition timer changes were performed. Concurrent profile-completion changes remain outside this release.
