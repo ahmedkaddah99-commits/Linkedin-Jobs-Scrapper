@@ -44,7 +44,7 @@ def maintain_job_lifecycle(db_path, *, apply=False, batch_size=100, max_batches=
         # Reuse the existing storage-maintenance progress table.
         cursor_row = db.execute("SELECT last_rowid FROM runr_catalog_storage_maintenance WHERE name='job_lifecycle'").fetchone()
         cursor = int(cursor_row[0]) if cursor_row else 0
-        for _ in range(max_batches if apply else 1):
+        for _ in range(max_batches):
             if time.monotonic() >= deadline:
                 break
             if apply:

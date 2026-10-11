@@ -21,6 +21,7 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
     if not row.get("filters_ready") and profession_override(row.get('title'), source) == ('blue', []):
         result['filters'] = validate_classification(
             {'collar': 'blue', 'roles': [], 'evidence': row['title']}, row['title'] + ' ' + source, row['title'])
+        result['filters']['classification_method'] = 'rules'
         return result
     # Build the grounded extraction prompt locally, then make one combined request.
     description_prompt = []

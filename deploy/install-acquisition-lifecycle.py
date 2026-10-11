@@ -40,6 +40,8 @@ with connect_database(Path(values['SQLITE_DATABASE_PATH'])) as db:
 assert values.get('OPENROUTER_API_KEY'), 'OpenRouter configuration missing'
 
 commands = {
+    'runr-acquisition-linkedin': str(release / 'deploy/run-acquisition-source.sh')+' linkedin',
+    'runr-acquisition-employer': str(release / 'deploy/run-acquisition-source.sh')+' employer',
     'runr-acquisition-publisher': str(release / 'deploy/run-acquisition-publisher.sh'),
     'runr-acquisition-manifest-refresh': str(release / 'deploy/refresh-acquisition-manifest.sh'),
     'runr-job-descriptions': '/usr/bin/flock -E 75 -n /srv/runr/state/description-worker.lock /opt/runr/.venv/bin/python scripts/process_catalog_enrichment.py --workers 16 --max-jobs 4096 --runtime-seconds 1800 --daily-budget 10',
@@ -61,5 +63,7 @@ unit = Path('/etc/systemd/system/runr-job-lifecycle.service')
 unit.write_text('[Unit]\nDescription=Runr rolling thirty-day job retention\n[Service]\nType=oneshot\nUser=runr-acquisition\nGroup=runr-acquisition\nSupplementaryGroups=runr-database\nUMask=0007\nWorkingDirectory='+str(release)+'\nEnvironmentFile='+str(env_path)+
     '\nExecStart=/usr/bin/flock -E 75 -n /srv/runr/state/locks/publisher.lock /opt/runr/.venv/bin/python scripts/maintain_job_lifecycle.py --apply --batch-size 500 --max-batches 1000 --max-seconds 120 --receipt /srv/runr/exports/receipts/job-lifecycle-latest.json\nSuccessExitStatus=75\nTimeoutStartSec=180\nMemoryMax=1G\nCPUQuota=100%\n')
 Path('/etc/systemd/system/runr-job-lifecycle.timer').write_text('[Unit]\nDescription=Runr job lifecycle maintenance\n[Timer]\nOnBootSec=2min\nOnUnitInactiveSec=15min\n[Install]\nWantedBy=timers.target\n')
+Path('/etc/systemd/system/runr-producer-retention.service').write_text('[Unit]\nDescription=Runr source job payload retention\n[Service]\nType=oneshot\nUser=runr-acquisition\nGroup=runr-acquisition\nUMask=0007\nWorkingDirectory='+str(release)+'\nExecStart=/opt/runr/.venv/bin/python scripts/maintain_producer_jobs.py --apply --max-seconds 120 --receipt /srv/runr/exports/receipts/producer-retention-latest.json\nSuccessExitStatus=75\nTimeoutStartSec=300\nMemoryMax=1G\nCPUQuota=100%\n')
+Path('/etc/systemd/system/runr-producer-retention.timer').write_text('[Unit]\nDescription=Runr source payload retention schedule\n[Timer]\nOnBootSec=3min\nOnUnitInactiveSec=1h\n[Install]\nWantedBy=timers.target\n')
 subprocess.run(['systemctl','daemon-reload'], check=True)
 print(json.dumps({'installed':str(release),'commit':commit,'evidence':str(evidence),'timers_resumed':False,'storage':'r2'}))

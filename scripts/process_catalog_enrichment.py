@@ -214,6 +214,7 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
     candidates = execute("""SELECT j.canonical_job_id,q.version_id AS current_version_id,j.title,j.canonical_url,j.first_seen_at,
         CASE WHEN j.current_version_id=q.version_id THEN 1 ELSE 0 END AS version_is_current,
         q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
+        CASE WHEN f.content_hash=v.content_hash AND json_valid(f.filters_json) THEN json_extract(f.filters_json,'$.collar') END AS saved_collar,
         CASE WHEN f.content_hash=v.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
         CASE WHEN q.error_code='english_description_repair' THEN 0
         WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
@@ -243,7 +244,7 @@ def save_stage(row: dict, token: str, output: dict) -> None:
             filters_json=excluded.filters_json,model=excluded.model,prompt_version=excluded.prompt_version,
             generated_at=excluded.generated_at RETURNING version_id""",
             (row["current_version_id"], row["canonical_job_id"], row["content_hash"], json.dumps(filters, ensure_ascii=False),
-             NEMO_MODEL, FILTER_PROMPT, timestamp, *ownership))
+             'runr_rules' if filters.get('classification_method') == 'rules' else NEMO_MODEL, FILTER_PROMPT, timestamp, *ownership))
     if "description" in output:
         d = output["description"]
         cached = execute('SELECT structured_json FROM job_description_intelligence WHERE version_id=? AND content_hash=?',
@@ -325,9 +326,9 @@ def process(row: dict, token: str, generate) -> str:
                     (reason, now(), row['current_version_id'], token))
             return reason
         request = (lambda prompt: generate.for_version(row['current_version_id'], row['content_hash'], prompt)) if isinstance(generate, NemoClient) else generate
-        output = enrich_version(row, request)
+        output = {} if row.get('saved_collar') == 'blue' else enrich_version(row, request)
         save_stage(row, token, output)
-        if output.get('filters', {}).get('collar') == 'blue':
+        if output.get('filters', {}).get('collar') == 'blue' or row.get('saved_collar') == 'blue':
             execute("UPDATE job_enrichment_queue SET state='completed',error_code='blue_collar_excluded',gap_pass_attempted=2,lease_token='',lease_expires_at='',updated_at=? WHERE version_id=? AND lease_token=?",
                     (now(), row['current_version_id'], token))
             return 'blue_collar_excluded'
@@ -342,7 +343,7 @@ def process(row: dict, token: str, generate) -> str:
             "description_has_no_supported_facts", "function_missing"}:
             code = str(exc)
         state = code if code in {"source_missing", "source_incomplete"} else "pending"
-        if isinstance(exc, ValueError):
+        if isinstance(exc, ValueError) and code not in {'source_missing','source_incomplete'}:
             state = 'review_required'
             if str(exc) in {'provider_request_already_attempted', 'description_output_not_english'}:
                 code = str(exc)
