@@ -1112,7 +1112,7 @@ def _seed_producer_states(tmp_path):
             "seniority": "mid",
             "company_logo": "https://alpha.example/logo.png",
             "company_enrichment": "verified",
-            "last_seen_at": "2026-09-10T00:00:00Z",
+            "last_seen_at": datetime.now(timezone.utc).isoformat(),
             "lifecycle_status": "active",
             "source": "linkedin",
             "run_id": "li-run-1",
@@ -1156,7 +1156,7 @@ def _seed_producer_states(tmp_path):
                     "seniority": "mid",
                     "company_logo": "https://alpha.example/logo.png",
                     "company_enrichment": "{}",
-                    "last_seen_at": "2026-09-10T00:00:00Z",
+                    "last_seen_at": datetime.now(timezone.utc).isoformat(),
                 }
             ],
             status="completed",

@@ -8,7 +8,14 @@ from backend.bootstrap import create_backend
 from backend.repositories.sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 from scripts.process_published_job_descriptions import next_batch, run, save_batch
 from scripts.backfill_published_job_descriptions_rules import run_rules_backfill
-from tests.test_phase_c_personalized_jobs import _seed_catalog
+from tests.test_phase_c_personalized_jobs import _seed_catalog as _seed_jobs
+
+
+def _seed_catalog(app, **kwargs):
+    from backend.domain.models import UserRecord
+    for user_id in ('user-a','user-b'):
+        app.repositories.auth_repository.upsert_user(UserRecord(user_id=user_id,email=user_id+'@example.com'))
+    _seed_jobs(app, **kwargs)
 
 
 def test_pilot_accepts_multiple_sections_per_source_and_hides_invalid_numeric_output():

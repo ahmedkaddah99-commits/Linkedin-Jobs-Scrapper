@@ -19,7 +19,7 @@ from uuid import uuid4
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
-from backend.application.catalog_enrichment import attach_source_metadata, enrich_version
+from backend.application.catalog_enrichment import EnrichmentStageError, attach_source_metadata, enrich_version
 from backend.application.enrichment_field_pass import missing_fields, supplement
 from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
 from backend.application.vps_job_descriptions import NEMO_MODEL
@@ -108,6 +108,7 @@ class NemoClient:
         self.db.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
         self.db.execute('CREATE TABLE IF NOT EXISTS translations(key TEXT PRIMARY KEY, passages_json TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS version_requests(version_id TEXT,content_hash TEXT,state TEXT,response_json TEXT,PRIMARY KEY(version_id,content_hash))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS stage_requests(version_id TEXT,content_hash TEXT,stage TEXT,state TEXT,response_json TEXT,PRIMARY KEY(version_id,content_hash,stage))')
         self.db.commit()
 
     def for_version(self, version_id: str, content_hash: str, prompt: str) -> dict:
@@ -132,6 +133,31 @@ class NemoClient:
         with self.lock:
             self.db.execute("UPDATE version_requests SET state='received',response_json=? WHERE version_id=? AND content_hash=?",
                             (json.dumps(result, ensure_ascii=False), version_id, content_hash))
+            self.db.commit()
+        return result
+
+    def for_stage(self, version_id, content_hash, stage, prompt):
+        """One bounded repair per stage, replaying paid output after interruptions."""
+        with self.lock:
+            prior = self.db.execute('SELECT state,response_json FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?',
+                                    (version_id, content_hash, stage)).fetchone()
+            if prior:
+                if prior[0] == 'received':
+                    return json.loads(prior[1])
+                raise ValueError('provider_request_already_attempted')
+            self.db.execute("INSERT INTO stage_requests VALUES(?,?,?,'attempted',NULL)", (version_id, content_hash, stage))
+            self.db.commit()
+        try:
+            result = self(prompt)
+        except RuntimeError as error:
+            if str(error) == 'daily_budget_exhausted':
+                with self.lock:
+                    self.db.execute('DELETE FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (version_id, content_hash, stage))
+                    self.db.commit()
+            raise
+        with self.lock:
+            self.db.execute("UPDATE stage_requests SET state='received',response_json=? WHERE version_id=? AND content_hash=? AND stage=?",
+                            (json.dumps(result, ensure_ascii=False), version_id, content_hash, stage))
             self.db.commit()
         return result
 
@@ -206,7 +232,12 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
     rows = execute("""UPDATE job_enrichment_queue INDEXED BY sqlite_autoindex_job_enrichment_queue_1 SET state='processing',attempts=attempts+1,
         lease_token=?,lease_expires_at=?,updated_at=? WHERE version_id IN (
         SELECT q.version_id FROM job_enrichment_queue q
-        WHERE q.state='pending' AND q.next_attempt_at<=? ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
+        WHERE q.state='pending' AND q.next_attempt_at<=?
+        AND EXISTS(SELECT 1 FROM canonical_jobs j JOIN acquisition_publication_jobs pj USING(canonical_job_id)
+            JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id
+            WHERE j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
+            AND j.lifecycle_state<>'expired')
+        ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
         AND state='pending' RETURNING version_id""", (token, lease, timestamp, timestamp, limit))
     if not rows:
         return token, []
@@ -326,6 +357,8 @@ def process(row: dict, token: str, generate) -> str:
                     (reason, now(), row['current_version_id'], token))
             return reason
         request = (lambda prompt: generate.for_version(row['current_version_id'], row['content_hash'], prompt)) if isinstance(generate, NemoClient) else generate
+        if isinstance(generate, NemoClient):
+            request.for_stage = lambda stage, prompt: generate.for_stage(row['current_version_id'], row['content_hash'], stage, prompt)
         output = {} if row.get('saved_collar') == 'blue' else enrich_version(row, request)
         save_stage(row, token, output)
         if output.get('filters', {}).get('collar') == 'blue' or row.get('saved_collar') == 'blue':
@@ -335,6 +368,8 @@ def process(row: dict, token: str, generate) -> str:
         execute("UPDATE job_enrichment_queue SET gap_pass_attempted=2 WHERE version_id=? AND lease_token=?", (row['current_version_id'], token))
         return "completed" if complete_if_ready(row,token) else "superseded"
     except Exception as exc:
+        if getattr(exc, 'partial', None):
+            save_stage(row, token, exc.partial)
         code = str(exc) if str(exc) in {"source_missing", "source_incomplete"} else ("daily_budget_exhausted" if str(exc) == "daily_budget_exhausted" else type(exc).__name__)
         if isinstance(exc, HTTPError):
             code = "provider_http_" + str(exc.code)
@@ -371,6 +406,32 @@ def process_isolated(row: dict, token: str, generate) -> str:
         return "persistence_" + code
 
 
+def requeue_repairable(generate, limit):
+    """Revisit cached rejected output once; never retry missing source or uncertain spend."""
+    rows = execute('''SELECT q.version_id,q.content_hash,q.error_code FROM job_enrichment_queue q
+        JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
+        WHERE q.state='review_required' AND q.error_code IN
+            ('filter_validation_failed','description_output_not_english','description_has_no_supported_facts')
+        AND j.lifecycle_state<>'expired'
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h USING(publication_id)
+            WHERE pj.canonical_job_id=j.canonical_job_id)
+        ORDER BY q.updated_at LIMIT ?''', (limit,))
+    selected=[]
+    with generate.lock:
+        for row in rows:
+            key=(row['version_id'],row['content_hash'])
+            prior=generate.db.execute('SELECT state FROM version_requests WHERE version_id=? AND content_hash=?',key).fetchone()
+            stage='classification_v1' if row['error_code']=='filter_validation_failed' else 'description_v1'
+            repaired=generate.db.execute('SELECT 1 FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (*key,stage)).fetchone()
+            if prior and prior[0]=='received' and not repaired:
+                selected.append(row['version_id'])
+    if selected:
+        execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='',updated_at=? "
+                "WHERE state='review_required' AND version_id IN (SELECT value FROM json_each(?))",
+                (now(),json.dumps(selected)))
+    return len(selected)
+
+
 def main() -> int:
     load_project_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -388,6 +449,7 @@ def main() -> int:
     validate_release_provenance()
     execute('SELECT 1')  # Fail before reserving provider spend on a bad binding.
     generate = NemoClient(args.ledger, args.daily_budget)
+    print(json.dumps({'requeued_cached_rejections': requeue_repairable(generate, args.max_jobs)}),flush=True)
     started = time.monotonic()
     counts: dict[str, int] = {}
     attempted = 0

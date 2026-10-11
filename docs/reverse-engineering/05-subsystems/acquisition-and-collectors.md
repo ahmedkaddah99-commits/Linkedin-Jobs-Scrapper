@@ -492,6 +492,13 @@ Never run the manifested runners without `--dry-run` outside an authorized host.
 
 ## Agent context and remaining work
 
+October 12 lifecycle/enrichment repair: see
+[repair record](../../reports/acquisition-enrichment-repair-2026-10-12.md).
+Collectors, publisher and retention must use `/srv/runr/state/locks` explicitly;
+an active-state path does not select a lock directory. Verify the lexically last
+systemd override, not just the newly installed drop-in. Producer retention uses
+a thirty-day cutoff and updates its metadata index under those same locks.
+
 Owner-approved employer exclusions are loaded by
 `backend/application/employer_acquisition_policy.py` from
 `RUNR_EMPLOYER_EXCLUSION_POLICY` (default `/etc/runr/employer-exclusions.json`).

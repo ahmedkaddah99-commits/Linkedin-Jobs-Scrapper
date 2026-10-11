@@ -1,6 +1,6 @@
 """Bounded producer job expiry under existing collector/publisher locks."""
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -43,9 +43,9 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
     deadline = time.monotonic()+max_seconds
     try:
         while time.monotonic() < deadline:
-            cutoff = (current.date().toordinal() - 30)
+            cutoff = (current - timedelta(days=30)).date().isoformat()
             if has_index:
-                rows = db.execute("SELECT j.rowid,j."+key+",j."+field+" FROM jobs j JOIN runr_retention_index i ON i.source=? AND i.job_key=j."+key+" WHERE i.cursor>? AND i.retention_date IS NOT NULL AND date(i.retention_date)<date(?) ORDER BY i.cursor LIMIT ?", (source,cursor,current.date().isoformat(),batch_size)).fetchall()
+                rows = db.execute("SELECT i.cursor,j."+key+",NULL FROM jobs j JOIN runr_retention_index i ON i.source=? AND i.job_key=j."+key+" WHERE i.cursor>? AND i.retention_date IS NOT NULL AND date(i.retention_date)<date(?) ORDER BY i.cursor LIMIT ?", (source,cursor,cutoff,batch_size)).fetchall()
             else:
                 rows = db.execute(f"SELECT rowid,{key},{field} FROM jobs WHERE rowid>? ORDER BY rowid LIMIT ?", (cursor,batch_size)).fetchall()
             if not rows:
@@ -67,6 +67,7 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
             result['candidates'] += len(selected)
             cursor = rows[-1][0]
             if apply:
+                db.execute('BEGIN IMMEDIATE')
                 with db:
                     db.executemany('INSERT OR IGNORE INTO runr_retired_jobs VALUES(?,?,?)',selected)
                     ids = json.dumps([r[0] for r in selected])
@@ -98,6 +99,10 @@ def main():
         try: fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError: return 75
         streams.append(stream)
+    from scripts.build_producer_retention_index import build
+    for source in ('linkedin','employer'):
+        build(args.state_root/source/('master_'+source+'_jobs_state.db'),source,
+              seconds=min(15,args.max_seconds/4),batch_size=args.batch_size)
     result = [maintain(args.state_root/source/('master_'+source+'_jobs_state.db'),source,
                       apply=args.apply,batch_size=args.batch_size,max_seconds=args.max_seconds) for source in ('linkedin','employer')]
     rendered = json.dumps(result)

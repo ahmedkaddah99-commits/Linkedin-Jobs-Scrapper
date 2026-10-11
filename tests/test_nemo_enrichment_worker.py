@@ -6,6 +6,36 @@ import unittest
 from tests import test_jobs_role_scoped_feed as fixtures
 from scripts import process_catalog_enrichment as worker
 
+
+def test_stage_repair_reuses_paid_output_after_restart(tmp_path):
+ class Client(worker.NemoClient):
+  calls=0
+  def __call__(self,prompt):
+   self.calls+=1
+   return {'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}
+ ledger=tmp_path/'usage.db'
+ client=Client(ledger,10)
+ first=client.for_stage('v','h','classification_v1','prompt')
+ assert client.calls==1
+ client.db.close()
+ restarted=Client(ledger,10)
+ assert restarted.for_stage('v','h','classification_v1','prompt')==first
+ assert restarted.calls==0
+ restarted.db.close()
+
+
+def test_uncertain_stage_spend_is_not_replayed(tmp_path):
+ import pytest
+ class Client(worker.NemoClient):
+  def __call__(self,prompt):
+   raise TimeoutError('network interrupted after request')
+ client=Client(tmp_path/'usage.db',10)
+ with pytest.raises(TimeoutError):
+  client.for_stage('v','h','description_v1','prompt')
+ with pytest.raises(ValueError,match='provider_request_already_attempted'):
+  client.for_stage('v','h','description_v1','prompt')
+ client.db.close()
+
 class NemoWorkerPersistenceTests(unittest.TestCase):
  def test_empty_maintenance_does_not_issue_remote_writes(self):
   queries=[]
@@ -38,7 +68,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
   from unittest.mock import Mock
   client=Mock();client.remaining.return_value=10
   with tempfile.TemporaryDirectory() as directory:
-   with patch.object(worker,'execute',return_value=[]),patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker,'claim',side_effect=[TimeoutError('private detail'),('lease',[])] ) as claim,patch.object(worker.time,'sleep'),patch.object(worker.time,'monotonic',side_effect=range(0,1000,10)),patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test','TURSO_DATABASE_URL':'test','TURSO_AUTH_TOKEN':'test'}),patch('sys.argv',['worker','--ledger',str(Path(directory)/'ledger.sqlite3')]),patch('builtins.print') as log:
+   with patch.object(worker,'requeue_repairable',return_value=0),patch.object(worker,'execute',return_value=[]),patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker,'claim',side_effect=[TimeoutError('private detail'),('lease',[])] ) as claim,patch.object(worker.time,'sleep'),patch.object(worker.time,'monotonic',side_effect=range(0,1000,10)),patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test','TURSO_DATABASE_URL':'test','TURSO_AUTH_TOKEN':'test'}),patch('sys.argv',['worker','--ledger',str(Path(directory)/'ledger.sqlite3')]),patch('builtins.print') as log:
     self.assertEqual(worker.main(),0)
     self.assertEqual(claim.call_count,2)
     messages=[json.loads(call.args[0]) for call in log.call_args_list]

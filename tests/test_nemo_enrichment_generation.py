@@ -76,3 +76,35 @@ def test_invalid_separate_experience_evidence_does_not_create_levels():
  result=validate_classification({'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst','experience_requirements':[{'years':8,'evidence':'Ideally 8 years consulting experience.'},{'years':10,'evidence':'10 years experience required.'}]},source,'Data Analyst')
  assert result['experience_requirements']==[]
  assert result['experience_level']==[]
+
+
+def test_bounded_repairs_preserve_original_evidence_and_translate_summary():
+ calls=[]
+ german='Sie entwickeln moderne Anwendungen und arbeiten gemeinsam mit unserem erfahrenen Team an neuen technischen Lösungen.'
+ def generate(prompt):
+  return {'jobs':[{'id':'job','collar':'white','roles':['Invented Role'],'evidence':'Data Analyst'}],
+          'items':[{'section':'responsibilities','text':german,'source_ids':['p1'],'source_quote':german}],'header_candidates':{}}
+ def stage(name,prompt):
+  calls.append(name)
+  if name=='classification_v1':
+   return {'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}
+  return {'items':[{'section':'responsibilities','text':'Develop modern applications and collaborate with the experienced team on new technical solutions.',
+                    'source_ids':['p1'],'source_quote':german}],'header_candidates':{}}
+ generate.for_stage=stage
+ result=enrich_version(row(description=german),generate)
+ assert calls==['classification_v1','description_v1']
+ assert result['filters']['roles']==['Data Analyst']
+ fact=result['description']['summary']['responsibilities'][0]
+ assert fact['text'].startswith('Develop modern')
+ assert fact['source_quote']==german
+
+
+def test_description_failure_retains_valid_classification():
+ import pytest
+ from backend.application.catalog_enrichment import EnrichmentStageError
+ def generate(prompt):
+  return {'jobs':[{'id':'job','collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}],
+          'items':[{'section':'responsibilities','text':'Invented duty','source_ids':['p1'],'source_quote':'Not present in source'}]}
+ with pytest.raises(EnrichmentStageError) as error:
+  enrich_version(row(),generate)
+ assert error.value.partial['filters']['roles']==['Data Analyst']
