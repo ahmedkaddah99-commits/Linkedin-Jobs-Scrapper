@@ -68,8 +68,8 @@ export default function AccountSetupPanel({ children }) {
     {profileKnown ? <div className="jobs-profile-readiness"><span>Profile readiness</span><strong>{Math.round((11 - missing.length) / 11 * 100)}%</strong><progress aria-label="Profile readiness" max="11" value={11 - missing.length} /></div> : null}
     </section>
     {profileOpen ? <dialog aria-labelledby="profile-completion-title" className="profile-completion-dialog" onCancel={() => setProfileOpen(false)} ref={dialog}>
-      <header><div><h2 id="profile-completion-title">Finish your profile</h2><p>Your details, experience and preferences, all in one place.</p></div><button aria-label="Close profile completion" onClick={() => setProfileOpen(false)} type="button"><Icon>close</Icon></button></header>
-      <Suspense fallback={<p className="profile-completion-loading">Loading your profile…</p>}><ProfilePage completionFlow onSaved={(savedSettings, savedPreferences) => { setSettings(savedSettings); setPreferences(savedPreferences); }} /></Suspense>
+      <header><div><h2 id="profile-completion-title">Finish your profile</h2><p>A few simple steps for better job matches.</p></div><button aria-label="Close profile completion" onClick={() => setProfileOpen(false)} type="button"><Icon>close</Icon></button></header>
+      <Suspense fallback={<p className="profile-completion-loading">Loading your profile…</p>}><ProfilePage completionFlow onSaved={(savedSettings, savedPreferences) => { setSettings(savedSettings); setPreferences(savedPreferences); setProfileOpen(false); }} /></Suspense>
     </dialog> : null}
   </aside>;
 }

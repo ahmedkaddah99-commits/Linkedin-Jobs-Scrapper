@@ -2,6 +2,35 @@
 
 # Customer web frontend (WS-8)
 
+## Profile completion popup revision (2026-10-11)
+
+The Jobs quick-access profile action keeps its native modal and shared settings
+editor. Completion mode now shows Personal, Education, Experience and Preferences
+as separate steps with Next/Back controls; changing steps retains the draft and
+leaves the Jobs URL unchanged. Fields use a softer background and repeated records
+use light separators. Save and close refreshes settings/preferences and closes only
+after success; a failed save leaves the draft available for retry. Resume upload
+continues through the existing document endpoint. Standalone Profile tabs remain.
+
+History: `a7295d33` introduced the profile design on August 8;
+`4873b4d4` added the combined completion popup on October 8 at 17:38 Berlin time;
+`21fa19f6` compacted its opener into Quick access & tools at 20:18. These commits
+record Ahmed Kaddah as author and committer; Git alone cannot identify the actual
+human or agent operating that identity. The documented purpose of the combined
+popup was to put profile details and preferences into one flow. Before it, setup
+linked to the standalone profile editor, so reverting would remove this popup.
+The October 11 video supplied by the owner guides the revised visual interaction;
+the reference's demographic questionnaire is outside the existing profile contract.
+
+Validation: 193 frontend unit tests, lint/build, production build contract, 21
+focused profile/backend route tests, and six desktop/mobile popup browser checks
+passed. Two desktop/mobile browser checks also passed using the actual Python
+profile-matching evaluator after saved skill edits. Browser checks ran against a separate preview build to avoid concurrent
+changes to the shared dist folder. The broader Jobs setup test still timed out
+waiting for the existing Other job functions textbox, outside this popup flow.
+Browser persistence and upload checks mock the API boundary; they do not establish
+live production deployment or storage/provider availability.
+
 ## Connections workspace correction (2026-10-11)
 
 The `/refer` navigation tab is labelled Connection and has no dropdown arrow.

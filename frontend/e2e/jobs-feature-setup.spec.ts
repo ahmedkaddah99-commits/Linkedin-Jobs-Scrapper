@@ -33,23 +33,38 @@ test("feature cards remain visible and profile completion opens in one popup", a
   await rail.getByRole("button", { name: "Finish your profile" }).click();
   const popup = page.getByRole("dialog", { name: "Finish your profile" });
   await expect(popup).toBeVisible();
-  await expect(popup.getByRole("heading", { name: "Preferences", exact: true })).toBeVisible();
+  await expect(popup.getByRole("heading", { name: "Personal details", exact: true })).toBeVisible();
+  await expect(popup.getByRole("heading", { name: "Preferences", exact: true })).toHaveCount(0);
   await popup.getByLabel("Upload resume", { exact: true }).setInputFiles({ name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from("Resume evidence") });
   await expect(popup.getByText("resume.txt uploaded. Your resume is available in Documents.")).toBeVisible();
   expect(resumeUploaded).toBe(true);
   await popup.getByLabel("Role title", { exact: true }).fill("Business Analyst");
+  await popup.getByRole("button", { name: "Next", exact: false }).click();
+  await expect(popup.getByRole("heading", { name: "Education", exact: true })).toBeVisible();
+  await popup.getByRole("button", { name: "Add education" }).click();
+  await popup.getByLabel("Institution", { exact: true }).fill("Example University");
+  await popup.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(popup.getByLabel("Role title", { exact: true })).toHaveValue("Business Analyst");
+  await expect(page).toHaveURL(/\/jobs$/);
+  await popup.getByRole("button", { name: "Next", exact: false }).click();
+  await expect(popup.getByLabel("Institution", { exact: true })).toHaveValue("Example University");
+  await popup.getByRole("button", { name: "Next", exact: false }).click();
+  await popup.getByRole("button", { name: "Add experience", exact: false }).first().click();
+  await popup.getByLabel("Company", { exact: true }).fill("Example Company");
+  await popup.getByRole("button", { name: "Next", exact: false }).click();
   await popup.getByLabel(/Target roles/).fill("Business Analyst, Operations Analyst");
-  await popup.getByRole("button", { name: "Save changes", exact: true }).click();
+  await popup.getByRole("button", { name: "Save and close", exact: true }).click();
   await expect.poll(() => settings.profile['role_title']).toBe("Business Analyst");
   await expect.poll(() => preferences.target_roles).toEqual(["Business Analyst", "Operations Analyst"]);
-  await expect(popup.getByText(/Everything saved/).last()).toBeVisible();
-  await popup.evaluate((element) => { element.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath("profile-popup.png") });
-  await popup.getByRole("button", { name: "Close profile completion" }).click();
   await expect(popup).toHaveCount(0);
+  expect(settings.profile['education'][0].institution).toBe("Example University");
+  expect(settings.profile['recent_experience'][0].company).toBe("Example Company");
+  await expect(page).toHaveURL(/\/jobs$/);
   await expect(rail.getByRole("link", { name: /Runr Apply/ })).toBeVisible();
   await rail.getByRole("button", { name: "Finish your profile" }).click();
   await expect(page.getByRole("dialog").getByLabel("Role title", { exact: true })).toHaveValue("Business Analyst");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("profile-popup.png") });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
@@ -79,4 +94,35 @@ test("feature checkmarks reflect real connections and disappear when disconnecte
   await page.evaluate(() => { window.chrome.runtime.sendMessage = (_id, _message, callback) => callback({ ok: true, sync: { extension_connected: false } }); window.dispatchEvent(new Event("focus")); });
   await expect(apply.getByText("Set up the extension", { exact: true })).toBeVisible();
   await expect(apply.getByText("check_circle", { exact: true })).toHaveCount(0);
+});
+
+
+test("failed preference save keeps the popup and draft available for retry", async ({ page }) => {
+  let failSave = true;
+  let preferences = { target_roles: ["Analyst"], preferred_locations: ["Berlin"] };
+  await page.route("**/v1/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/settings")) return route.fulfill({ json: { profile: { name: "Test user" }, account: {} } });
+    if (path.endsWith("/personalized-jobs/preferences")) {
+      if (route.request().method() === "PUT") {
+        if (failSave) return route.fulfill({ status: 503, json: { error: "Unable to save preferences" } });
+        preferences = route.request().postDataJSON();
+      }
+      return route.fulfill({ json: { preferences } });
+    }
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "Finish your profile" }).click();
+  const popup = page.getByRole("dialog", { name: "Finish your profile" });
+  await popup.getByRole("button", { name: /Preferences/ }).click();
+  await popup.getByLabel(/Target roles/).fill("Product Designer");
+  await popup.getByRole("button", { name: "Save and close" }).click();
+  await expect(popup.getByRole("status").last()).toContainText(/save|503/i);
+  await expect(popup).toBeVisible();
+  await expect(popup.getByLabel(/Target roles/)).toHaveValue("Product Designer");
+  failSave = false;
+  await popup.getByRole("button", { name: "Save and close" }).click();
+  await expect(popup).toHaveCount(0);
+  expect(preferences.target_roles).toEqual(["Product Designer"]);
 });
