@@ -1,7 +1,8 @@
 import json
 import os
 import unittest
-from unittest.mock import patch
+from email.message import Message
+from unittest.mock import MagicMock, patch
 
 from tests import test_phase_c_personalized_jobs as fixtures
 from backend.domain.models import utc_now_iso
@@ -14,6 +15,21 @@ URL = 'https://example.com/jobs/software-engineer'
 
 
 class ExternalJobsTests(unittest.TestCase):
+    def test_fetch_accepts_standard_http_header_capitalization(self):
+        from backend.application.external_jobs import fetch_job_page
+        headers = Message()
+        headers['Content-Type'] = 'text/html; charset=utf-8'
+        headers['Content-Length'] = '26'
+        response = MagicMock()
+        response.url = URL
+        response.headers = headers
+        response.read.return_value = b'<html>Job posting</html>'
+        response.__enter__.return_value = response
+        with patch('backend.application.company_enrichment.assert_public_official_host'), \
+             patch('backend.application.company_enrichment.build_opener') as opener:
+            opener.return_value.open.return_value = response
+            self.assertEqual(fetch_job_page(URL), '<html>Job posting</html>')
+
     def _backend(self):
         app = fixtures.PhaseCPersonalizedJobsTests._backend(self)
         return app
