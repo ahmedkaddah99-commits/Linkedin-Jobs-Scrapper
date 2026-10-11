@@ -72,14 +72,15 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
 def main():
     import fcntl
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--state-root',type=Path,default=Path('/srv/runr/state'))
+    parser.add_argument('--state-root',type=Path,default=Path('/srv/runr/state/active'))
+    parser.add_argument('--lock-root',type=Path,default=Path('/srv/runr/state/locks'))
     parser.add_argument('--apply',action='store_true')
     parser.add_argument('--max-seconds',type=int,default=60)
     parser.add_argument('--receipt',type=Path)
     args = parser.parse_args()
     streams = []
     for name in ('publisher','linkedin','employer'):
-        stream = (args.state_root/'locks'/ (name+'.lock')).open('a')
+        stream = (args.lock_root / (name+'.lock')).open('a')
         try: fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError: return 75
         streams.append(stream)
@@ -96,3 +97,6 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+
