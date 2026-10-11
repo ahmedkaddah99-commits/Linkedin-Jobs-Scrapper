@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { extractLinkedInConnections, linkedInConnectionsCsv } from "../../src/linkedin/connections";
 
 describe("LinkedIn connections page extraction", () => {
+  it("keeps a nested name and headline separate even without whitespace between elements", () => {
+    document.body.innerHTML = `<main><li><a href="https://linkedin.com/in/jane-doe"><span>Jane Doe</span><span>Engineering Manager at Acme</span></a><button>Message</button></li></main>`;
+    expect(extractLinkedInConnections(document).rows[0]).toMatchObject({ firstName: "Jane", lastName: "Doe", position: "Engineering Manager", company: "Acme" });
+  });
   it("extracts connection cards and serializes them to the existing import contract", () => {
     document.body.innerHTML = `
       <ul>

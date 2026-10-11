@@ -2769,7 +2769,31 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .referral-button:disabled { cursor: not-allowed; opacity: 0.55; }
 .referral-empty { background: var(--referral-soft); border: 1px dashed #cdd3e1; border-radius: 0.7rem; color: var(--referral-muted); font-size: 0.78rem; line-height: 1.6; padding: 1rem; }
 
-.referral-workspace { display: grid; gap: 1.25rem; grid-template-columns: minmax(19rem, 0.85fr) minmax(0, 1.4fr); }
+.referral-workspace { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+.connections-workspace { padding: 2rem 1.25rem; max-width: 1320px; }
+.referral-workspace--editing { grid-template-columns: minmax(19rem, 0.7fr) minmax(0, 1.4fr); }
+.connection-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; padding: 1.25rem; }
+.connection-columns { display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 0.8fr; gap: 1rem; padding: 0.8rem 8.5rem 0.8rem 1.25rem; background: var(--referral-soft); color: var(--referral-muted); font-size: 0.7rem; font-weight: 700; }
+.connections-workspace .referral-contact__identity { flex: 1; display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 0.8fr; gap: 0.6rem 1rem; align-items: start; }
+.connections-workspace .referral-contact__name { grid-column: 1; }
+.connection-detail { font-size: 0.8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.connection-detail--title { grid-column: 2; }
+.connection-detail--company { grid-column: 3; }
+.connection-detail--strength { grid-column: 4; color: var(--referral-accent); font-weight: 600; }
+.connection-mobile-label { display: none; }
+.connections-workspace .referral-contact__link, .connections-workspace .referral-contact__date, .connections-workspace .referral-contact__note, .connections-workspace .referral-outreach { grid-column: 1 / -1; margin-top: 0; }
+.connections-workspace .referral-contact__note:empty { display: none; }
+.connections-workspace .referral-contact__actions { width: 6.5rem; flex-shrink: 0; }
+@media (max-width: 1100px) {
+  .referral-workspace--editing { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .connection-filters { grid-template-columns: 1fr; gap: 0.7rem; }
+  .connection-columns { display: none; }
+  .connections-workspace .referral-contact__identity { grid-template-columns: 1fr; }
+  .connections-workspace .referral-contact__identity > * { grid-column: 1; }
+  .connection-mobile-label { display: block; font-size: 0.65rem; color: var(--referral-muted); }
+}
 .referral-panel,
 .referral-list,
 .referral-sync,
