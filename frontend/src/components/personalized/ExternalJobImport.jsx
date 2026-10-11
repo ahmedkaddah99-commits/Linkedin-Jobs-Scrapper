@@ -9,8 +9,16 @@ export default function ExternalJobImport({ request, onImported, connected }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [duplicate, setDuplicate] = useState("");
+  const duplicateDialog = useRef(null);
   const dialog = useRef(null);
   const opener = useRef(null);
+  useEffect(() => {
+    if (!duplicate) return;
+    const element = duplicateDialog.current;
+    element.showModal();
+    return () => { element.close(); opener.current?.focus(); };
+  }, [duplicate]);
   useEffect(() => {
     if (!manual) return;
     const element = dialog.current;
@@ -29,7 +37,10 @@ export default function ExternalJobImport({ request, onImported, connected }) {
     setError("");
     try {
       const result = await request("/personalized-jobs/import", { method: "POST", body: manual ? { ...fields, manual: true } : { url: fields.url, preview: true }, timeoutMs: 120000 });
-      if (result.state === "review_required" || result.state === "manual_required") {
+      if (result.state === "duplicate") {
+        setManual(false);
+        setDuplicate(result.message);
+      } else if (result.state === "review_required" || result.state === "manual_required") {
         setFields({ ...EMPTY, ...result.fields });
         setManual(true);
         setMessage(result.message);
@@ -63,5 +74,6 @@ export default function ExternalJobImport({ request, onImported, connected }) {
       <small>{fields.description.length.toLocaleString()}/50,000 characters · minimum 100</small>
     </fieldset><footer><button className="jobs-outline-button" disabled={busy} onClick={() => setManual(false)} type="button">Cancel</button><button className="jobs-primary-button" disabled={busy} type="submit">{busy ? "Saving job…" : "Save job"}</button></footer>
     </form></dialog> : null}
+    {duplicate ? <dialog aria-labelledby="external-job-duplicate-title" className="external-job-duplicate" onCancel={() => setDuplicate("")} ref={duplicateDialog}><h2 id="external-job-duplicate-title">Job already exists</h2><p>{duplicate}</p><button className="jobs-primary-button" onClick={() => setDuplicate("")} type="button">OK</button></dialog> : null}
   </div>;
 }

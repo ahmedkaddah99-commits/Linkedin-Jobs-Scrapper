@@ -188,19 +188,12 @@ def build_row(user_id: str, url: str, fields: dict) -> dict:
 def import_job(service, user_id: str, payload: Mapping, *, plan_id: str) -> dict:
     service._assert_catalog_access(user_id)
     url = job_url(payload.get('url'))
+    existing = service.store.find_job_by_url(user_id, url)
+    retry = payload.get('retry_enrichment') is True and payload.get('manual') is not True and payload.get('preview') is not True
+    if existing and (not existing.get('external_job') or not retry):
+        return duplicate_result(existing)
     if payload.get('preview') is True:
         return preview_job(service, user_id, url)
-    existing = service.store.find_job_by_url(user_id, url)
-    if existing and not existing.get('external_job') and payload.get('manual') is not True:
-        # Keep a private snapshot, including already generated catalog output.
-        # Its private identity survives retirement of the published posting.
-        row = {**existing, 'canonical_job_id': 'import_' + hashlib.sha256((user_id + '\n' + url).encode()).hexdigest()[:24],
-               'catalog_job_id': existing['canonical_job_id'], 'external_job': True, 'imported_by': user_id,
-               'external_description': service._description_intelligence(existing)}
-        service.store.save_external_job_row(user_id, url, row)
-        return {'state': 'available', 'job': service.detail(user_id, row['canonical_job_id'], plan_id=plan_id)}
-    if existing and not payload.get('retry_enrichment') and payload.get('manual') is not True:
-        return {'state': 'available', 'job': service.detail(user_id, existing['canonical_job_id'], plan_id=plan_id)}
     manual = payload.get('manual') is True
     structured = False
     fields = {'url': url}
@@ -268,5 +261,17 @@ def import_job(service, user_id: str, payload: Mapping, *, plan_id: str) -> dict
             row['enrichment_state'] = 'unavailable'
     if not row.get('external_description'):
         row['external_description'] = build_runr_description_rules(row)
-    saved = service.store.save_external_job_row(user_id, url, row)
+    latest = service.store.find_job_by_url(user_id, url)
+    if latest and not existing:
+        return duplicate_result(latest)
+    saved = service.store.save_external_job_row(user_id, url, row, new_only=not existing)
+    if saved is None:
+        return duplicate_result(service.store.find_job_by_url(user_id, url))
     return {'state': 'available', 'job': service.detail(user_id, saved['canonical_job_id'], plan_id=plan_id)}
+
+
+def duplicate_result(existing: Mapping) -> dict:
+    external = existing.get('external_job')
+    return {'state': 'duplicate', 'reason': 'already_added' if external else 'already_published',
+            'message': 'You already added this job to External jobs.' if external else
+                       'This job is already available in Runr Jobs.'}

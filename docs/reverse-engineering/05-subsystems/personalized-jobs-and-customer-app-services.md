@@ -7,8 +7,12 @@
 `POST /personalized-jobs/import` accepts one public job URL. New postings are
 scraped within a 15-second, 2 MB HTML bound, validated, and passed through the
 same Nemo classification and grounded description functions as the catalog.
-Imports are account-owned snapshots in migration `079_external_jobs`; importing
-a published URL preserves its existing enrichment without another provider call.
+Imports are account-owned snapshots in migration `079_external_jobs`. URLs already
+added by this account or already in the current published catalog return `duplicate`
+with reasons `already_added` / `already_published` and a short explanatory popup.
+Both preview and confirmation reject duplicates before network/model work. New
+inserts use an atomic conflict check to prevent concurrent imports overwriting a job.
+Explicit Retry enrichment remains available for the owner's existing imports.
 `GET /personalized-jobs/external` returns 25 postings per page with `next_cursor`.
 Imported IDs resolve through the existing job detail, disposition, reporting,
 resume review and document worker paths. They never enter the public catalog.

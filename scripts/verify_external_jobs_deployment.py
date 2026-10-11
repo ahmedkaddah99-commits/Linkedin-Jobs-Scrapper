@@ -63,6 +63,17 @@ def main():
         assert status == 200 and saved['state'] == 'saved', ('save', status)
         status, listing = request(tokens[0], 'GET', '/personalized-jobs/external')
         assert status == 200 and listing['jobs'][0]['canonical_job_id'] == job_id
+        for flags in ({'preview': True}, {'manual': True}):
+            status, duplicate = request(tokens[0], 'POST', '/personalized-jobs/import', {'url': url, **flags})
+            assert status == 200 and duplicate['reason'] == 'already_added', ('private duplicate', status, duplicate)
+        store = app.repositories.personalized_jobs_store
+        with store._connect() as connection:
+            published = connection.execute(store._published_jobs_sql() + " AND j.canonical_url<>'' LIMIT 1",
+                                           (store._head_publication_id(connection),)).fetchone()
+        assert published is not None, 'A published job is required for the duplicate smoke check'
+        for flags in ({'preview': True}, {'manual': True}):
+            status, duplicate = request(tokens[0], 'POST', '/personalized-jobs/import', {'url': published['canonical_url'], **flags})
+            assert status == 200 and duplicate['reason'] == 'already_published', ('published duplicate', status, duplicate)
         status, fallback = request(tokens[0], 'POST', '/personalized-jobs/import', {'url': 'https://example.com/'})
         assert status == 200 and fallback['state'] == 'manual_required', ('non-job', status, fallback)
         status, manual = request(tokens[0], 'POST', '/personalized-jobs/import', {
@@ -86,6 +97,7 @@ def main():
         assert status == 200 and confirmed.get('job'), ('confirmation', status)
         assert confirmed['job']['description_intelligence']['model'] == 'mistralai/mistral-nemo'
         results = {'state': 'passed', 'scrape': 'passed', 'nemo_enrichment': 'passed',
+                   'duplicate_private_and_published_urls': 'passed',
                    'siemens_ai_preview_and_confirmation': 'passed',
                    'shared_reader_api': 'passed', 'owner_isolation': 'passed', 'save': 'passed',
                    'external_list': 'passed', 'non_job_fallback': 'passed', 'manual_completion': 'passed',
