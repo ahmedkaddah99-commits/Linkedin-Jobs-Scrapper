@@ -68,3 +68,4 @@ Path('/etc/systemd/system/runr-producer-retention.timer').write_text('[Unit]\nDe
 subprocess.run(['systemctl','daemon-reload'], check=True)
 print(json.dumps({'installed':str(release),'commit':commit,'evidence':str(evidence),'timers_resumed':False,'storage':'r2'}))
 
+
