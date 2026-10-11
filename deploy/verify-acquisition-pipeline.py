@@ -33,14 +33,15 @@ for name,sql in {
     params=(args.since,) if '?' in sql else ()
     print(json.dumps({name:[dict(row) for row in db.execute(sql,params)]}),flush=True)
 rows=db.execute('''SELECT j.canonical_job_id,j.company_id,v.version_id,v.content_hash,f.filters_json,
-    d.summary_json,d.original_json,CASE WHEN m.input_signature=(COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(json_extract(p.profile_json,'$.fields.industry'),'')) THEN m.version_id END AS facts_version
+    d.summary_json,d.original_json,j.last_seen_at,
+    CASE WHEN m.input_signature=(COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(json_extract(p.profile_json,'$.fields.industry'),'')) THEN m.version_id END AS facts_version
     FROM canonical_jobs j JOIN job_posting_versions v ON v.version_id=j.current_version_id
     JOIN job_filter_intelligence f ON f.version_id=v.version_id AND f.content_hash=v.content_hash
     JOIN job_description_intelligence d ON d.version_id=v.version_id AND d.content_hash=v.content_hash
     LEFT JOIN profile_job_facts m ON m.version_id=v.version_id AND m.content_hash=v.content_hash
     LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id
-    WHERE j.lifecycle_state<>'expired' AND d.generated_at>=? AND '''+published+'''
-    ORDER BY d.generated_at DESC LIMIT 8''',(args.since,)).fetchall()
+    WHERE j.lifecycle_state<>'expired' AND (d.generated_at>=? OR j.last_seen_at>=?) AND '''+published+'''
+    ORDER BY j.last_seen_at DESC,d.generated_at DESC LIMIT 8''',(args.since,args.since)).fetchall()
 from backend.bootstrap import create_backend
 from backend.application.description_translation import source_language
 app=create_backend(Path(env.get('RUNR_DATA_DIR','/var/lib/runr/customer-candidate-api')),storage_backend='sqlite',initialize_schema=False)
@@ -56,8 +57,8 @@ for row in rows:
     if detail is None:
         continue
     summary=detail.get('runr_summary') or {}
-    text=' '.join(item['text'] for value in summary.values() if isinstance(value,list)
-        for item in value if isinstance(item,dict) and isinstance(item.get('text'),str))
+    text=' '.join([str(summary.get('overview') or '')]+[item['text'] for value in summary.values() if isinstance(value,list)
+                  for item in value if isinstance(item,dict) and isinstance(item.get('text'),str)])
     source=(detail.get('original_posting') or {}).get('description_text')
     assert text and source, 'Customer summary or original evidence missing'
     assert len(text)<80 or source_language(text)=='en', 'Customer description is not English'
@@ -66,6 +67,7 @@ for row in rows:
     assert feed.get('jobs'), 'Combined function/company filter returned no jobs'
     print(json.dumps({'customer_projection':{'job_id':row['canonical_job_id'],
         'english':True,'source_evidence':True,'facts_current':bool(row['facts_version']),
+        'freshly_observed':row['last_seen_at']>=args.since,
         'combined_filter_jobs':len(feed['jobs'])}}),flush=True)
     checked+=1
 print(json.dumps({'serving_release':env.get('RUNR_RELEASE_COMMIT'),'customer_projections_checked':checked,

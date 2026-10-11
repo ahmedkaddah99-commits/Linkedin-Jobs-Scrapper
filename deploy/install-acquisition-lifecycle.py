@@ -66,6 +66,9 @@ for unit, command in commands.items():
         timer_dropin=Path('/etc/systemd/system/runr-acquisition-publisher.timer.d/continuous.conf')
         timer_dropin.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(release / 'deploy/systemd/runr-acquisition-publisher.timer.d/continuous.conf',timer_dropin)
+    if unit == 'runr-job-descriptions':
+        with destination.open('a') as handle:
+            handle.write('TimeoutStopSec=600\n')
 for name in ('runr-job-descriptions.timer','runr-profile-job-facts.timer','runr-job-descriptions-rules.timer'):
     destination = Path('/etc/systemd/system') / name
     if not destination.exists(): shutil.copy2(release / 'deploy/systemd' / name, destination)

@@ -108,3 +108,15 @@ def test_description_failure_retains_valid_classification():
  with pytest.raises(EnrichmentStageError) as error:
   enrich_version(row(),generate)
  assert error.value.partial['filters']['roles']==['Data Analyst']
+
+
+def test_contiguous_quote_across_passages_is_reanchored_without_inventing_evidence():
+ from backend.application.vps_job_descriptions import _quoted_passage_ids,build_pilot_description
+ source='Technical support for complex automation\nand control systems in international customer service.'
+ result=build_pilot_description(row(description=source),lambda _: {'items':[{
+  'section':'responsibilities','text':'Support complex automation and control systems in international customer service.',
+  'source_ids':['p9'],'source_quote':source}],'header_candidates':{}},require_source_quotes=True)
+ fact=result['summary']['responsibilities'][0]
+ assert fact['source_ids']==['p1','p2']
+ assert fact['source_quote']==source
+ assert _quoted_passage_ids('first third',{'p1':'first','p2':'second','p3':'third'})==[]

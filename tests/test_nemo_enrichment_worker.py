@@ -37,6 +37,24 @@ def test_uncertain_stage_spend_is_not_replayed(tmp_path):
  client.db.close()
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_termination_drains_claimed_jobs_without_claiming_more(self):
+  import tempfile
+  from unittest.mock import Mock
+  handler=[]
+  def signal_set(number,callback):
+   if callable(callback):handler.append(callback)
+  def finish(*args):
+   handler[0](None,None)
+   return 'completed'
+  client=Mock();client.remaining.return_value=10
+  with tempfile.TemporaryDirectory() as directory:
+   with patch.object(worker,'requeue_repairable',return_value=0),patch.object(worker,'execute',return_value=[]),patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker.signal,'signal',side_effect=signal_set),patch.object(worker,'process_isolated',side_effect=finish),patch.object(worker,'claim',return_value=('lease',[{},{}])) as claims,patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test'}),patch('sys.argv',['worker','--workers','2','--ledger',str(Path(directory)/'ledger.db')]),patch('builtins.print') as log:
+    self.assertEqual(worker.main(),0)
+    self.assertEqual(claims.call_count,1)
+    receipt=json.loads(log.call_args.args[0])
+    self.assertEqual(receipt['completed'],2)
+    self.assertTrue(receipt['shutdown_drained'])
+
  def test_native_rule_fallback_is_queued_for_english_translation(self):
   import tempfile
   app=self.classified();store=app.repositories.personalized_jobs_store
