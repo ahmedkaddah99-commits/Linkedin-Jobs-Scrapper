@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/runr
+WorkingDirectory=/srv/runr/network-discovery-current
 User=runr-acquisition
 Group=runr-acquisition
 SupplementaryGroups=runr-database
@@ -14,7 +14,7 @@ Environment=LD_LIBRARY_PATH=/usr/local/lib/runr/sqlite-3.54.0
 EnvironmentFile=/opt/runr/.env.acquisition
 EnvironmentFile=-/opt/runr/.env.acquisition.provider
 EnvironmentFile=/etc/runr/nemo-enrichment.env
-EnvironmentFile=/etc/runr/customer-current.env
+EnvironmentFile=/etc/runr/customer-candidate-20261010/api.env
 Environment=RUNR_SKIP_PROJECT_DOTENV=1
 UnsetEnvironment=TURSO_DATABASE_URL TURSO_AUTH_TOKEN RUNR_MIGRATION_HEAD
 ExecStart=/usr/bin/flock -n /srv/runr/state/network-discovery.lock /opt/runr/.venv/bin/python scripts/process_published_network_discovery.py --max-jobs 10 --daily-budget 1
