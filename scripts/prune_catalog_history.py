@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from backend.acquisition.storage_retention import _CANDIDATE, _PINS, _TERMINAL
 from scripts.compact_job_storage import HttpMaintenanceConnection
+from backend.database.connection import connect_database, database_target_key
 
 MEMBERS = f"""DELETE FROM acquisition_publication_jobs WHERE rowid IN (
     SELECT rowid FROM acquisition_publication_jobs
@@ -96,12 +97,13 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.batch_size <= 10000 or args.max_seconds <= 0:
         parser.error('Invalid bounded maintenance budget')
-    identity = hashlib.sha256(os.environ['TURSO_DATABASE_URL'].encode()).hexdigest()
+    target = os.environ.get('TURSO_DATABASE_URL') or database_target_key(ROOT / 'data' / 'backend.sqlite3')
+    identity = hashlib.sha256(target.encode()).hexdigest()
     state = json.loads(args.checkpoint.read_text()) if args.checkpoint.exists() else {}
     if state.get('database_identity', identity) != identity:
         raise ValueError('History checkpoint belongs to another database')
     state['database_identity'] = identity
-    db = HttpMaintenanceConnection(timeout=30)
+    db = HttpMaintenanceConnection(timeout=30) if os.environ.get('TURSO_DATABASE_URL') else connect_database(ROOT / 'data' / 'backend.sqlite3')
     cutoff = (datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
     result = dict(apply=args.apply, batches=0, deleted_memberships=0,
                   deleted_publications=0, deleted_rejections=0, logical_bytes_removed=0)
@@ -119,6 +121,8 @@ def main():
         if phase in finished:
             continue
         changed = prune_batch(db, phase, batch_size=args.batch_size, cutoff=cutoff, membership_progress=state)
+        if not isinstance(db, HttpMaintenanceConnection):
+            db.commit()
         result['batches'] += 1
         for key, count in changed.items():
             result[key] += count

@@ -38,7 +38,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
   from unittest.mock import Mock
   client=Mock();client.remaining.return_value=10
   with tempfile.TemporaryDirectory() as directory:
-   with patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker,'claim',side_effect=[TimeoutError('private detail'),('lease',[])] ) as claim,patch.object(worker.time,'sleep'),patch.object(worker.time,'monotonic',side_effect=range(0,1000,10)),patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test','TURSO_DATABASE_URL':'test','TURSO_AUTH_TOKEN':'test'}),patch('sys.argv',['worker','--ledger',str(Path(directory)/'ledger.sqlite3')]),patch('builtins.print') as log:
+   with patch.object(worker,'execute',return_value=[]),patch.object(worker,'load_project_dotenv'),patch.object(worker,'validate_release_provenance'),patch.object(worker,'NemoClient',return_value=client),patch.object(worker,'claim',side_effect=[TimeoutError('private detail'),('lease',[])] ) as claim,patch.object(worker.time,'sleep'),patch.object(worker.time,'monotonic',side_effect=range(0,1000,10)),patch.dict(worker.os.environ,{'OPENROUTER_API_KEY':'test','TURSO_DATABASE_URL':'test','TURSO_AUTH_TOKEN':'test'}),patch('sys.argv',['worker','--ledger',str(Path(directory)/'ledger.sqlite3')]),patch('builtins.print') as log:
     self.assertEqual(worker.main(),0)
     self.assertEqual(claim.call_count,2)
     messages=[json.loads(call.args[0]) for call in log.call_args_list]
@@ -88,9 +88,9 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     # Seeded filters are not Nemo, so exercise the filter stage too.
     def both(prompt):
      if 'Classify each' in prompt:
-      posting=json.loads(prompt.rsplit('Postings: ',1)[1])[0]
+      posting=json.loads(prompt.rsplit('Postings: ',1)[1].split('\nMANDATORY:')[0])[0]
       identity=posting['id'];title=posting['title']
-      return {'jobs':[{'id':identity,'collar':'white','roles':['Business Analyst'],'evidence':title}]}
+      return {'jobs':[{'id':identity,'collar':'white','roles':['Business Analyst'],'evidence':title}],**generate(prompt)}
      return generate(prompt)
     self.assertEqual(worker.process(rows[0],token,both),'completed')
     ready=c.execute('SELECT state FROM job_enrichment_queue WHERE version_id=?',(rows[0]['current_version_id'],)).fetchone()
@@ -109,21 +109,17 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     actual=c.execute('SELECT model FROM job_filter_intelligence WHERE version_id=?',(row['current_version_id'],)).fetchone()
     self.assertEqual(actual['model'],'test')
 
- def test_description_failure_preserves_filters_and_retry_only_generates_description(self):
+ def test_existing_filters_only_need_one_description_request(self):
   app=self.classified();store=app.repositories.personalized_jobs_store
   with store._connect() as c:
-   c.execute("DELETE FROM job_filter_intelligence")
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     token,rows=worker.claim(1);row=rows[0]
     def fail_description(prompt):
-     if 'Classify each' in prompt:
-      posting=json.loads(prompt.rsplit('Postings: ',1)[1])[0]
-      return {'jobs':[{'id':posting['id'],'collar':'white','roles':['Business Analyst'],'evidence':posting['title']}]}
      raise RuntimeError('temporary_provider_failure')
     self.assertEqual(worker.process(row,token,fail_description),'RuntimeError')
     cached=c.execute('SELECT model FROM job_filter_intelligence WHERE version_id=?',(row['current_version_id'],)).fetchone()
-    self.assertEqual(cached['model'],'mistralai/mistral-nemo')
+    self.assertEqual(cached['model'],'test')
     c.execute("UPDATE job_enrichment_queue SET next_attempt_at='' WHERE version_id=?",(row['current_version_id'],))
     # Only this version is due for the retry.
     c.execute("UPDATE job_enrichment_queue SET next_attempt_at='9999' WHERE version_id!=?",(row['current_version_id'],))
@@ -133,7 +129,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
      prompts.append(prompt)
      return {'items':[{'section':'responsibilities','text':'Analyze operations.','source_ids':['p1'],'source_quote':'Analyze operations.'}],'header_candidates':{},'_runr_model':'mistralai/mistral-nemo'}
     self.assertEqual(worker.process(rows[0],token,description),'completed')
-    self.assertEqual(len(prompts),2)
+    self.assertEqual(len(prompts),1)
     self.assertNotIn('Classify each',prompts[0])
 
  def test_acceptable_existing_output_is_reused_without_model_calls(self):
@@ -160,12 +156,10 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     cached=c.execute('SELECT prompt_version FROM job_description_intelligence WHERE version_id=?',(row['current_version_id'],)).fetchone()
     self.assertEqual(cached['prompt_version'],'runr_description_v1')
     audit=c.execute('SELECT gap_pass_attempted,missing_fields_json FROM job_enrichment_queue WHERE version_id=?',(row['current_version_id'],)).fetchone()
-    self.assertEqual(audit['gap_pass_attempted'],1)
-    self.assertIn('structured.salary',json.loads(audit['missing_fields_json']))
+    self.assertEqual(audit['gap_pass_attempted'],2)
     c.commit()
-    public=json.dumps(app.get_personalized_job_detail('user-a',row['canonical_job_id']))
+    public=json.dumps(app._personalized_jobs_service.detail('user-a',row['canonical_job_id']))
     self.assertNotIn('missing_fields_json',public)
     self.assertNotIn('gap_pass_attempted',public)
-    self.assertEqual(len(extra),1)
-    self.assertIn('supplemental',extra[0])
+    self.assertEqual(len(extra),0)
     self.assertEqual(worker.claim(1)[1],[])

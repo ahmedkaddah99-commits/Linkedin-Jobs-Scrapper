@@ -3804,10 +3804,23 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "source_ats": str(row.get("source_ats") or ""),
                 "observed_at": str(row.get("observation_observed_at") or ""),
                 "last_seen_at": str(row.get("last_seen_at") or ""),
+                "first_seen_at": str(row.get("first_seen_at") or ""),
                 "last_verified_at": str(row.get("last_verified_at") or ""),
                 "lifecycle_state": str(row.get("lifecycle_state") or ""),
                 "canonical_url": str(row.get("canonical_url") or ""),
             }
+            from backend.acquisition.job_lifecycle import exclusion_reason
+            age_reason = exclusion_reason(record)
+            if age_reason:
+                rejected.append({
+                    'canonical_job_id': record['canonical_job_id'],
+                    'external_job_id': record['source_job_id'], 'title': record['title'],
+                    'target_id': str(row.get('source_target_id') or 'publication'),
+                    'task_id': str(row.get('source_task_id') or 'publication'),
+                    'reasons': [{'code': age_reason, 'fields': ['posted_at','first_seen_at']}],
+                    'status': 'stale_or_closed',
+                })
+                continue
             if employer_page_needs_verification(record) or is_navigation_title(record):
                 non_job_reason = generic_employer_non_job_reason(record)
                 if non_job_reason:

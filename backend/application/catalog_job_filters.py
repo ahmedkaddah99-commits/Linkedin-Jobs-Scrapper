@@ -156,13 +156,24 @@ def validate_classification(raw, source, title='', *, reviewed=False):
                     and year_evidence in text and year_evidence
                     and re.search(r'experience|erfahrung|berufspraxis', year_evidence)
                     and number_in_evidence(value, year_evidence)] if isinstance(alternatives, list) else []
+    requirements = []
+    for requirement in raw.get('experience_requirements', []) if isinstance(raw.get('experience_requirements'), list) else []:
+        if not isinstance(requirement, dict):
+            continue
+        value = requirement.get('years')
+        quote = normalized(requirement.get('evidence'))
+        if (type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 50
+                and quote and quote in text and re.search(r'experience|erfahrung|berufspraxis', quote)
+                and not re.search(r'preferred|ideally|advantage|idealerweise|von vorteil|wünschenswert', quote)
+                and number_in_evidence(value, quote)):
+            requirements.append({'years': value, 'evidence': requirement['evidence']})
+    if requirements and years is None:
+        years = max(item['years'] for item in requirements)
     levels = []
     if years is not None:
         order = ('entry', 'mid', 'senior', 'lead')
         levels = sorted(set('entry' if value < 3 else 'mid' if value < 6 else 'senior' if value < 10 else 'lead'
-                            for value in [years, *alternatives]), key=order.index)
-        if len(levels) > 2 or (len(levels) == 2 and order.index(levels[1]) - order.index(levels[0]) != 1):
-            levels = [levels[-1]]
+                            for value in [years, *alternatives, *(item['years'] for item in requirements)]), key=order.index)
     level = raw.get('experience_level')
     level_evidence = normalized(raw.get('level_evidence'))
     level_markers = {'intern':r'intern|praktikum|werkstudent', 'entry':r'entry|junior|berufseinsteiger|trainee|new grad',
@@ -226,7 +237,7 @@ def validate_classification(raw, source, title='', *, reviewed=False):
             'required_experience_years': years, 'experience_level': levels,
             'work_arrangement': arrangement, 'employment_type': employment,
             'employment_defaulted': not employment_supported,
-            'experience_alternatives': alternatives,
+            'experience_alternatives': alternatives, 'experience_requirements': requirements,
             'skills': skills, 'role_type': role_type, 'evidence': raw['evidence'],
             'source_evidence': {key: value for key, value in raw.items() if key.endswith('_evidence')}}
 
@@ -256,6 +267,8 @@ def classification_prompt(rows):
         'Use the highest minimum across separate mandatory experience requirements, including different bullet points. '
         'For alternative required paths use the smallest minimum and return the explicit numeric minima in experience_alternatives; preserve the alternatives in experience_evidence. '
         'experience_level is intern, entry, mid, senior, lead, director or null, only if stated. '
+        'Also return experience_requirements as an array of {"years":2,"evidence":"exact original source quote"} '
+        'for EVERY distinct mandatory experience requirement. Preserve each requirement, not only the maximum. '
         'work_arrangement is onsite, hybrid, remote or null; home office alone does not prove fully remote. '
         'employment_type is full_time, part_time, contract, internship, working_student, apprenticeship '
         'or null. Skills are at most 12 explicitly named skills/tools copied from the posting. '

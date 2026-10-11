@@ -178,6 +178,9 @@ _REASON_STATUS = {
     REASON_MISSING_LOCATION: STATUS_MISSING_REQUIRED,
     REASON_MISSING_SOURCE: STATUS_MISSING_REQUIRED,
     REASON_MISSING_OBSERVED_AT: STATUS_MISSING_REQUIRED,
+    'posted_over_30_days': STATUS_STALE_OR_CLOSED,
+    'first_seen_over_30_days': STATUS_STALE_OR_CLOSED,
+    'blue_collar_excluded': STATUS_STALE_OR_CLOSED,
     REASON_STALE_OBSERVATION: STATUS_STALE_OR_CLOSED,
     REASON_CLOSED_LIFECYCLE_STATE: STATUS_STALE_OR_CLOSED,
     REASON_FUTURE_POSTED_AT: STATUS_INVALID,
@@ -823,6 +826,14 @@ def validate_job_for_publication(
         field_states["source"] = "missing"
     else:
         field_states["source"] = "present"
+
+    from backend.acquisition.job_lifecycle import exclusion_reason
+    age_reason = exclusion_reason(record, now=current)
+    if age_reason:
+        mark(age_reason, 'posted_at', 'first_seen_at')
+    from backend.application.catalog_job_filters import profession_override
+    if profession_override(_text(record.get('title')), '') == ('blue', []):
+        mark('blue_collar_excluded', 'title')
 
     # --- freshness ---
     observed_at = _observed_at(record)

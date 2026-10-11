@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from backend.application.catalog_job_filters import classification_prompt, validate_classification
+from backend.application.catalog_job_filters import classification_prompt, profession_override, validate_classification
 from backend.application.personalized_jobs_intelligence import build_preserved_original_posting
 from backend.application.vps_job_descriptions import build_pilot_description
 from backend.domain.job_filter_source_cache import SOURCE_PATHS, SOURCE_SCHEMA
@@ -18,10 +18,31 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
     if not source and not str(row.get("title") or "").strip():
         raise ValueError("source_missing")
     result: dict[str, Any] = {}
+    if not row.get("filters_ready") and profession_override(row.get('title'), source) == ('blue', []):
+        result['filters'] = validate_classification(
+            {'collar': 'blue', 'roles': [], 'evidence': row['title']}, row['title'] + ' ' + source, row['title'])
+        return result
+    # Build the grounded extraction prompt locally, then make one combined request.
+    description_prompt = []
+    if not row.get('description_ready'):
+        if not source:
+            raise ValueError('source_missing')
+        if len(source) < 80:
+            raise ValueError('source_incomplete')
+        def capture(prompt):
+            description_prompt.append(prompt)
+            return {'items': [], 'header_candidates': {}}
+        row = {key: value for key, value in row.items()
+               if key not in ('_translate_before_nemo', '_translation_generate')}
+        build_pilot_description(row, capture, require_source_quotes=True)
+    response = None
     if not row.get("filters_ready"):
         inputs = [{"id": row["canonical_job_id"], "title": row["title"],
                    "location": row.get("version_location", ""), "description": source}]
-        response = generate(classification_prompt(inputs))
+        prompt = classification_prompt(inputs)
+        if description_prompt:
+            prompt += '\n' + description_prompt[0] + '\nReturn ONE combined JSON object with jobs, items, and header_candidates; include all three keys.'
+        response = generate(prompt)
         jobs = response.get("jobs") if isinstance(response, Mapping) else None
         if not isinstance(jobs, list) or len(jobs) != 1 or jobs[0].get("id") != row["canonical_job_id"]:
             raise ValueError("filter_response_identity_mismatch")
@@ -29,12 +50,20 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
         if filters is None:
             raise ValueError("filter_validation_failed")
         result["filters"] = filters
+        if filters['collar'] == 'blue':
+            return result
     if not row.get("description_ready"):
         if not source:
             raise ValueError("source_missing")
         if len(source) < 80:
             raise ValueError("source_incomplete")
-        description = build_pilot_description(row, generate, require_source_quotes=True)
+        if response is None:
+            response = generate(description_prompt[0])
+        description = build_pilot_description(row, lambda _: response, require_source_quotes=True)
+        from backend.application.description_translation import source_language
+        rendered = ' '.join(item['text'] for items in description['summary'].values() for item in items)
+        if len(rendered) >= 80 and source_language(rendered) != 'en':
+            raise ValueError('description_output_not_english')
         if not any(description["summary"].get(section) for section in
                    ("responsibilities", "required_qualifications", "preferred_qualifications", "benefits", "application_details")):
             raise ValueError("description_has_no_supported_facts")
