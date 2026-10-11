@@ -2,11 +2,11 @@
 
 ## Owner-authorized cleanup execution
 
-Historical archives are being preserved at
+Historical VPS cleanup is complete. Archives are preserved at
 `C:\Users\ahmed\Runr-Historical-Archives\2026-10-11`, outside the repository.
-The prepared data archive is 5,688,671,964 bytes; the prepared archive of 36
-unreferenced releases is 947,118,748 bytes. Full local hash verification and
-source comparison are mandatory before deletion. Google Drive is not connected;
+The verified data archive is 5,688,671,964 bytes; the verified archive of 36
+unreferenced releases is 947,118,748 bytes. Full local hash verification,
+archive readability and source comparison passed before deletion. Google Drive is not connected;
 the owner authorized local storage as the fallback. New historical archives were
 not uploaded to R2. Operational disaster-recovery backups remain on their existing
 bounded policy until an automatic, verified replacement destination is available.
@@ -36,16 +36,47 @@ reference/open-file checks. The archive is
 Exact paths and members are preserved beside it in `releases.paths.txt` and
 `releases.members.txt`; `releases.completed.txt` contains the VPS deletion
 receipt. Available space after this batch was 67,418,390,528 bytes (62.79 GiB).
-The data archive and temporary transfer teardown remain unfinished.
+At 03:33 Europe/Berlin the data archive also passed full local SHA-256
+verification and source comparison. Its SHA-256 is
+`fbef3a29c7656fa3334ecfc16e88996424e56a5f6961e30964b306f32e58c3f3`.
+The five source directories in `history.paths.txt` were removed, including the
+retired catalog compaction backup and four historical t42 export attempts.
+`history.completed.txt`, `final-source-verification.txt` and `COMPLETE.txt`
+record completion. The latter check confirmed all 41 selected directories absent,
+all serving services active and the original active-state symlink preserved.
+
+The two archives total 6,635,790,712 bytes (6.18 GiB). Temporary download routes,
+password files, HTTP server and SSH tunnel were removed/stopped. An empty nginx
+include remains so another deployment's rollback snapshot stays valid without
+recreating download routes. Obsolete local fragments were removed after renewed
+full archive hash checks, reclaiming 9,064,440,344 bytes (8.44 GiB).
+
+The completed archive receipt recorded 52,485,947,392 bytes available (48.88 GiB).
+A concurrent customer backup then held a 33,902,206,976-byte temporary SQLite
+snapshot and a 4,312,397,000-byte gzip copy, bringing an interim reading to
+48,159,100,928 bytes (44.85 GiB). The backup deletes both after its verified
+off-host readback; do not mistake temporary backup usage for retained history.
+The backup subsequently completed and removed its temporary files. The resulting
+measurement was **86,352,568,320 bytes available (80.42 GiB / 86.35 GB)**, with
+59% filesystem usage. The API remained ready throughout the cleanup checks.
+
+The exact historical catalog blob `before.sql.gz` was extracted from the local
+archive and verified independently (4,046,598,196 bytes; SHA-256
+`29d32d776e7e60ee78745c00f63f16efb334b1c402caae0b412931dce19a0864`).
+The VPS re-read and hashed the matching R2 object, deleted only that exact key,
+then confirmed absence. Receipts are `historical-r2-retirement.json` and
+`catalog-payload-from-history.verified.json` beside the local archives. The
+standalone payload is also available under the device backup folder using its
+original object-key path.
 
 The resumable completion controller is `deploy/complete-vps-history.ps1`. It
 checks full local SHA-256 and archive readability, then requests source comparison
 and removal on the VPS. Deletion cannot proceed on an incomplete download.
 Receipts and final status are written beside the local archives; `COMPLETE.txt`
 is created only after both cleanup batches and final readiness checks succeed.
-The temporary password-protected HTTPS transfer routes expire after 24 hours.
-The lower-priority historical R2 object migration and Google Drive backup
-replacement remain outstanding; operational recovery backups have not been removed.
+The temporary password-protected HTTPS transfer routes were torn down and their
+expiry timer stopped. Further historical R2 migration continues through the device
+task below; operational recovery backups remain under their bounded policy.
 
 ### Device backup migration
 
@@ -74,6 +105,8 @@ advance. Full retirement of operational R2 backups requires a verified replaceme
 for future backup creation. Historical retirement is recorded locally in
 `backups/historical-r2-retirement.json` and on the VPS in
 `/srv/runr/ops/device-history-retirement/latest.json`.
+
+## Original inventory snapshot
 
 Read-only inventory requested by the owner. No VPS files, services, timers,
 retention settings or repository artifacts were deleted or changed during this
