@@ -171,6 +171,13 @@ def validate_classification(raw, source, title='', *, reviewed=False):
     if not levels and level in level_markers and level_evidence and level_evidence in text and re.search(level_markers[level],level_evidence):
         levels = [level]
     if not levels:
+        # Preserve an explicit statement about this position when the model
+        # omits metadata; mentions of colleagues do not establish its level.
+        stated_mid = re.search(r'\bmid[- ]?level\s+(?:position|role|job)\b', text)
+        if stated_mid:
+            levels = ['mid']
+            raw['level_evidence'] = stated_mid.group(0)
+    if not levels:
         for value, pattern in (('director', r'\bdirector\b|\bdirektor\b'), ('lead', r'\blead\b|teamleit|head of'),
                                ('senior', r'\bsenior\b'), ('entry', r'\bjunior\b|berufseinsteiger|entry level'),
                                ('intern', r'praktikum|werkstudent|internship')):
