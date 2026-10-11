@@ -145,6 +145,9 @@ def process_one(row: dict, generate, *, proxy_url: str) -> dict:
     except Exception as exc:
         result = {"state": "unavailable", "candidates": [], "evidence": []}
         error_code = type(exc).__name__ if str(exc) != "webshare_unconfigured" else "webshare_unconfigured"
+        if isinstance(exc, RuntimeError):
+            print(json.dumps({"event": "network_discovery_error", "code": error_code,
+                              "reason": str(exc)[:120]}), flush=True)
     updated_at = datetime.now(timezone.utc).isoformat()
     execute("""INSERT OR REPLACE INTO published_job_network_discovery
         (version_id,canonical_job_id,content_hash,state,candidates_json,evidence_json,error_code,updated_at)
