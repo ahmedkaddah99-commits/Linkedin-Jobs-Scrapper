@@ -24,8 +24,8 @@ same drawer with a short message and bounded extracted fields.
 Legacy direct fetch failures return `manual_required`, a short message and bounded extracted
 fields. Manual submissions require a job title, at least 100 description
 characters and job-content signals. Limits are URL 2,048; title/company 200;
-location 300; description 50,000. Network/model attempts are limited to 20 per
-account per UTC day. Model failure preserves employer text and offers Retry;
+location 300; description 50,000. Previews and Save attempts have independent
+limits of 20 per account per UTC day. Model failure preserves employer text and offers Retry;
 generated descriptions do not replace the original. Public URL validation and
 redirect/DNS checks reuse the official-site fetcher. Quick Apply's page, API
 endpoint, internal workspace creation and workflow builder are retired.
