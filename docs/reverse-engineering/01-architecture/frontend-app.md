@@ -728,3 +728,8 @@ through the existing saved-filter and feed-query contract.
 The experience rail spans 0?10 years. Both handles start at zero. When they overlap below ten, the upper handle receives pointer input, so dragging right expands the interval while the lower bound stays put. At ten the lower handle receives input so dragging left can expand it. Moving a handle no longer jumps the other handle to the end. This supersedes the earlier 30-year rail behavior.
 
 The experience slider uses whole-year increments only (step 1); fractional saved values are rounded for display.
+
+
+## Job CV customization (2026-10-11)
+
+The selected-job reader now mounts `components/cvCustomization/` through an AI Tools rail. The drawer assesses uploaded CV editor profiles and provides an explicit anonymized working sample, section and keyword choices, direct document editing, device-local draft recovery and HTML/browser-PDF export. The unfinished live generation pipeline is not exposed as available. Saved-profile matching and baseline assets are unchanged. See [delivery and verification](../../reports/cv-customization-2026-10-11.md).

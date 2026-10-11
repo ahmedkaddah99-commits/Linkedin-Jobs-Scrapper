@@ -1,3 +1,5 @@
+import CvCustomization from "../cvCustomization/CvCustomization.jsx";
+import { CvTools, QualificationTags } from "../cvCustomization/CvTools.jsx";
 import QuickJobFilter from "./QuickJobFilter";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -172,21 +174,20 @@ function CompetitionPanel({ job }) {
   </section>;
 }
 
-function ImproveResumeReview({ job, result, onClose, onRewrite, busy }) {
+function ImproveResumeReview({ job, result, onClose, onCustomize }) {
   const match = job.matchIntelligence || {};
   const evidence = result?.evidence || {};
   const value = (key) => evidence[key] ?? match[key];
-  const canRewrite = Boolean(job.improveResume?.rewriting_available);
   return <div className="jobs-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section aria-labelledby="improve-resume-title" aria-modal="true" className="jobs-improve-modal" role="dialog">
-    <header><div><p className="jobs-eyebrow">Evidence review</p><h2 id="improve-resume-title">Improve Resume</h2></div><button aria-label="Close evidence review" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
+    <header><div><p className="jobs-eyebrow">Evidence review</p><h2 id="improve-resume-title">Analyze your fit</h2></div><button aria-label="Close evidence review" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
     <p>Review what your current profile supports before making any change. Never claim experience you cannot verify.</p>
     <div className="jobs-intelligence-grid">{[["Matched keywords", "matched_keywords"], ["Missing keywords", "missing_keywords"], ["Matched requirements", "matched_requirements"], ["Unproven requirements", "unproven_requirements"], ["Apparent non-matches", "apparent_non_matches"], ["Matched evidence", "matched_evidence"], ["Missing evidence", "missing_evidence"]].map(([label, key]) => <div className="jobs-intelligence-card" key={key}><strong>{label}</strong><IntelligenceList evidence={key === "matched_evidence" || key === "missing_evidence"} items={value(key)} /></div>)}</div>
     <p>Matching uses your saved profile. Tailoring a resume does not change your profile match.</p>
-    <footer><button className="jobs-outline-button" onClick={onClose} type="button">Close review</button>{canRewrite ? <button className="jobs-primary-button" disabled={busy} onClick={onRewrite} type="button">{busy ? "Queuing…" : "Create tailored resume"}</button> : <span className="jobs-pro-gate">Tailored rewriting is available in Runr Pro.</span>}</footer>
+    <footer><button className="jobs-outline-button" onClick={onClose} type="button">Close review</button><button className="jobs-primary-button" onClick={onCustomize} type="button">Customize CV</button></footer>
   </section></div>;
 }
 
-function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHide, onReport, onImprove }) {
+function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHide, onReport, onImprove, confirmations, onConfirmations }) {
   const summary = job.runrSummary || {};
   const structured = job.structuredDescription || {};
   const extracted = (name) => structured[name]?.value;
@@ -228,7 +229,7 @@ function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHi
     {available ? <>
       {summary.overview ? <section className="jobs-reading__section" id="job-overview"><h2><Icon>subject</Icon>Overview</h2><p>{summary.overview}</p></section> : null}
       {responsibilities.length > 0 ? <section className="jobs-reading__section" id="job-responsibilities"><h2><Icon>checklist</Icon>Responsibilities</h2>{list(responsibilities)}</section> : null}
-      {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2>{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
+      {required.length || preferred.length ? <section className="jobs-reading__section" id="job-qualifications"><h2><Icon>target</Icon>Qualifications</h2><QualificationTags job={job} confirmations={confirmations} onChange={onConfirmations} />{required.length ? <div className="jobs-reading__qualification"><h3>Required</h3>{list(required)}</div> : null}{preferred.length ? <div className="jobs-reading__qualification"><h3>Preferred</h3>{list(preferred)}</div> : null}</section> : null}
       {benefits.length ? <section className="jobs-reading__section" id="job-benefits"><h2><Icon>redeem</Icon>Benefits</h2>{list(benefits)}</section> : null}
       {applicationDetails.length ? <section className="jobs-reading__section" id="job-application-details"><h2><Icon>assignment</Icon>Application details</h2>{list(applicationDetails)}</section> : null}
     </> : <section className="jobs-reading__section jobs-reading__pending" role="status"><Icon>hourglass_top</Icon><div><h2>{placeholder.title}</h2><p>{placeholder.text}</p></div></section>}
@@ -335,8 +336,10 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
   const filterOwnerRef = useRef(user?.user_id);
   const [reportOpen, setReportOpen] = useState(false);
   const [improveOpen, setImproveOpen] = useState(false);
+  const [cvOpen, setCvOpen] = useState(false);
+  const [cvConfirmations, setCvConfirmations] = useState({});
+  const cvOwnerKey = `${user?.user_id || ""}:${routeJobId || ""}`;
   const [improveResult, setImproveResult] = useState(null);
-  const [improveBusy, setImproveBusy] = useState(false);
   const [preparing, setPreparing] = useState(searchParams.get("prepare") === "1");
   const [feedback, setFeedback] = useState("");
   const [busyAction, setBusyAction] = useState("");
@@ -724,21 +727,6 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     }
   }
 
-  async function requestRewrite() {
-    if (!selectedJob) return;
-    setImproveBusy(true);
-    try {
-      const result = await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/improve-resume`, { method: "POST", body: { mode: "rewrite" } });
-      setImproveResult(result);
-      setFeedback("Tailored resume generation has been queued.");
-      logPersonalizedEvent("application_preparation_requested", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
-    } catch (error) {
-      setFeedback(error?.message || "Runr Pro is required to create a tailored resume.");
-    } finally {
-      setImproveBusy(false);
-    }
-  }
-
   async function loadMore() {
     if (!canSearch || !feed?.next_cursor || loading || loadingMoreRef.current) return;
     loadingMoreRef.current = true;
@@ -793,10 +781,11 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><span>Job overview</span></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link" onClick={() => navigate(jobsPath, { state: { jobFilters: filters } })} type="button"><Icon>arrow_back</Icon>{external ? "Back to external jobs" : "Back to jobs"}</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button>{selectedJob.viewJobUrl ? <a className="jobs-outline-button" href={selectedJob.viewJobUrl} rel="noopener noreferrer" target="_blank" title="Open original job posting"><Icon>open_in_new</Icon>View employer posting</a> : <button className="jobs-outline-button" disabled title="No source link available" type="button"><Icon>open_in_new</Icon>View employer posting</button>}{selectedJob.applicationEntryUrl ? <a className="jobs-primary-button" href={selectedJob.applicationEntryUrl} onClick={applyToJob} rel="noopener noreferrer" target="_blank" title={selectedJob.applicationEntryKind === "direct_apply" ? "Open employer application" : "Open original posting to apply"}><Icon>bolt</Icon>Apply</a> : <button className="jobs-primary-button" disabled title="No application or job link available" type="button"><Icon>bolt</Icon>Apply</button>}</div></div>
     <div className="jobs-detail-scroll">
       {detailJob?.external_job && detailJob.enrichment_state === "unavailable" ? <div className="jobs-feedback" role="status">Some job details could not be generated. The employer text is available.<button className="jobs-outline-button" disabled={busyAction === "enrich"} onClick={async () => { setBusyAction("enrich"); try { const result = await request("/personalized-jobs/import", { method: "POST", body: { url: detailJob.canonical_url, retry_enrichment: true }, timeoutMs: 120000 }); if (result.job) setDetailJob(result.job); } catch (error) { setFeedback(error?.message || "Unable to generate job details. Try again."); } finally { setBusyAction(""); } }} type="button">{busyAction === "enrich" ? "Loading?" : "Retry"}</button></div> : null}
-      <ReadableJob company={{ name: selectedJob.company, profile: selectedJob.companyProfile }} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
-      {detailsLoaded ? <JobConnections job={selectedJob} request={request} /> : null}
+      <div className="jobs-cv-layout"><div className="jobs-cv-main"><ReadableJob confirmations={cvConfirmations[cvOwnerKey] || {}} onConfirmations={value => setCvConfirmations(current => ({ ...current, [cvOwnerKey]: value }))} company={{ name: selectedJob.company, profile: selectedJob.companyProfile }} detailsLoaded={detailsLoaded} detailError={detailError} job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} />
+      {detailsLoaded ? <JobConnections job={selectedJob} request={request} /> : null}</div><CvTools onCustomize={() => setCvOpen(true)} onAnalyze={openImproveResume} /></div>
+      {cvOpen ? <CvCustomization key={cvOwnerKey} job={selectedJob} userId={user?.user_id} request={request} initialConfirmations={cvConfirmations[cvOwnerKey] || {}} onClose={() => setCvOpen(false)} /> : null}
       {preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}
-      {improveOpen ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}
+      {improveOpen ? <ImproveResumeReview job={selectedJob} onClose={() => setImproveOpen(false)} onCustomize={() => { setImproveOpen(false); setCvOpen(true); }} result={improveResult} /> : null}
     </div>
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{detailError || (routeJobId ? "Loading job details" : "Select a job")}</strong><span>{detailError ? "Return to the job list and try again." : routeJobId ? "Runr is loading this job." : "Choose a role from the shortlist to see details."}</span></div>;
 
