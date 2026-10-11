@@ -19,7 +19,11 @@ if not lock.read(1):
     lock.write(b'0')
     lock.flush()
 lock.seek(0)
-msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+try:
+    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+except OSError:
+    print('A device backup copy is already running; skipped overlapping run.', flush=True)
+    sys.exit(0)
 manifest = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8-sig'))
 receipt_path = root / 'latest-verified.json'
 previous = json.loads(receipt_path.read_text(encoding='utf-8')) if receipt_path.exists() else {'objects': []}
