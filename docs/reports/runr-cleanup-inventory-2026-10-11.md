@@ -12,7 +12,7 @@ not uploaded to R2. Operational disaster-recovery backups remain on their existi
 bounded policy until an automatic, verified replacement destination is available.
 
 Deployed `/opt/runr-ops/run-storage-budget.sh` and the hourly
-`runr-storage-budget.timer`: fixed-size receipt/metrics, 30 GiB minimum headroom,
+`runr-storage-budget.timer`: fixed-size receipt/metrics, 48 GiB minimum headroom,
 6 GiB export budget and 4 GiB release budget. These limits flag excess history;
 they do not automatically delete unarchived files. Existing acquisition backups
 retain two local and seven remote generations, LinkedIn exports retain two
@@ -22,6 +22,15 @@ current corrections. Product services were not replaced by the cleanup deploymen
 
 Final archive verification, reclaimed space and transfer teardown receipts will
 be appended after the downloads finish.
+
+The resumable completion controller is `deploy/complete-vps-history.ps1`. It
+checks full local SHA-256 and archive readability, then requests source comparison
+and removal on the VPS. Deletion cannot proceed on an incomplete download.
+Receipts and final status are written beside the local archives; `COMPLETE.txt`
+is created only after both cleanup batches and final readiness checks succeed.
+The temporary password-protected HTTPS transfer routes expire after 24 hours.
+The lower-priority historical R2 object migration and Google Drive backup
+replacement remain outstanding; operational recovery backups have not been removed.
 
 Read-only inventory requested by the owner. No VPS files, services, timers,
 retention settings or repository artifacts were deleted or changed during this
