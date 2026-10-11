@@ -61,12 +61,19 @@ are completely copied. Historical catalog archives are preserved indefinitely.
 
 The initial inventory contains 69 objects totaling 89.55 GiB across acquisition,
 customer-database and historical catalog backup prefixes. The initial copy is
-still running; there is no verified full-set migration receipt yet. This task
-does **not** disable production backup uploads or delete R2 objects. Completion
+still running; there is no verified full-set migration receipt yet. After a
+fresh complete copy, the task retires only individually verified historical
+objects under `runr/acquisition/checkpoints/recovery/` and
+`private/catalog/backups/`. It compares remote size and SHA metadata again and
+checks absence after deletion. Live checkpoint generations, customer database
+backups and user documents are excluded. This task does **not** disable
+production backup uploads. Completion
 is recorded in `backups/latest-verified.json`; unattended task output is in
 `backups/latest-run.log`. The device must be available for off-host copies to
-advance. Retiring R2 requires successful local copies and a verified replacement
-for future backup creation, not merely registration of this task.
+advance. Full retirement of operational R2 backups requires a verified replacement
+for future backup creation. Historical retirement is recorded locally in
+`backups/historical-r2-retirement.json` and on the VPS in
+`/srv/runr/ops/device-history-retirement/latest.json`.
 
 Read-only inventory requested by the owner. No VPS files, services, timers,
 retention settings or repository artifacts were deleted or changed during this
