@@ -12,6 +12,7 @@ from backend.api.routes.career_profiles import register_routes as register_caree
 from backend.api.routes.master_cv import register_routes as register_master_cv_routes
 from backend.api.routes.career_evidence import register_routes as register_career_evidence_routes
 from backend.api.routes.cv_bullet_suggestions import register_routes as register_cv_bullet_suggestions_routes
+from backend.api.routes.job_cv_customization import register_routes as register_job_cv_customization_routes
 from backend.api.routes.motivation_letters import register_routes as register_motivation_letters_routes
 
 
@@ -49,6 +50,7 @@ def build_route_registry() -> RouteRegistry:
 
     register_career_evidence_routes(registry)
     register_cv_bullet_suggestions_routes(registry)
+    register_job_cv_customization_routes(registry)
 
     register_motivation_letters_routes(registry)
 

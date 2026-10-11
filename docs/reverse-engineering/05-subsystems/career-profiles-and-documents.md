@@ -215,3 +215,14 @@ From `git log --oneline 58a96674 -- backend/career_memory backend/evidence backe
 (b) **Registry**: covered by the single `app-services` row in the primary doc (§11 b). This slice is `app-services/career-documents` with test globs `tests/test_career_*.py`, `tests/test_evidence*.py`, `tests/test_master_cv.py`, `tests/test_tailored_document_generation.py`, `tests/test_work_experience.py`, `tests/test_baseline_cv_replacement.py`.
 
 (c) **Gap/ticket candidates**: WS4-G7 (persist or retire in-memory stores), WS4-G8 (dead Career Memory module and fixture route), WS4-G9 (single-candidate fallbacks), WS4-G10 (evidence model consolidation).
+
+
+## Job-specific CV assistance (2026-10-11)
+
+`POST /cv-customization/analyze` and `/generate` use account-owned baseline assets and server-resolved published/external jobs. The new `backend/profiles/job_cv_customization.py` calls DeepSeek with structured JSON. Analysis extracts full-description specialist requirements and exact source excerpts, distinguishing explicit requirements from inferred seniority/domain benchmarks. CV evidence excerpts are checked against actual profile strings; job excerpts must occur in job data. The frontend calculates transparent content-coverage scores; these are not ATS or hiring probabilities.
+
+Generation preserves identity, employers, titles, dates, unselected sections, and bullet counts. Quick editing changes only the first two roles. Skills additions require selected supported evidence or user confirmation; new numeric claims are rejected. Source assets are never overwritten. Provider failures return a retryable 503 rather than a copied CV masquerading as generation. Analysis is cached for 30 minutes by user, source content and job content (100-entry bound); one request per user can run at once. Drafts remain local to the device.
+
+Generation uses the existing Pro gate. `CV_CUSTOMIZATION_PREVIEW_USER_ID` plus `CV_CUSTOMIZATION_PREVIEW_JOB_ID` may grant one specifically scoped owner-requested preview without changing billing. Both must match. The owner preview is configured for the PERI Senior Consultant S&OP & SAP IBP role. `DEEPSEEK_API_KEY` is required; optional `DEEPSEEK_CV_CUSTOMIZATION_MODEL` defaults to `deepseek-chat`. No schema migration or worker change is needed.
+
+Verification and live reference links: [CV assistance refinement report](../../reports/cv-assistance-refinement-2026-10-11.md).

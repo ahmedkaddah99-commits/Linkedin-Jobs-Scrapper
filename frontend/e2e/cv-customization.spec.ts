@@ -53,18 +53,37 @@ test('selected-job sample generates, edits, reopens and exports the current CV',
   await page.screenshot({ path: `test-results/cv-viewport-${test.info().project.name}.png` });
 });
 
-test('actual CV is assessed without invoking incomplete production rewriting', async ({ page }) => {
+test('actual CV analyzes, generates through the API and edits in the side panel', async ({ page }) => {
   await page.route('**/v1/documents?*', route => route.fulfill({ json: { documents: [{ asset_id: 'mine', filename: 'My CV.pdf', document_type: 'cv' }] } }));
   await page.route('**/v1/documents/assets/mine/editor', route => route.fulfill({ json: { editor: { revision: 2, profile: { name: 'Real Candidate', summary: 'SQL analyst', competencies: ['SQL'], recent_experience: [{ title: 'Analyst', company: 'Example', period: '2020 - 2022', bullets: ['Built reports using SQL'] }] } } } }));
+  await page.route('**/v1/cv-customization/analyze', route => route.fulfill({ json: { requirements: { title: 'Strategy Associate', years: 3, yearsBasis: 'inferred', industries: ['Consulting'], roleTerms: ['Strategy'], priorities: ['SQL'], keywords: [{ label: 'SQL', source: 'SQL skills' }, { label: 'Data analysis', source: 'Analyze data', evidence: 'Built reports using SQL' }] } } }));
+  await page.route('**/v1/cv-customization/generate', route => route.fulfill({ json: { draft: { name: 'Real Candidate', headline: 'Analyst', summary: 'Generated analysis summary', skills: ['SQL', 'Data analysis'], experience: [{ title: 'Analyst', company: 'Example', period: '2020 - 2022', bullets: ['Delivered SQL reporting insights'] }], projects: [], education: [], languages: [], custom: [], order: ['summary', 'experience', 'skills'] } } }));
   await page.goto('/jobs/cv-job');
   await page.getByRole('button', { name: 'Customize CV', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: 'Customize CV' });
   await drawer.getByRole('combobox', { name: 'Baseline CV' }).selectOption('mine');
   await expect(drawer.getByText('Real Candidate', { exact: true })).toBeVisible();
   await drawer.getByRole('button', { name: 'Customize this CV' }).click();
-  await expect(drawer.getByText(/Live AI generation is not connected yet/)).toBeVisible();
-  await drawer.getByRole('button', { name: 'Open editable draft' }).click();
+  await expect(drawer.getByText(/Live AI generation is not connected yet/)).toHaveCount(0);
+  await drawer.getByRole('button', { name: 'Select supported' }).click();
+  await expect(drawer.getByRole('checkbox', { name: 'Data analysis', exact: true })).toBeChecked();
+  await drawer.getByRole('button', { name: 'Generate tailored CV' }).click();
   await expect(drawer.getByRole('textbox', { name: 'Full name', exact: true })).toHaveText('Real Candidate');
+  await drawer.getByRole('button', { name: 'Edit', exact: true }).click();
+  await drawer.locator('.cv-side-editor textarea').fill('Edited from the side panel');
+  await expect(drawer.locator('.cv-paper').getByRole('textbox', { name: 'Professional summary', exact: true })).toHaveText('Edited from the side panel');
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
+});
+
+test('connection cards expand real people and designed empty states without images', async ({ page }) => {
+  await page.route('**/v1/personalized-jobs/cv-job', route => route.fulfill({ json: { ...job, network_connections: [{ name: 'Existing Contact', role: 'Engineer', linkedin_url: 'https://linkedin.com/in/example' }], shared_background_connections: [] } }));
+  await page.goto('/jobs/cv-job');
+  await expect(page.locator('.jobs-setup-rail')).toHaveCount(0);
+  await page.getByRole('button', { name: /Your connections/ }).click();
+  await expect(page.getByText('Existing Contact', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /Shared background/ }).click();
+  await expect(page.getByText(/No confirmed overlap yet/)).toBeVisible();
+  await expect(page.locator('.job-connections img')).toHaveCount(0);
+  await page.screenshot({ path: `test-results/job-connections-v2-${test.info().project.name}.png`, fullPage: true });
 });

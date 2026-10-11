@@ -83,3 +83,13 @@ test('custom sections from the existing editor preserve their lines', () => {
   assert.deepEqual(result.custom[0].bullets, ['Winner 2024']);
   assert.ok(buildCvExport(result).includes('Winner 2024'));
 });
+
+test('full description supplies specialist keywords and explicit years before seniority inference', () => {
+  const job = requirementsForJob({ title: 'Senior Consultant SAP IBP', description: 'At least 4 years of experience in supply chain consulting. Lead S&OP and demand planning.' });
+  assert.equal(job.years, 4);
+  assert.equal(job.yearsBasis, 'explicit');
+  assert.ok(job.keywords.some(t => t.label === 'SAP IBP'));
+  assert.ok(job.keywords.some(t => t.label === 'S&OP'));
+  assert.ok(job.industries.includes('Supply chain'));
+  assert.equal(requirementsForJob({ title: 'Senior Consultant', description: 'Lead transformation engagements.' }).yearsBasis, 'inferred');
+});

@@ -53,19 +53,24 @@ export function experienceYears(entries, now = new Date()) {
   return Math.round(merged.reduce((sum, [s, e]) => sum + e - s, 0) / 12 * 10) / 10;
 }
 
-const VOCABULARY = ['Corporate strategy', 'Strategy consulting', 'Investment banking', 'Private equity', 'Enterprise software', 'SaaS', 'Strategic thinking', 'Strategic planning', 'Stakeholder management', 'Project management', 'Data analysis', 'Python', 'SQL', 'JavaScript', 'TypeScript', 'React', 'Java', 'AWS', 'Azure', 'Power BI', 'Excel', 'Agile', 'Scrum', 'Machine learning', 'Artificial intelligence', 'Business development', 'Product management', 'Communication', 'Leadership'];
+const VOCABULARY = ['SAP IBP', 'SAP', 'S&OP', 'Integrated business planning', 'Supply chain', 'Demand planning', 'Supply planning', 'Forecasting', 'ERP', 'Manufacturing', 'Consulting', 'Corporate strategy', 'Strategy consulting', 'Investment banking', 'Private equity', 'Enterprise software', 'SaaS', 'Strategic thinking', 'Strategic planning', 'Stakeholder management', 'Project management', 'Data analysis', 'Python', 'SQL', 'JavaScript', 'TypeScript', 'React', 'Java', 'AWS', 'Azure', 'Power BI', 'Excel', 'Agile', 'Scrum', 'Machine learning', 'Artificial intelligence', 'Business development', 'Product management', 'Communication', 'Leadership'];
 export function requirementsForJob(job = {}) {
   if (Array.isArray(job.keywords)) return job;
   const summary = job.runrSummary || job.runr_summary || {};
   const qualifications = [...list(summary.required_qualifications), ...list(summary.preferred_qualifications)].map(label);
-  const source = qualifications.join('\n');
+  const source = [job.description, job.title, ...list(summary.responsibilities).map(label), ...qualifications].filter(Boolean).join('\n');
   const explicit = list(job.skills).map(label);
   const found = termsIn(source, VOCABULARY.map(v => ({ label: v })));
-  const keywords = unique([...explicit, ...found.map(v => v.label)]).map(v => ({ label: v, aliases: [], source: qualifications.find(q => termsIn(q, [{ label: v }]).length) || 'Job skill requirement' }));
-  const years = job.requiredExperienceYears ?? job.structuredDescription?.experience_years_min?.value;
+  const keywords = unique([...explicit, ...found.map(v => v.label)]).map(v => ({ label: v, aliases: [], source: source.split(/[\n.!?]+/).find(q => termsIn(q, [{ label: v }]).length)?.trim() || 'Job skill requirement' }));
+  const yearMatch = source.match(/(?:at least|minimum(?: of)?|mindestens)?\s*(\d+)\s*(?:\+|[-–]\s*\d+)?\s*(?:years?|jahre[n]?)\s*(?:(?:of|professional|relevant|berufs)\s*)?(?:experience|erfahrung)?/i);
+  const explicitYears = job.requiredExperienceYears ?? job.required_experience_years ?? job.structuredDescription?.experience_years_min?.value ?? (yearMatch ? Number(yearMatch[1]) : null);
+  const inferredYears = /senior|lead|principal|head/i.test(job.title || '') ? 5 : /junior|intern|graduate|entry/i.test(job.title || '') ? 0 : 3;
+  const years = explicitYears ?? inferredYears;
+  const industries = unique(list(job.industries || job.companyIndustries).map(label));
+  if (!industries.length) industries.push(...termsIn(source, ['Consulting', 'Manufacturing', 'Supply chain', 'Software', 'Healthcare', 'Finance', 'Banking', 'Retail', 'Energy', 'Construction', 'Logistics'].map(v => ({ label: v }))).map(v => v.label));
   return { id: job.id, version: job.version || job.current_version_id || job.structuredDescription?.source_content_hash || '', title: job.title || '', company: job.company || '',
-    years: typeof years === 'number' ? years : null, experienceNote: qualifications.filter(q => /year|experience/i.test(q)).join(' '),
-    industries: unique(list(job.industries || job.companyIndustries).map(label)), keywords,
+    years: typeof years === 'number' ? years : null, yearsBasis: explicitYears == null ? 'inferred' : 'explicit', experienceNote: explicitYears == null ? 'Seniority benchmark inferred from the role; not an employer-stated minimum. AI analysis refines this using the full description.' : (yearMatch?.[0] || qualifications.filter(q => /year|experience/i.test(q)).join(' ')),
+    industries, industryBasis: job.industries?.length ? 'explicit' : 'inferred', keywords,
     roleTerms: unique(clean(job.title).split(/[\s,/&]+/).filter(t => t.length > 3 && !/senior|junior|associate|manager|lead/i.test(t))),
     priorities: keywords.slice(0, 6).map(k => k.label),
   };
@@ -96,7 +101,7 @@ export function keywordEvidence(cv, term, confirmations = {}) {
   const confirmation = confirmations[term.label];
   if (confirmation?.confirmed === false) return '';
   if (confirmation?.confirmed && clean(confirmation.example)) return clean(confirmation.example);
-  // Curated evidence may only be supplied by the sample requirements, never inferred from the job text.
+  // Evidence is either curated sample text or a server-validated exact CV excerpt.
   if (term.evidence) return term.evidence;
   return cvText(cv).split('\n').find(line => termsIn(line, [term]).length) || '';
 }

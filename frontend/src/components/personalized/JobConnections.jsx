@@ -16,11 +16,13 @@ export default function JobConnections({ job, request }) {
   const [profileUrl, setProfileUrl] = useState("");
   const [emailResult, setEmailResult] = useState(null);
   const [emailBusy, setEmailBusy] = useState(false);
+  const [expanded, setExpanded] = useState('');
 
   useEffect(() => {
     setEmailResult(null);
     setProfileUrl("");
     setPerson(null);
+    setExpanded('');
   }, [job.id]);
 
   useEffect(() => {
@@ -54,7 +56,6 @@ export default function JobConnections({ job, request }) {
 
   const renderPerson = (item, index) => (
     <div className="job-connection-person" key={`${item.linkedin_url || item.contact_id || item.name}-${index}`}>
-      <span className="job-connection-avatar">{String(item.name || "?").slice(0, 1).toUpperCase()}</span>
       <div><strong>{item.name}</strong><small>{item.role || item.company || "Connection"}</small></div>
       <div className="job-connection-person__actions">
         {item.linkedin_url ? <>
@@ -68,25 +69,24 @@ export default function JobConnections({ job, request }) {
   return <section className="job-connections" aria-label="Connections for this job">
     <div className="job-connections__heading">
       <div><h2>Insider connections at {job.company}</h2><p>Explore people who may know this team.</p></div>
-      <span className="job-connections__tip" tabIndex="0" title="A work email gives you another way to reach out. Response rates vary. A provider credit is used only when an email is found.">ⓘ Email or LinkedIn?</span>
+      <span className="job-connections__tip">A warm introduction starts here</span>
     </div>
     <div className="job-connections__grid">
-      <div className="job-connections__card job-connections__card--beyond">
-        <h3>Beyond your network</h3>
-        {candidates.length ? candidates.map(renderPerson) : <p>{discovery.state === "pending" ? "Finding likely hiring contacts…" : "No likely hiring contact found yet."}</p>}
-        <small>Public profile matches are suggestions. Check each profile before reaching out.</small>
-      </div>
-      <div className="job-connections__card job-connections__card--known">
-        <h3>Your connections</h3>
-        {known.length ? known.slice(0, 5).map(renderPerson) : <p>No saved connection at this company yet.</p>}
-      </div>
-      <div className="job-connections__card job-connections__card--shared">
-        <h3>Shared background</h3>
-        {shared.length ? shared.slice(0, 5).map((item, index) => <div key={`${item.contact_id}-${index}`}>{renderPerson(item, index)}<small>{item.shared_school || item.shared_previous_company}</small></div>) : <p>No confirmed school or previous company link yet.</p>}
-      </div>
+      {[
+        { id: 'beyond', title: 'Beyond your network', icon: 'travel_explore', items: candidates, description: 'Meet people close to the team.', empty: discovery.state === 'pending' ? 'Finding potential contacts for this role…' : 'No hiring contacts found yet. You can still explore the company on LinkedIn.' },
+        { id: 'known', title: 'Your connections', icon: 'hub', items: known, description: 'Turn familiar names into a first conversation.', empty: 'Your next introduction could start here. Import your connections to discover people at this company.' },
+        { id: 'shared', title: 'Shared background', icon: 'school', items: shared, description: 'A shared school. A former workplace. Common ground.', empty: 'No confirmed overlap yet. Add education and career history to help uncover shared connections.' },
+      ].map(card => <div className={`job-connections__card job-connections__card--${card.id} ${expanded === card.id ? 'is-expanded' : ''}`} key={card.id}>
+        <button className="job-connections__card-trigger" type="button" aria-expanded={expanded === card.id} aria-controls={`connections-${card.id}`} onClick={() => setExpanded(expanded === card.id ? '' : card.id)}>
+          <span className="job-connections__card-top"><span className="material-symbols-outlined">{card.icon}</span><span className="job-connections__count">{card.items.length ? `${card.items.length} ${card.items.length === 1 ? 'person' : 'people'}` : 'Discover'}</span></span>
+          <h3>{card.title}</h3><p>{card.description}</p><span className="job-connections__card-action">{expanded === card.id ? 'Close details' : card.items.length ? 'See connections' : 'Explore connections'}<span aria-hidden="true">↗</span></span>
+        </button>
+        {expanded === card.id ? <div className="job-connections__people" id={`connections-${card.id}`}>{card.items.length ? card.items.map((item, index) => <div key={`${item.contact_id || item.linkedin_url}-${index}`}>{renderPerson(item, index)}{card.id === 'shared' ? <small className="job-connections__shared-label">{item.shared_school ? `School · ${item.shared_school}` : `Previous company · ${item.shared_previous_company}`}</small> : null}</div>) : <div className="job-connections__empty"><p>{card.empty}</p><a href={card.id === 'known' ? '/referrals' : card.id === 'shared' ? '/career-profiles' : `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(job.company)}`}>{card.id === 'known' ? 'Manage connections' : card.id === 'shared' ? 'Update career profile' : 'Explore on LinkedIn'} →</a></div>}{card.id === 'beyond' ? <small>Suggested public profiles; check their current role before reaching out.</small> : null}</div> : null}
+      </div>)}
     </div>
     <form className="job-connections__email" onSubmit={(event) => { event.preventDefault(); lookupEmail(); }}>
       <label htmlFor="job-email-profile">Find a work email</label>
+      <p className="job-connections__email-benefit"><span>3×</span> <span>Jobright reports higher response rates through work email than LinkedIn.<small>A useful alternative for your referral outreach; results vary. <a href="https://www.linkedin.com/posts/jobright-ai_jobright-jobsearch-opentowork-activity-7246911791543267328-6aEN" target="_blank" rel="noopener noreferrer">Source: Jobright</a></small></span></p>
       <div><input id="job-email-profile" onChange={(event) => setProfileUrl(event.target.value)} placeholder="LinkedIn profile URL" type="url" value={profileUrl} required /><button disabled={emailBusy} type="submit">{emailBusy ? "Searching…" : "Find email"}</button></div>
     </form>
     {emailResult ? <div className="job-connections__result" role="status">

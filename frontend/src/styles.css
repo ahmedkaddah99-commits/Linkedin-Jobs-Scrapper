@@ -3357,3 +3357,42 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .external-job-review footer { justify-content: flex-end; margin-top: 24px; }
 @media (max-width: 650px) { .external-job-import { margin: 0 12px 16px; padding: 16px; } .external-job-import__url { flex-direction: column; } .external-job-import__fields { grid-template-columns: 1fr; } }
 @media (max-width: 650px) { .external-job-review .external-job-import__fields { grid-template-columns: 1fr; } }
+
+/* Connections: compact discovery cards with expandable, real contact lists. */
+.job-connections{border:0;background:transparent;padding:0;margin:1.5rem 1.5rem 2rem}.job-connections__heading{margin-bottom:1.2rem}.job-connections h2{font-size:1.25rem;letter-spacing:-.35px}.job-connections__card{padding:0;border:1px solid #c8e6dc;border-radius:16px;background:linear-gradient(145deg,#e3f8ef,#f6fcf9);overflow:hidden;transition:box-shadow .2s,transform .2s}.job-connections__card--known{background:linear-gradient(145deg,#e1f2fe,#f5faff);border-color:#c4deef}.job-connections__card--shared{background:linear-gradient(145deg,#eee7ff,#faf8ff);border-color:#ddd0f1}.job-connections__card:hover{transform:translateY(-2px);box-shadow:0 8px 22px #23405c10}.job-connections__card-trigger{border:0;background:none;width:100%;text-align:left;padding:20px;cursor:pointer;color:#173d3e}.job-connections__card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.job-connections__card-top>.material-symbols-outlined{padding:10px;border-radius:12px;background:#ffffffb3;color:#188e72;font-size:26px}.job-connections__card--known .material-symbols-outlined{color:#258cb7}.job-connections__card--shared .material-symbols-outlined{color:#8862ba}.job-connections__count{font-size:10px;background:#ffffffb0;border-radius:20px;padding:5px 9px;color:#496b6e}.job-connections__card h3{font-size:15px;margin-bottom:7px}.job-connections__card p{font-size:12px;line-height:1.65;min-height:40px}.job-connections__card-action{display:flex;justify-content:space-between;margin-top:24px;padding-top:12px;border-top:1px solid #ffffffb0;font-size:12px;font-weight:700}.job-connections__card-action>span{transition:transform .2s}.job-connections__card.is-expanded .job-connections__card-action>span{transform:rotate(180deg)}.job-connections__people{padding:0 14px 16px;animation:connections-reveal .2s ease}.job-connections__people>small,.job-connections__shared-label{display:block;font-size:10px;line-height:1.5;color:#526977;margin:6px}.job-connections__empty{padding:14px;background:#ffffffb0;border-radius:10px}.job-connections__empty a{display:inline-block;margin-top:10px;font-size:12px;color:#216c76}.job-connection-person{background:#ffffffcf;border-radius:9px;padding:12px 10px;margin-top:8px}.job-connection-person>div:first-child{min-width:0;flex:1}.job-connections__email{padding:20px 24px;border:1px solid #dde9ef;border-radius:16px;background:linear-gradient(110deg,#fff,#f0f8fc)}.job-connections__email label{font-size:15px}.job-connections__email-benefit{display:flex;gap:13px;align-items:center;font-size:12px;color:#355862;margin:12px 0 18px;line-height:1.6}.job-connections__email-benefit>span:first-child{color:#078c8a;font-weight:750;font-size:34px;letter-spacing:-2px}.job-connections__email-benefit small{display:block;font-size:10px;color:#6b8089}.job-connections__email-benefit a{color:#427986;text-decoration:underline}.job-connections__email input{background:white}
+@keyframes connections-reveal{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.job-connections__card,.job-connections__card-action>span{transition:none}.job-connections__people{animation:none}}
+
+/* Profile completion: a quiet, focused popup inspired by the reference flow. */
+.profile-completion-dialog { max-width: 46rem; border: 0; border-radius: 1.25rem; box-shadow: 0 24px 80px #102f4430; }
+.profile-completion-dialog > header { border-bottom: 0; padding: 1.5rem 2rem .5rem; }
+.profile-completion-dialog > header h2 { font-weight: 650; }
+.career-profile.career-profile--completion { padding: 1rem 2rem 0; }
+.career-profile--completion .profile-missing-summary { background: transparent; border: 0; color: #687b8d; font-size: .75rem; padding: 0; }
+.profile-completion-steps { display: flex; gap: .5rem; justify-content: space-between; margin: 1.25rem 0 2rem; }
+.profile-completion-steps button { align-items: center; background: transparent; border: 0; color: #75838c; cursor: pointer; display: flex; font-size: .75rem; gap: .4rem; padding: .35rem 0; }
+.profile-completion-steps button > span { align-items: center; background: #f0f5f5; border-radius: 50%; display: flex; height: 1.5rem; justify-content: center; width: 1.5rem; }
+.profile-completion-steps .is-active { color: #087f86; font-weight: 700; }
+.profile-completion-steps .is-active > span { background: #d9f7ee; color: #087f86; }
+.career-profile--completion .career-section-head:not(:first-child) { border: 0; margin-top: 1.5rem; padding-top: 0; }
+.career-profile--completion .career-section-head h2 { font-size: 1.1rem; font-weight: 650; }
+.career-profile--completion .career-eyebrow, .career-profile--completion .career-section-head > span, .career-profile--completion .career-timeline__dot { display: none; }
+.career-profile--completion .career-field { font-size: .75rem; font-weight: 550; }
+.career-profile--completion .career-field input, .career-profile--completion .career-field textarea, .career-profile--completion .career-field select { background: #f6f8f8; border: 1px solid transparent; border-radius: .4rem; font-size: .85rem; }
+.career-profile--completion .career-field input:focus, .career-profile--completion .career-field textarea:focus, .career-profile--completion .career-field select:focus { border-color: #10a2b8; }
+.career-profile--completion .career-timeline article, .career-profile--completion .career-education-grid article { background: transparent; border: 0; border-bottom: 1px solid #edf1f2; border-radius: 0; padding: .25rem 0 1.25rem; }
+.career-profile--completion .career-education-grid { grid-template-columns: 1fr; }
+.career-profile--completion .career-education-grid article > .material-symbols-outlined { display: none; }
+.career-profile--completion .profile-resume-upload { background: transparent; border: 0; border-bottom: 1px solid #edf1f2; border-radius: 0; padding: 0 0 1rem; }
+.career-profile--completion .career-savebar { align-items: center; background: #fff; border-top: 1px solid #edf1f2; bottom: 0; margin: 2rem -2rem 0; padding: 1rem 2rem; }
+.career-profile--completion .career-savebar > .career-button { border-radius: 2rem; min-width: 9rem; justify-content: center; }
+.profile-completion-steps button:focus-visible { border-radius: .3rem; outline: 2px solid #10a2b8; outline-offset: 3px; }
+@media (max-width: 600px) {
+  .profile-completion-dialog > header { padding: 1rem 1rem .5rem; }
+  .career-profile.career-profile--completion { padding: .75rem 1rem 0; }
+  .profile-completion-steps { gap: .25rem; flex-wrap: wrap; }
+  .profile-completion-steps button { font-size: .7rem; }
+  .career-profile--completion .career-savebar { margin: 1.5rem -1rem 0; padding: .75rem 1rem; }
+}
+
+.job-connections__grid{align-items:start}
