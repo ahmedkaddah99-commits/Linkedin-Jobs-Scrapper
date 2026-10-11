@@ -6,10 +6,11 @@
 
 `/external-jobs/:jobId?` renders the same `PersonalizedJobsPage` and
 `JobsWorkspace` as recommended Jobs. Only acquisition and the list endpoint
-differ: a single URL form imports/enriches a posting, then opens the shared
+differ: a single URL form previews extracted AI metadata in a modal right drawer;
+the user confirms editable details with Save job before persistence and enrichment open the shared
 reader with its existing preparation, CV review, save, report and apply actions.
 Future reader changes therefore apply to both sections. Failed scraping opens
-editable prefilled fields with matching backend character limits. Unavailable
+editable prefilled fields in that same drawer with matching backend character limits. Quick access & tools stays in recommended Jobs only. Unavailable
 AI enrichment retains source text and offers an explicit Retry. Private imports
 are reopened through the normal Jobs detail endpoint and paginated list.
 

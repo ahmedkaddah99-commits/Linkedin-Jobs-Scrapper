@@ -15,6 +15,96 @@ URL = 'https://example.com/jobs/software-engineer'
 
 
 class ExternalJobsTests(unittest.TestCase):
+    def test_labelled_employer_page_extracts_separate_job_fields(self):
+        from backend.application.external_jobs import parse_job_page
+        html = '''<h3 class="section__header__text__title">Advanced Digital Engineer</h3>
+        <article class="article--details"><div class="article__content__view__field">
+        <div class="article__content__view__field__label">Company</div>
+        <div class="article__content__view__field__value">Siemens AG</div></div>
+        <div class="article__content__view__field"><div class="article__content__view__field__label">Location(s)</div>
+        <div class="article__content__view__field__value">Erlangen, Germany</div></div></article>
+        <article class="article--details">''' + DESCRIPTION + '</article>'
+        fields, _ = parse_job_page(html, URL)
+        self.assertEqual(fields['title'], 'Advanced Digital Engineer')
+        self.assertEqual(fields['company'], 'Siemens AG')
+        self.assertEqual(fields['location'], 'Erlangen, Germany')
+        self.assertEqual(fields['description'], DESCRIPTION)
+
+    def test_ai_preview_fills_fields_without_persisting_before_confirmation(self):
+        app = self._backend()
+        fields = {'url': URL, 'title': 'Software Engineer', 'company': 'Example', 'location': 'Berlin', 'description': DESCRIPTION}
+        generated = {'employment_type': {'value': 'full_time', 'evidence': 'full-time'},
+                     'experience_level': {'value': 'mid', 'evidence': 'mid-level'},
+                     'work_arrangement': {'value': 'onsite', 'evidence': 'on-site'},
+                     'company': {'value': 'Invented', 'evidence': 'Example'}}
+        with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
+             patch('backend.application.external_jobs.parse_job_page', return_value=(fields, False)), \
+             patch('backend.application.external_jobs.openrouter_generate', return_value=generated):
+            preview = app.import_personalized_job('user-a', {'url': URL, 'preview': True})
+        self.assertEqual(preview['state'], 'review_required')
+        self.assertEqual(preview['message'], '')
+        self.assertEqual(preview['fields']['company'], 'Example')
+        self.assertEqual(preview['fields']['experience_level'], 'mid')
+        self.assertEqual(preview['fields']['employment_type'], 'full_time')
+        self.assertEqual(preview['fields']['work_arrangement'], 'onsite')
+        self.assertEqual(app.list_external_jobs('user-a')['total'], 0)
+        saved = app.import_personalized_job('user-a', {**preview['fields'], 'manual': True})
+        self.assertEqual(saved['job']['title'], 'Software Engineer')
+        corrected = app.import_personalized_job('user-a', {**preview['fields'], 'title': 'Python Engineer', 'manual': True})
+        self.assertEqual(corrected['job']['title'], 'Python Engineer')
+        self.assertEqual(app.list_external_jobs('user-a')['total'], 1)
+
+    def test_preview_fetch_failure_preserves_simple_manual_message(self):
+        app = self._backend()
+        with patch('backend.application.external_jobs.fetch_job_page', side_effect=ValueError('blocked')):
+            preview = app.import_personalized_job('user-a', {'url': URL, 'preview': True})
+        self.assertEqual(preview['state'], 'review_required')
+        self.assertIn('Unable to fetch', preview['message'])
+        self.assertEqual(preview['fields']['experience_level'], '')
+
+    def test_confirmation_can_save_after_last_daily_preview(self):
+        app = self._backend()
+        store = app.repositories.personalized_jobs_store
+        for _ in range(20):
+            store.reserve_external_job_import('user-a', preview=True)
+        with self.assertRaises(ValueError):
+            store.reserve_external_job_import('user-a', preview=True)
+        saved = app.import_personalized_job('user-a', {'url': URL, 'manual': True,
+            'title': 'Software Engineer', 'company': 'Example', 'description': DESCRIPTION})
+        self.assertEqual(saved['job']['title'], 'Software Engineer')
+
+    def test_preview_rejects_metadata_evidence_that_does_not_state_the_fact(self):
+        app = self._backend()
+        fields = {'url': URL, 'title': 'Software Engineer', 'company': 'Example', 'location': 'Berlin', 'description': DESCRIPTION}
+        with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
+             patch('backend.application.external_jobs.parse_job_page', return_value=(fields, False)), \
+             patch('backend.application.external_jobs.openrouter_generate', return_value={
+                 'employment_type': {'value': 'full_time', 'evidence': 'Berlin'}}):
+            preview = app.import_personalized_job('user-a', {'url': URL, 'preview': True})
+        self.assertEqual(preview['fields']['employment_type'], '')
+
+    def test_structured_preview_normalizes_employment_when_ai_is_unavailable(self):
+        app = self._backend()
+        fields = {'url': URL, 'title': 'Software Engineer', 'company': 'Example', 'location': 'Berlin',
+                  'description': DESCRIPTION, 'employment_type': 'fulltime'}
+        with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
+             patch('backend.application.external_jobs.parse_job_page', return_value=(fields, True)):
+            preview = app.import_personalized_job('user-a', {'url': URL, 'preview': True})
+        self.assertEqual(preview['fields']['employment_type'], 'full_time')
+
+    def test_confirmed_structured_job_in_other_language_keeps_verified_provenance(self):
+        app = self._backend()
+        description = 'Diseñar soluciones digitales y colaborar con nuestros clientes internacionales. ' * 3
+        fields = {'url': URL, 'title': 'Ingeniero', 'company': 'Example', 'location': '', 'description': description}
+        with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
+             patch('backend.application.external_jobs.parse_job_page', return_value=(fields, True)):
+            saved = app.import_personalized_job('user-a', {**fields, 'manual': True})
+        self.assertEqual(saved['job']['title'], 'Ingeniero')
+        with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
+             patch('backend.application.external_jobs.parse_job_page', return_value=(fields, False)), \
+             self.assertRaises(ValueError):
+            app.import_personalized_job('user-a', {**fields, 'description': 'Chocolate cake ingredients. ' * 10, 'manual': True})
+
     def test_fetch_accepts_standard_http_header_capitalization(self):
         from backend.application.external_jobs import fetch_job_page
         headers = Message()

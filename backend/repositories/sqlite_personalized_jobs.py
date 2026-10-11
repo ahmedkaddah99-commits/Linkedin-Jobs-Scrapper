@@ -1873,15 +1873,17 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         self._run_transaction(write)
         return self.find_job_by_url(user_id, source_url)
 
-    def reserve_external_job_import(self, user_id: str) -> None:
+    def reserve_external_job_import(self, user_id: str, *, preview: bool = False) -> None:
         day = utc_now_iso()[:10]
+        counter = 'previews' if preview else 'attempts'
         def write(connection):
-            row = connection.execute("SELECT attempts FROM external_job_import_attempts WHERE user_id=? AND day=?",
+            row = connection.execute(f"SELECT {counter} AS attempts FROM external_job_import_attempts WHERE user_id=? AND day=?",
                                      (str(user_id), day)).fetchone()
             if row and row["attempts"] >= 20:
                 raise ValueError("Daily URL import limit reached. Try again tomorrow.")
-            connection.execute("INSERT INTO external_job_import_attempts VALUES (?,?,1) "
-                               "ON CONFLICT(user_id,day) DO UPDATE SET attempts=attempts+1", (str(user_id), day))
+            connection.execute(f"INSERT INTO external_job_import_attempts (user_id,day,attempts,previews) VALUES (?,?,?,?) "
+                               f"ON CONFLICT(user_id,day) DO UPDATE SET {counter}={counter}+1",
+                               (str(user_id), day, 0 if preview else 1, 1 if preview else 0))
         self._run_transaction(write)
 
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
