@@ -266,6 +266,26 @@ def _pilot_salary(value: Any) -> bool:
     return bounds[0] is None or bounds[1] is None or bounds[0] <= bounds[1]
 
 
+def _quoted_passage_ids(quote, lookup):
+    """Reanchor an exact contiguous quotation, including passage boundaries."""
+    if not isinstance(quote, str) or not quote.strip():
+        return []
+    needle = ' '.join(quote.split())
+    pieces = [(identity, ' '.join(text.split())) for identity, text in lookup.items()]
+    joined = ' '.join(text for _, text in pieces)
+    start = joined.find(needle)
+    if start < 0:
+        return []
+    end = start + len(needle)
+    cursor = 0
+    identities = []
+    for identity, text in pieces:
+        if cursor < end and cursor + len(text) > start:
+            identities.append(identity)
+        cursor += len(text) + 1
+    return identities
+
+
 def build_pilot_description(
     row: Mapping[str, Any], generate: Callable[[str], Mapping[str, Any]],
     *, require_source_quotes: bool = False,
@@ -333,15 +353,16 @@ def build_pilot_description(
         section = item.get("section")
         ids = _pilot_ids(item.get("source_ids"), lookup)
         wording = item.get("text")
+        quote = item.get("source_quote")
+        if require_source_quotes:
+            ids = _quoted_passage_ids(quote, lookup)
         if section not in SECTIONS or not ids or not isinstance(wording, str) or not wording.strip():
             rejected.append("invalid_item")
             continue
         if wording.strip().casefold() in {'one fact', 'verbatim original source excerpt'}:
             rejected.append('example_placeholder')
             continue
-        quote = item.get("source_quote")
-        if require_source_quotes and (not isinstance(quote, str) or not quote.strip()
-                or not any(" ".join(quote.split()) in " ".join(lookup[i].split()) for i in ids)):
+        if require_source_quotes and not ids:
             rejected.append("invalid_source_quote")
             continue
         fact = {"text": wording.strip(), "source_ids": ids}
@@ -361,14 +382,14 @@ def build_pilot_description(
         structured[field] = None
         if raw is None:
             continue
-        if not isinstance(raw, Mapping) or not _pilot_ids(raw.get("source_ids"), lookup):
+        ids = (_quoted_passage_ids(raw.get('source_quote'),lookup) if require_source_quotes
+               else _pilot_ids(raw.get('source_ids'),lookup)) if isinstance(raw,Mapping) else []
+        if not isinstance(raw, Mapping) or not ids:
             rejected.append(f"{field}:missing_source")
             continue
         if require_source_quotes:
             quote = raw.get("source_quote")
-            ids = _pilot_ids(raw.get("source_ids"), lookup)
-            if not isinstance(quote, str) or not quote.strip() or not any(
-                    " ".join(quote.split()) in " ".join(lookup[i].split()) for i in ids):
+            if not isinstance(quote, str) or not quote.strip():
                 rejected.append(f"{field}:invalid_source_quote")
                 continue
         value = raw.get("value")
@@ -385,7 +406,7 @@ def build_pilot_description(
         else:
             valid = _pilot_salary(value)
         if valid:
-            structured[field] = {"value": value, "source_ids": _pilot_ids(raw["source_ids"], lookup)}
+            structured[field] = {"value": value, "source_ids": ids}
             if require_source_quotes:
                 structured[field]['source_quote'] = raw['source_quote'].strip()
         else:

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sqlite3
+import signal
 import sys
 import threading
 import time
@@ -424,8 +425,13 @@ def process_isolated(row: dict, token: str, generate) -> str:
 
 def requeue_repairable(generate, limit):
     """Revisit cached rejected output once; never retry missing source or uncertain spend."""
-    rows = execute('''SELECT q.version_id,q.content_hash,q.error_code FROM job_enrichment_queue q
+    rows = execute('''SELECT q.version_id,q.content_hash,q.error_code,q.canonical_job_id,
+        q.version_id AS current_version_id,j.title,v.description,v.payload_json AS version_payload_json,
+        CASE WHEN f.content_hash=q.content_hash AND '''+FILTER_ACCEPTABLE_SQL+''' THEN 1 ELSE 0 END AS filters_ready
+        FROM job_enrichment_queue q
         JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
+        JOIN job_posting_versions v ON v.version_id=q.version_id
+        LEFT JOIN job_filter_intelligence f ON f.version_id=q.version_id
         WHERE q.state='review_required' AND q.error_code IN
             ('filter_validation_failed','filter_response_identity_mismatch','description_output_not_english','description_has_no_supported_facts')
         AND j.lifecycle_state<>'expired'
@@ -439,9 +445,20 @@ def requeue_repairable(generate, limit):
             key=(row['version_id'],row['content_hash'])
             prior=generate.db.execute('SELECT state FROM version_requests WHERE version_id=? AND content_hash=?',key).fetchone()
             stage='classification_v1' if row['error_code'] in ('filter_validation_failed','filter_response_identity_mismatch') else 'description_v1'
-            repaired=generate.db.execute('SELECT 1 FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (*key,stage)).fetchone()
+            repaired=generate.db.execute('SELECT state,response_json FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (*key,stage)).fetchone()
             if (not prior or prior[0]=='received') and not repaired:
                 selected.append(row['version_id'])
+            elif (repaired and repaired[0]=='received' and repaired[1]
+                  and row['error_code']=='description_has_no_supported_facts' and row['filters_ready']):
+                # A corrected evidence validator can reuse a paid repair. This
+                # path validates cached output locally and makes zero requests.
+                from backend.application.vps_job_descriptions import build_pilot_description
+                try:
+                    description=build_pilot_description(row,lambda _: json.loads(repaired[1]),require_source_quotes=True)
+                    if english_summary(json.dumps(description['summary'])):
+                        selected.append(row['version_id'])
+                except (ValueError,TypeError,KeyError):
+                    pass
     if selected:
         execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='',updated_at=? "
                 "WHERE state='review_required' AND version_id IN (SELECT value FROM json_each(?))",
@@ -486,12 +503,15 @@ def main() -> int:
     attempted = 0
     last_report = started
     exhausted = False
+    shutdown = threading.Event()
+    previous_termination = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
     next_claim = started
     next_maintenance = started
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = set()
         while True:
-            stop_claiming = (exhausted or attempted + len(pending) >= args.max_jobs
+            stop_claiming = (shutdown.is_set() or exhausted or attempted + len(pending) >= args.max_jobs
                              or time.monotonic() - started >= args.runtime_seconds
                              or counts.get("daily_budget_exhausted", 0))
             slots = args.workers - len(pending)
@@ -531,7 +551,9 @@ def main() -> int:
             if time.monotonic() - last_report >= 30:
                 print(json.dumps({"attempted": attempted, "in_flight": len(pending), **counts}), flush=True)
                 last_report = time.monotonic()
-    print(json.dumps({"attempted": attempted, "seconds": round(time.monotonic() - started, 2), **counts}), flush=True)
+    signal.signal(signal.SIGTERM, previous_termination)
+    print(json.dumps({"attempted": attempted, "seconds": round(time.monotonic() - started, 2),
+                      "shutdown_drained":shutdown.is_set(), **counts}), flush=True)
     return 0
 
 
