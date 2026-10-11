@@ -3,6 +3,25 @@
 
 # VPS runtime and acquisition timers
 
+## Current operating record — 11 October 2026
+
+The sections below retain the original deployment baseline. The serving customer
+API, worker, frontend and authoritative SQLite database are now on the VPS;
+use [the migration operating record](render-to-contabo-migration-report.md) for
+current service bindings and [the acquisition policy](vps-acquisition-operating-policy.md)
+for the owner-approved pause. Historical Render/Turso statements below are not
+current deployment instructions.
+
+The storage budget timer runs hourly through `/opt/runr-ops/run-storage-budget.sh`.
+It overwrites a fixed-size receipt under `/var/lib/runr/storage-budget/`, publishes
+Alloy textfile metrics, and flags free space below 30 GiB, exports above 6 GiB or
+release copies above 4 GiB. It never deletes unarchived files. Historical cleanup
+requires a verified local archive before source removal; see
+[the cleanup inventory](../../reports/runr-cleanup-inventory-2026-10-11.md).
+Acquisition backups retain two local and seven remote generations; LinkedIn
+exports retain the current and previous generation. Preserve active producer
+state, customer documents, service-referenced releases and shared virtual environments.
+
 Catalog storage maintenance uses `runr-catalog-storage-maintenance.service` and its
 hourly timer. Pin its working directory and command to the installed committed release.
 Load `/etc/runr/catalog-storage.env` after acquisition catalog configuration so source
