@@ -53,6 +53,7 @@ export default function AccountSetupPanel({ children }) {
     <button aria-label={profileKnown && !missing.length ? "Review your profile" : "Finish your profile"} className="jobs-compact-profile" ref={opener} onClick={() => setProfileOpen(true)} type="button">
       <Icon>person</Icon><span><strong>Your profile</strong>{profileKnown ? <small className="jobs-compact-badge">{missing.length ? `${missing.length} left` : "Complete"}</small> : null}<span className="jobs-compact-description">{profileKnown ? (missing.length ? `Finish ${missing.length} details for better matches` : "Profile and preferences complete") : "Your details and job preferences"}</span></span><Icon>{profileKnown && !missing.length ? "check_circle" : "chevron_right"}</Icon>
     </button>
+    <Link className="runr-profile-overview-link" to="/profile">View and edit full profile</Link>
     <div className="jobs-setup-features" aria-label="Powerful Runr features">
       <Link className="jobs-feature-card jobs-feature-card--linkedin" to="/referrals?section=linkedin">
         <div><Icon>group_add</Icon><strong>LinkedIn referrals</strong><Icon>{linkedinDone ? "check_circle" : "arrow_forward"}</Icon></div>

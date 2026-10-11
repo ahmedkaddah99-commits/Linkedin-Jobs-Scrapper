@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { clearApiResourceCache, useApiResource } from "../hooks/useApiResource";
+import ProfileOverview from "../components/profile/ProfileOverview";
+import "../components/profile/profile.css";
 import { profileMissingFields } from "../lib/profileCompletion";
 
 const tabs = ["personal", "experience", "education", "preferences", "account"];
@@ -14,10 +16,10 @@ function splitList(value) { return String(value || "").split(",").map((item) => 
 function Field({ label, hint, wide, children }) { return <label className={wide ? "career-field career-field--wide" : "career-field"}><span>{label}</span>{children}{hint ? <small>{hint}</small> : null}</label>; }
 function Input({ value, onChange, ...props }) { return <input {...props} onChange={(event) => onChange(event.target.value)} value={value || ""} />; }
 
-export default function ProfilePage({ completionFlow = false, onSaved } = {}) {
+export default function ProfilePage({ completionFlow = false, editor = false, initialSection = "personal", onSaved } = {}) {
   const { request } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedTab = searchParams.get("section") || "personal";
+  const requestedTab = editor ? initialSection : searchParams.get("section") || "personal";
   const [activeTab, setActiveTab] = useState(!completionFlow && tabs.includes(requestedTab) ? requestedTab : "personal");
   const [draft, setDraft] = useState(null);
   const [preferences, setPreferences] = useState({});
@@ -32,7 +34,7 @@ export default function ProfilePage({ completionFlow = false, onSaved } = {}) {
 
   useEffect(() => { if (data) setDraft(data); }, [data]);
   useEffect(() => { if (preferenceData) setPreferences(preferenceData.preferences || preferenceData); }, [preferenceData]);
-  useEffect(() => { if (completionFlow) return; const next = searchParams.get("section") || "personal"; if (tabs.includes(next)) setActiveTab(next); }, [completionFlow, searchParams]);
+  useEffect(() => { if (completionFlow || editor) return; const next = searchParams.get("section") || "personal"; if (tabs.includes(next)) setActiveTab(next); }, [completionFlow, editor, searchParams]);
   useEffect(() => {
     if (!completionFlow || !stepPanel.current) return;
     stepPanel.current.closest("dialog")?.scrollTo({ top: 0 });
@@ -52,7 +54,7 @@ export default function ProfilePage({ completionFlow = false, onSaved } = {}) {
   function updateProfile(patch) { setDraft((current) => ({ ...current, profile: { ...(current?.profile || {}), ...patch } })); setMessage(""); }
   function updateAccount(patch) { setDraft((current) => ({ ...current, account: { ...(current?.account || {}), ...patch } })); setMessage(""); }
   function updatePreference(key, value) { setPreferences((current) => ({ ...current, [key]: value })); setMessage(""); }
-  function openTab(tab) { setActiveTab(tab); if (!completionFlow) setSearchParams(tab === "personal" ? {} : { section: tab }); }
+  function openTab(tab) { setActiveTab(tab); if (!completionFlow && !editor) setSearchParams(tab === "personal" ? {} : { section: tab }); }
   function updateCollection(key, index, patch) { const next = [...valueList(profile[key])]; next[index] = { ...next[index], ...patch }; updateProfile({ [key]: next }); }
   function addCollection(key, item) { updateProfile({ [key]: [...valueList(profile[key]), item] }); }
   function removeCollection(key, index) { updateProfile({ [key]: valueList(profile[key]).filter((_, itemIndex) => itemIndex !== index) }); }
@@ -87,6 +89,8 @@ export default function ProfilePage({ completionFlow = false, onSaved } = {}) {
 
   if (loading && !draft) return <div className="career-profile"><div className="career-loading">Loading your career profile…</div></div>;
   if (error && !draft) return <div className="career-profile"><div className="career-loading">{error}<button onClick={() => refresh()} type="button">Retry</button></div></div>;
+
+  if (!completionFlow && !editor) return <ProfileOverview settings={draft} preferences={preferences} onSaved={(settings, prefs) => { setDraft(settings); setPreferences(prefs?.preferences || prefs || {}); refresh({ showLoading: false }).catch(() => {}); refreshPreferences({ showLoading: false }).catch(() => {}); }} />;
 
   const name = profile.name || account.display_name || "Your profile";
   const initials = name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
