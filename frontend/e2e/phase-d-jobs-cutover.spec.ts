@@ -154,3 +154,12 @@ test("Jobs production cutover is responsive, keyboard-accessible, truthful, and 
     await page.screenshot({ path: `../screenshots/phase-d-jobs-${width}.png`, fullPage: true });
   }
 });
+
+test("Jobs shows the Connections tab and job-specific insider cards", async ({ page }) => {
+  await page.goto("/jobs/job-a");
+  await expect(page.locator(".jobs-top-nav__links").getByRole("link", { name: "Connections" })).toHaveAttribute("href", "/refer");
+  await expect(page.getByRole("heading", { name: "Insider connections at Acme Labs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Beyond your network" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your connections" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Shared background" })).toBeVisible();
+});

@@ -145,7 +145,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
-    { label: "Refer", icon: "group_add", to: "/refer" },
+    { label: "Connections", icon: "group_add", to: "/refer" },
   ];
   const location = useLocation();
 
