@@ -6,7 +6,8 @@
 
 Migration `079_external_jobs` adds private posting snapshots unique by
 `(user_id, source_url)` and a daily import-attempt ledger. Snapshots use private
-IDs and preserve catalog enrichment when the supplied URL is already published.
+IDs. Existing snapshots retain enrichment; new imports reject URLs already
+added by this account or present in the current published catalog.
 Migration `080_external_job_preview_quota` adds an independent `previews` counter
 to the daily ledger, so previewing does not consume a confirmation attempt.
 They survive catalog retirement and never modify publication membership.
