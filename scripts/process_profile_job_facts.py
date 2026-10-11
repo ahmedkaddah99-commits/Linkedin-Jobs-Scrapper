@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.application.profile_job_matching import FEATURE_VERSION, build_job_facts
 from backend.config import load_project_dotenv
+from backend.database.connection import database_session
 from scripts.process_catalog_enrichment import execute, now
 
 SIGNATURE = "COALESCE(d.updated_at,'') || '|' || COALESCE(f.generated_at,'') || '|' || COALESCE(json_extract(p.profile_json,'$.fields.industry'),'')"
@@ -53,6 +54,12 @@ def write_batch(rows):
             WHERE json_extract(i.value,'$.version_id')=profile_job_fact_queue.version_id
             AND json_extract(i.value,'$.queued_revision')=profile_job_fact_queue.revision
             AND m.input_signature=json_extract(i.value,'$.input_signature'))"""
+    if os.environ.get('DATABASE_BACKEND', 'sqlite') == 'sqlite' and not os.environ.get('TURSO_DATABASE_URL'):
+        with database_session(Path(__file__).resolve().parents[1] / 'data' / 'backend.sqlite3') as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            count = connection.execute(insert, [FEATURE_VERSION, now(), payload]).rowcount
+            connection.execute(acknowledge, [receipts, receipts])
+            return count
     def statement(sql, args=()):
         return {'type': 'execute', 'stmt': {'sql': sql, 'args': [{'type': 'text', 'value': str(v)} for v in args], 'want_rows': False}}
     requests = [statement(insert, [FEATURE_VERSION, now(), payload]),

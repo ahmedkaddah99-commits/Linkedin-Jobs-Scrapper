@@ -124,6 +124,11 @@ def supplement_explicit_sections(result: dict[str, Any]) -> dict[str, Any]:
             corrected_required.append(item)
     summary["required_qualifications"] = corrected_required
     passages = result["structured_description"]["source_passages"]
+    # English headings can occur inside German postings. Copying those bodies
+    # into an English summary would undo an otherwise correct translation.
+    from backend.application.description_translation import source_language
+    if passages and source_language(' '.join(p['text'] for p in passages)) != 'en':
+        passages = []
     found: dict[str, list[dict[str, Any]]] = {section: [] for section in SECTIONS}
     current: str | None = None
     for passage in passages:
@@ -331,6 +336,9 @@ def build_pilot_description(
         if section not in SECTIONS or not ids or not isinstance(wording, str) or not wording.strip():
             rejected.append("invalid_item")
             continue
+        if wording.strip().casefold() in {'one fact', 'verbatim original source excerpt'}:
+            rejected.append('example_placeholder')
+            continue
         quote = item.get("source_quote")
         if require_source_quotes and (not isinstance(quote, str) or not quote.strip()
                 or not any(" ".join(quote.split()) in " ".join(lookup[i].split()) for i in ids)):
@@ -378,6 +386,8 @@ def build_pilot_description(
             valid = _pilot_salary(value)
         if valid:
             structured[field] = {"value": value, "source_ids": _pilot_ids(raw["source_ids"], lookup)}
+            if require_source_quotes:
+                structured[field]['source_quote'] = raw['source_quote'].strip()
         else:
             rejected.append(f"{field}:invalid_output")
     result = {

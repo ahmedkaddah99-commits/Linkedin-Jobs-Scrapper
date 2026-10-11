@@ -10,7 +10,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 generation="$root/$stamp"
 mkdir -p "$generation"
 
-"$python_bin" /opt/runr-ops/refresh_live_company_manifest.py \
+"$python_bin" "$project_dir/scripts/refresh_live_company_manifest.py" \
   --input "$input" \
   --snapshot-output "$generation/company_sources_catalog_complete.csv" \
   --output "$generation/SOURCE_ELIGIBILITY_MANIFEST.json" \

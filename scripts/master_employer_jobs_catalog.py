@@ -1552,7 +1552,9 @@ class EmployerState:
             path.parent.mkdir(parents=True, exist_ok=True)
         elif not path.is_file():
             raise FileNotFoundError(f"Employer state database not found: {path}")
-        self.connection = sqlite3.connect(str(path))
+        self.connection = sqlite3.connect(str(path), timeout=30)
+        self.connection.execute('PRAGMA journal_mode=WAL')
+        self.connection.execute('PRAGMA journal_size_limit=67108864')
         self.connection.row_factory = sqlite3.Row
         self._ensure_schema(create, path)
 

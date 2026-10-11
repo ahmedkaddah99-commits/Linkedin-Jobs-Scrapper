@@ -1904,6 +1904,8 @@ class StateStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        self.connection.execute('PRAGMA journal_mode=WAL')
+        self.connection.execute('PRAGMA journal_size_limit=67108864')
         self.connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._transaction_state = threading.local()
