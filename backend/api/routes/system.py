@@ -49,8 +49,8 @@ def _get_readiness(context: ApiRouteContext) -> None:
     runtime_environment = str(database.get("runtime_environment") or "").strip().lower()
     is_production = runtime_environment in {"prod", "production"}
 
-    if is_production and database.get("target_backend") != "libsql":
-        raise RuntimeError("Production readiness requires the libSQL/Turso database target.")
+    if is_production and database.get("target_backend") not in {"sqlite", "libsql"}:
+        raise RuntimeError("Production readiness requires a supported database target.")
     if is_production and object_storage_backend not in {"s3", "r2"}:
         raise RuntimeError("Production readiness requires S3-compatible object storage.")
 

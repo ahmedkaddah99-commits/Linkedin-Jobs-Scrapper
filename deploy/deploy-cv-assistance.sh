@@ -49,6 +49,19 @@ assert 'e2e-token' not in assets, 'Test authentication must not ship'
 PY
 # Abort if another operator changed nginx while this build ran.
 cmp --silent "$config" "$evidence/nginx-before.conf" || { echo 'Production configuration changed during build; refusing to overwrite' >&2; exit 1; }
+"$python_bin" - "$release" "$commit" <<'PY'
+import os,pathlib,subprocess,sys
+pid=subprocess.check_output(['systemctl','show','runr-api-candidate','-p','MainPID','--value'],text=True).strip()
+os.environ.update(dict(s.split('=',1) for s in pathlib.Path('/proc/'+pid+'/environ').read_text().split('\0') if '=' in s))
+os.environ['RUNR_RELEASE_COMMIT']=sys.argv[2]
+os.environ.pop('RUNR_MIGRATION_HEAD',None)
+sys.path.insert(0,sys.argv[1])
+from backend.config.env_schema import validate_environment
+from backend.api.routes import build_route_registry
+validate_environment()
+build_route_registry()
+print('Production environment and route imports preflight passed')
+PY
 dropin=/etc/systemd/system/runr-api-candidate.service.d/zz-cv-assistance.conf
 if [[ -e "$dropin" ]]; then cp "$dropin" "$evidence/api-before.conf"; fi
 restore() {

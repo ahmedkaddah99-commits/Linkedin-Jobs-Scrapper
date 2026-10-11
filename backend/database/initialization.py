@@ -4,7 +4,7 @@ import os
 import threading
 from pathlib import Path
 
-from backend.database.connection import database_session, database_target_key
+from backend.database.connection import database_session, database_target_key, database_target_info
 from backend.database.migrations import run_migrations
 from backend.database.schema import BASE_SCHEMA_SQL
 
@@ -23,7 +23,7 @@ def _local_database_identity(path: Path) -> str:
 def _target_identity(local_path: Path) -> str:
     if os.getenv("TURSO_DATABASE_URL", "").strip():
         return "remote"
-    return _local_database_identity(local_path)
+    return _local_database_identity(Path(str(database_target_info(local_path)["local_path"])))
 
 
 def initialize_database(local_path: str | Path, *, force: bool = False) -> None:
