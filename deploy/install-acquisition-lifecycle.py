@@ -29,6 +29,7 @@ values.update(DATABASE_BACKEND='sqlite', RUNR_ENV='production',
               RENDER_GIT_BRANCH='', RENDER_GIT_COMMIT='',
               RUNR_PYTHON_BIN='/opt/runr/.venv/bin/python',
               RUNR_ACQUISITION_STATE_ROOT='/srv/runr/state/active',
+              RUNR_ACQUISITION_INPUT_ROOT='/srv/runr/shared/inputs',
               RUNR_ACQUISITION_LOCK_ROOT='/srv/runr/state/locks',
               RUNR_EMPLOYER_EXCLUSION_POLICY='/etc/runr/employer-exclusions.json',
               RUNR_ACQUISITION_DATA_MANIFEST=str(release / 'deploy/acquisition-data-manifest.json'))

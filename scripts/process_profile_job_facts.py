@@ -25,7 +25,7 @@ JOINS = """FROM canonical_jobs j
     LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id AND d.content_hash=v.content_hash
     LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id AND f.content_hash=v.content_hash
     LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id"""
-PUBLISHED = "EXISTS (SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id JOIN acquisition_publications pub ON pub.publication_id=h.publication_id WHERE h.head_id=1 AND pj.canonical_job_id=j.canonical_job_id AND pub.status='valid')"
+PUBLISHED = "EXISTS (SELECT 1 FROM acquisition_publication_jobs pj WHERE pj.publication_id=(SELECT h.publication_id FROM acquisition_publication_head h JOIN acquisition_publications pub USING(publication_id) WHERE h.head_id=1 AND pub.status='valid') AND pj.canonical_job_id=j.canonical_job_id)"
 QUEUED_JOINS = JOINS.replace("FROM canonical_jobs j\n    JOIN job_posting_versions v ON v.version_id=j.current_version_id",
     "FROM profile_job_fact_queue q CROSS JOIN job_posting_versions v ON v.version_id=q.version_id CROSS JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id AND j.current_version_id=v.version_id")
 
@@ -90,11 +90,12 @@ def main():
         return
     started, processed, written = time.monotonic(), 0, 0
     # Superseded or unpublished versions cannot block current queue work.
-    execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
-        SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 100) q
+    removed=execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
+        SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 1000) q
         LEFT JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id
-        WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")
+        WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 1000)
+        RETURNING version_id""")
     while processed < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
         rows = execute(f"""SELECT j.canonical_job_id,j.title,v.version_id,v.content_hash,v.description,
             json_object('industry',COALESCE(json_extract(v.payload_json,'$.industry'),json_extract(v.payload_json,'$.company_industry'))) AS payload_json,
@@ -106,6 +107,7 @@ def main():
         written += write_batch(rows)
         processed += len(rows)
     print(json.dumps({'feature_version': FEATURE_VERSION, 'processed': processed, 'written': written,
+                      'obsolete_queue_items_removed':len(removed),
                       'seconds': round(time.monotonic() - started, 3), 'provider_calls': 0}))
 
 

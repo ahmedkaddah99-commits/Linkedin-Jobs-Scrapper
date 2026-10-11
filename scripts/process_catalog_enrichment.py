@@ -47,6 +47,7 @@ DESCRIPTION_ACCEPTABLE_SQL = """d.prompt_version IN ('runr_description_v1','runr
             OR COALESCE(json_array_length(d.summary_json,'$.benefits'),0)>0
             OR COALESCE(json_array_length(d.summary_json,'$.application_details'),0)>0
             OR LENGTH(TRIM(COALESCE(json_extract(d.summary_json,'$.overview'),'')))>0)
+        AND COALESCE(json_extract(d.summary_json,'$.output_language'),'en') IN ('en','und')
         ELSE 0 END"""
 
 
@@ -233,10 +234,12 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         lease_token=?,lease_expires_at=?,updated_at=? WHERE version_id IN (
         SELECT q.version_id FROM job_enrichment_queue q
         WHERE q.state='pending' AND q.next_attempt_at<=?
-        AND EXISTS(SELECT 1 FROM canonical_jobs j JOIN acquisition_publication_jobs pj USING(canonical_job_id)
-            JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id
+        AND EXISTS(SELECT 1 FROM canonical_jobs j
             WHERE j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
             AND j.lifecycle_state<>'expired')
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
+            WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
+            AND pj.canonical_job_id=q.canonical_job_id)
         ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
         AND state='pending' RETURNING version_id""", (token, lease, timestamp, timestamp, limit))
     if not rows:
@@ -249,13 +252,26 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         CASE WHEN f.content_hash=v.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
         CASE WHEN q.error_code='english_description_repair' THEN 0
         WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
+        ,d.provider AS description_provider,d.summary_json AS existing_summary_json
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id
         LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id
         WHERE v.version_id IN (""" + ",".join("?" for _ in ids) + ")",
         tuple(ids))
+    for row in candidates:
+        if row['description_ready'] and row.get('description_provider') in ('rules','runr_rules'):
+            row['description_ready'] = english_summary(row.get('existing_summary_json'))
     return token, candidates
+
+
+def english_summary(raw):
+    from backend.application.description_translation import source_language
+    summary=json.loads(raw or '{}')
+    text=' '.join([str(summary.get('overview') or '')] + [item['text']
+        for items in summary.values() if isinstance(items,list)
+        for item in items if isinstance(item,dict) and isinstance(item.get('text'),str)])
+    return bool(text.strip()) and source_language(text)=='en'
 
 
 def save_stage(row: dict, token: str, output: dict) -> None:
@@ -411,25 +427,40 @@ def requeue_repairable(generate, limit):
     rows = execute('''SELECT q.version_id,q.content_hash,q.error_code FROM job_enrichment_queue q
         JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
         WHERE q.state='review_required' AND q.error_code IN
-            ('filter_validation_failed','description_output_not_english','description_has_no_supported_facts')
+            ('filter_validation_failed','filter_response_identity_mismatch','description_output_not_english','description_has_no_supported_facts')
         AND j.lifecycle_state<>'expired'
-        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h USING(publication_id)
-            WHERE pj.canonical_job_id=j.canonical_job_id)
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
+            WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
+            AND pj.canonical_job_id=j.canonical_job_id)
         ORDER BY q.updated_at LIMIT ?''', (limit,))
     selected=[]
     with generate.lock:
         for row in rows:
             key=(row['version_id'],row['content_hash'])
             prior=generate.db.execute('SELECT state FROM version_requests WHERE version_id=? AND content_hash=?',key).fetchone()
-            stage='classification_v1' if row['error_code']=='filter_validation_failed' else 'description_v1'
+            stage='classification_v1' if row['error_code'] in ('filter_validation_failed','filter_response_identity_mismatch') else 'description_v1'
             repaired=generate.db.execute('SELECT 1 FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (*key,stage)).fetchone()
-            if prior and prior[0]=='received' and not repaired:
+            if (not prior or prior[0]=='received') and not repaired:
                 selected.append(row['version_id'])
     if selected:
         execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='',updated_at=? "
                 "WHERE state='review_required' AND version_id IN (SELECT value FROM json_each(?))",
                 (now(),json.dumps(selected)))
-    return len(selected)
+    # Native-language rule output is a fallback, not a completed translation.
+    native = execute('''SELECT q.version_id,q.content_hash,d.summary_json FROM job_enrichment_queue q
+        JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
+        JOIN job_description_intelligence d ON d.version_id=q.version_id AND d.content_hash=q.content_hash
+        WHERE q.state='completed' AND d.provider IN ('rules','runr_rules')
+        AND q.error_code<>'blue_collar_excluded' AND j.lifecycle_state<>'expired'
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
+            WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
+            AND pj.canonical_job_id=j.canonical_job_id)
+        LIMIT ?''', (limit,))
+    needs_translation=[row['version_id'] for row in native if not english_summary(row['summary_json'])]
+    if needs_translation:
+        execute("UPDATE job_enrichment_queue SET state='pending',error_code='english_description_repair',next_attempt_at='' "
+                "WHERE state='completed' AND version_id IN (SELECT value FROM json_each(?))", (json.dumps(needs_translation),))
+    return len(selected)+len(needs_translation)
 
 
 def main() -> int:

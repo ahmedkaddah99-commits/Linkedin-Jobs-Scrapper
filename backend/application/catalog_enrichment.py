@@ -69,8 +69,13 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
                 'Never copy example text such as One fact into the output.')
         response = generate(prompt)
         jobs = response.get("jobs") if isinstance(response, Mapping) else None
-        if not isinstance(jobs, list) or len(jobs) != 1 or jobs[0].get("id") != row["canonical_job_id"]:
-            raise ValueError("filter_response_identity_mismatch")
+        if not isinstance(jobs, list) or len(jobs) != 1 or not isinstance(jobs[0], Mapping) or jobs[0].get("id") != row["canonical_job_id"]:
+            fixed = repair(generate, 'classification_v1', function_prompt({
+                'title': row['title'], 'description': source}) +
+                '\nClassify only this supplied posting, with original evidence and exact allowed roles.')
+            if not isinstance(fixed, Mapping):
+                raise ValueError("filter_response_identity_mismatch")
+            jobs = [{**fixed, 'id': row['canonical_job_id']}]
         filters = validate_classification(jobs[0], str(row["title"]) + " " + source, row["title"])
         if filters is None:
             fixed = repair(generate, 'classification_v1', function_prompt({
@@ -94,11 +99,13 @@ def enrich_version(row: Mapping[str, Any], generate: Callable) -> dict[str, Any]
         def validated(value):
             description = build_pilot_description(row, lambda _: value, require_source_quotes=True)
             from backend.application.description_translation import source_language
-            rendered = ' '.join(item['text'] for items in description['summary'].values() for item in items)
+            rendered = ' '.join(item['text'] for items in description['summary'].values()
+                                if isinstance(items, list) for item in items)
             if len(rendered) >= 80 and source_language(rendered) != 'en':
                 raise ValueError('description_output_not_english')
             if not any(description['summary'].values()):
                 raise ValueError('description_has_no_supported_facts')
+            description['summary']['output_language'] = 'en'
             return description
         try:
             description = validated(response)
