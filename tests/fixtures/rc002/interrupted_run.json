@@ -1,0 +1,7 @@
+{
+  "cycle_id": "rc002-offline-cycle",
+  "completed_source_ids": ["greenhouse_small", "lever_large"],
+  "remaining_source_ids": ["workday_rate_limited", "recruitee_fixture", "generic_large"],
+  "interrupt_after_source_count": 2,
+  "resume_policy": "read checkpoint, skip completed source IDs, continue remaining source IDs"
+}

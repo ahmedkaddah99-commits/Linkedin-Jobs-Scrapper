@@ -1,0 +1,41 @@
+{
+  "companies": [
+    {"company_id": "canonical_company_app_acme", "canonical_name": "Acme"},
+    {"company_id": "canonical_company_app_acme_duplicate", "canonical_name": "Acme"},
+    {"company_id": "canonical_company_app_gamma", "canonical_name": "Gamma"},
+    {"company_id": "canonical_company_app_delta", "canonical_name": "Delta"}
+  ],
+  "identity_keys": [
+    {
+      "identity_key": "companyenrich:ce-gamma",
+      "company_id": "canonical_company_app_gamma",
+      "identity_type": "companyenrich_id",
+      "evidence": {"reviewed": true, "source": "fixture_review"}
+    },
+    {
+      "identity_key": "linkedin-org:200",
+      "company_id": "canonical_company_app_delta",
+      "identity_type": "linkedin_org_id",
+      "evidence": {"reviewed": true, "source": "fixture_review"}
+    },
+    {
+      "identity_key": "domain:acme.example",
+      "company_id": "canonical_company_app_acme",
+      "identity_type": "verified_official_domain",
+      "evidence": {"reviewed": false, "source": "observed_only"}
+    },
+    {
+      "identity_key": "domain:shared-host.example",
+      "company_id": "canonical_company_app_acme",
+      "identity_type": "verified_official_domain",
+      "evidence": {"reviewed": true, "source": "fixture_review"}
+    },
+    {
+      "identity_key": "domain:shared-host.example",
+      "company_id": "canonical_company_app_gamma",
+      "identity_type": "verified_official_domain",
+      "evidence": {"reviewed": true, "source": "fixture_review"}
+    }
+  ],
+  "aliases": []
+}

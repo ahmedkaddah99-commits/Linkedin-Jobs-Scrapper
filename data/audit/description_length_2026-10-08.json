@@ -1,0 +1,120 @@
+{
+  "total": 29725,
+  "counts": {
+    "under_200": 2236,
+    "long_source_short_output": 4893,
+    "500_plus": 19646,
+    "200_to_499": 7448,
+    "empty": 395
+  },
+  "examples": [
+    {
+      "version_id": "version_e7d421fe7e0d4c1aa7db2f210d38ffb8",
+      "canonical_job_id": "canonical_job_22c01f8b435e4798b17079c533918ab8",
+      "title": "(Senior) Commercial Customer Success Manager (d/f/m)",
+      "source_chars": 24311,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_bb61ad38ebf243b3a091966d730bed7f",
+      "canonical_job_id": "canonical_job_bdf7e47ecc17463db022db266e0e04be",
+      "title": "Enterprise SDR",
+      "source_chars": 8243,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_c1cd22827ad748289f7110a2082f1086",
+      "canonical_job_id": "canonical_job_2d6fc429dd5b405c9038f8f5ac382d45",
+      "title": "Senior Manager Strategic Operations & Transformation (all genders) Program Management – Universal Music Entertainment GmbH",
+      "source_chars": 6658,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_7db5974b30a4470cbd3c9dd68b061219",
+      "canonical_job_id": "canonical_job_a4e1d4371e224ea3923ce985823248b3",
+      "title": "Key Account Manager",
+      "source_chars": 6139,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "posting_version_cff383e0b09d429db0fa17c727a0cde9",
+      "canonical_job_id": "canonical_job_de319ca77aba4f01901c302bac2f7291",
+      "title": "Herzlich Willkommen: BCL Karriere-Portal",
+      "source_chars": 6032,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "posting_version_e2f1dce256744983949a086f36d1b6e5",
+      "canonical_job_id": "canonical_job_8977a1b1246e4b15b00c4cf8ac7576d4",
+      "title": "Herzlich Willkommen: BCL Karriere-Portal",
+      "source_chars": 5833,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_f59c306b76084a008e3f038b909901ba",
+      "canonical_job_id": "canonical_job_0e5a9d5f01d9400cbb7f78c575901d16",
+      "title": "Head of IT Service Desk & IT Processes (m/f/d)",
+      "source_chars": 5760,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_7ee997dc2a6a4c50b69716803384d003",
+      "canonical_job_id": "canonical_job_96d1f872f92e4afc9f75b914de2b6952",
+      "title": "Außendienstmitarbeiter (m/w/d) im Vertrieb - Krankenversicherung",
+      "source_chars": 5602,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_8f734c761a544eee95154ff90f25a2fa",
+      "canonical_job_id": "canonical_job_3b055ce994a740c09b13bf3c15a06132",
+      "title": "Distribution Technology Internship - Design Hotels",
+      "source_chars": 5577,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_3cc9dc96fc5a41b2bd56a447792bbece",
+      "canonical_job_id": "canonical_job_43ed4ec26739417fb74cfba8e7fa2ac0",
+      "title": "Sachbearbeitung (w/m/d) Versicherung",
+      "source_chars": 5548,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_c282167330254457a39a003a2d8a2dd2",
+      "canonical_job_id": "canonical_job_d3988ab16cb2403bbf3435ef00588cbc",
+      "title": "Growth Marketing Manager - m/f/d",
+      "source_chars": 5495,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    },
+    {
+      "version_id": "version_b4d726daf8574226b775227398044bf1",
+      "canonical_job_id": "canonical_job_a94ce9155e794ac187552790470cf080",
+      "title": "Servicekraft Bistro w/m/d",
+      "source_chars": 5469,
+      "state": "review_required",
+      "output_chars": 0,
+      "output_preview": []
+    }
+  ]
+}

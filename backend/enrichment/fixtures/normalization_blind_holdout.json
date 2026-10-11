@@ -1,0 +1,52 @@
+[
+  {
+    "fixture_id": "blind_paris_context_conflict",
+    "split": "blind_holdout",
+    "synthetic": true,
+    "connector": "workday",
+    "source_observation_id": "fixture-holdout-paris-conflict",
+    "title": "Data Engineer",
+    "location": "Paris",
+    "country_code": "FR",
+    "region": "Texas"
+  },
+  {
+    "fixture_id": "blind_lowell_leeds_name_order",
+    "split": "blind_holdout",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-holdout-lowell-leeds-order",
+    "title": "Customer Support Specialist",
+    "company": "Lowell",
+    "location": "Leeds, UK",
+    "company_domain": "lowell.com"
+  },
+  {
+    "fixture_id": "blind_remote_scope_missing",
+    "split": "blind_holdout",
+    "synthetic": true,
+    "connector": "lever",
+    "source_observation_id": "fixture-holdout-remote-scope",
+    "title": "Product Analyst",
+    "location": "Remote",
+    "workplace_arrangement": "Remote"
+  },
+  {
+    "fixture_id": "blind_language_in_boilerplate",
+    "split": "blind_holdout",
+    "synthetic": true,
+    "connector": "personio",
+    "source_observation_id": "fixture-holdout-language-boilerplate",
+    "title": "Recruiting Coordinator",
+    "description_excerpt": "Our company language is inclusive and collaborative. German offices are growing."
+  },
+  {
+    "fixture_id": "blind_working_student_professional_duties",
+    "split": "blind_holdout",
+    "synthetic": true,
+    "connector": "smartrecruiters",
+    "source_observation_id": "fixture-holdout-working-student",
+    "title": "Werkstudent Backend Engineering",
+    "department": "Engineering"
+  }
+]

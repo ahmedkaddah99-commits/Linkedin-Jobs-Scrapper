@@ -1,0 +1,16 @@
+{
+  "jobs": [
+    {
+      "id": 2001,
+      "title": "Backend Engineer",
+      "absolute_url": "https://boards.greenhouse.io/rc002-small/jobs/2001",
+      "application_url": "https://boards.greenhouse.io/rc002-small/jobs/2001/apply",
+      "location": {"name": "Berlin, Germany"},
+      "departments": [{"id": 1, "name": "Engineering"}],
+      "offices": [{"id": 1, "name": "Berlin"}],
+      "metadata": [{"name": "Requisition ID", "value": "RC002-2001"}],
+      "first_published_at": "2026-08-09T12:30:00Z",
+      "content": "Build reliable APIs for German customers."
+    }
+  ]
+}

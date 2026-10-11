@@ -1,0 +1,38 @@
+[Unit]
+Description=Runr producer-state publisher
+After=network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+ExecStart=/opt/runr/deploy/run-acquisition-publisher.sh
+CPUAccounting=true
+CPUQuota=200%
+MemoryAccounting=true
+MemoryHigh=4G
+MemoryMax=6G
+TasksMax=256
+TimeoutStartSec=12h
+TimeoutStopSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,124 @@
+{
+  "event_type": "phase_a_live_validation_incident",
+  "event_status": "development_audit_only",
+  "ordinary_successful_cycle": false,
+  "captured_at": "2026-08-05",
+  "remediation_version": "phase_a_remediation_2026-08-05.1",
+  "scope": "Phase A acquisition validation",
+  "live_network_authorized": false,
+  "durable_cycle_id": "unknown",
+  "durable_request_rows": "missing_from_interrupted_execution",
+  "responsible_execution_paths": [
+    "direct connector validation probe",
+    "direct bounded employer probe",
+    "isolated real-cycle validation command with a 180-second timeout"
+  ],
+  "responsible_commands": {
+    "exact_shell_text": "unknown_after_interrupted_execution_and_context_compaction",
+    "n26_greenhouse": "Earlier direct live validation command; exact shell text was not retained.",
+    "qonto_lever": "Earlier direct live validation command; exact shell text was not retained.",
+    "employer_hosts": "Earlier bounded five-employer validation command; exact shell text was not retained.",
+    "timed_out_cycle": "Earlier isolated real-cycle validation command with a 180-second timeout; exact shell text was not retained."
+  },
+  "configuration_observed_or_used": {
+    "phase_a_scheduler_enabled": "explicitly enabled for validation path",
+    "phase_a_global_enabled": "explicitly enabled for validation path",
+    "phase_a_kill_switch": "explicitly disabled for validation path",
+    "connector_validation_enabled": "explicitly enabled for validation path",
+    "target_enabled": "explicitly enabled for validation path",
+    "request_mode": "direct",
+    "scrapeops_or_proxy": "not used; no known ScrapeOps credit usage",
+    "publication_enabled": "disabled; no publication",
+    "live_network_gate": "did not exist before this remediation"
+  },
+  "known_outcomes": [
+    {
+      "hostname": "boards-api.greenhouse.io",
+      "request_count_known": 1,
+      "http_status": 200,
+      "jobs_returned": 79,
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    },
+    {
+      "hostname": "api.lever.co",
+      "request_count_known": 1,
+      "http_status": 200,
+      "jobs_returned": 40,
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    }
+  ],
+  "employer_hosts_contacted": [
+    {
+      "hostname": "www.siemens.com",
+      "request_count_known": "unknown",
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    },
+    {
+      "hostname": "basf.jobs",
+      "request_count_known": "unknown",
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    },
+    {
+      "hostname": "jobs.bosch.de",
+      "request_count_known": "unknown",
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    },
+    {
+      "hostname": "careers.dhl.com",
+      "request_count_known": "unknown",
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    },
+    {
+      "hostname": "careers.adidas-group.com",
+      "request_count_known": "unknown",
+      "redirects": "unknown",
+      "headers": "not durably captured; credential/token presence unknown"
+    }
+  ],
+  "interrupted_cycle": {
+    "timeout_seconds": 180,
+    "targets_likely_in_scope": ["siemens", "basf", "bosch", "dhl", "adidas", "n26_greenhouse", "qonto_lever"],
+    "cycle_status": "unknown; not durably captured",
+    "response_details": "unknown",
+    "costs": "unknown",
+    "scrapeops_credits": 0,
+    "publication": "none known"
+  },
+  "test_environment_isolation_incident": {
+    "status": "blocked_before_mutation",
+    "database_backend_observed": "turso",
+    "runtime_environment_observed": "production",
+    "remote_database_identity": "redacted",
+    "failure_boundary": "migration_029_checksum_guard",
+    "acquisition_request_made": false,
+    "credentials_or_signed_url_logged": false,
+    "exact_command": "unknown_after_interrupted_execution_and_context_compaction"
+  },
+  "root_cause": {
+    "summary": "Direct validation invoked connector/request functions with real requests before a separate live-network authorization gate existed.",
+    "kill_switch_bypass": "The kill switch lived in scheduler orchestration and was bypassed by direct validation calls; connector functions did not enforce it.",
+    "disabled_default_bypass": "Disabled manifest defaults were configuration-level scheduler controls and were bypassed by explicitly enabling validation targets in the validation path.",
+    "tests_worker_or_other": "Other validation path; not the normal worker startup.",
+    "why_not_rejected": "No final pre-dispatch network policy existed, and tests/fixtures were not isolated from production database/network environment."
+  },
+  "accounting": {
+    "known_scrapeops_credits": 0,
+    "known_publications": 0,
+    "durable_request_attempts": "unknown",
+    "durable_job_records": "unknown",
+    "must_not_count_as_success": true
+  },
+  "remediation": {
+    "live_network_gate": "RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false",
+    "write_ahead_state": ["dispatching", "completed", "blocked", "uncertain", "reconciled_unknown", "retry_authorized"],
+    "recovery": "uncertain outcomes require explicit release or bounded retry decision",
+    "test_database_boundary": "explicit local SQLite test path; remote Turso/libSQL rejected before connection",
+    "migration_policy": "029 immutable; 030, 031, and 032 forward-only additive migrations"
+  }
+}

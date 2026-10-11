@@ -1,0 +1,38 @@
+{
+  "published_readback": 100,
+  "role": {
+    "value": "Project/Program Manager",
+    "total": 1,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_00cb90f83e7f44178f2c3a3c6f6e35c0"
+  },
+  "employment_type": {
+    "value": "full_time",
+    "total": 2,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_0003ade614254598bfbaf1503aecfbcf"
+  },
+  "work_arrangement": {
+    "value": "onsite",
+    "total": 1,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_0024bbfce00544768fdef321a78d1c89"
+  },
+  "experience_level": {
+    "value": "senior",
+    "total": 8,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_00428df109694bb8b7ad9f2b04f154f0"
+  },
+  "required_experience_min": {
+    "value": 7,
+    "total": 1,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_00428df109694bb8b7ad9f2b04f154f0"
+  },
+  "skills_include": {
+    "value": "Sales",
+    "total": 1,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_0024bbfce00544768fdef321a78d1c89"
+  },
+  "role_type": {
+    "value": "ic",
+    "total": 1,
+    "runr_url": "https://app.userunr.com/jobs/canonical_job_006b13872b9244aa9c1e2aefde49adb4"
+  }
+}

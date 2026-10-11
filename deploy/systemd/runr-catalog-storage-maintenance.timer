@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Runr catalog storage maintenance hourly
+
+[Timer]
+OnCalendar=*-*-* *:40:00 UTC
+RandomizedDelaySec=5min
+Persistent=true
+Unit=runr-catalog-storage-maintenance.service
+
+[Install]
+WantedBy=timers.target

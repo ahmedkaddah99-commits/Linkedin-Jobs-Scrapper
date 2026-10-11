@@ -1,0 +1,97 @@
+{
+  "ticket": "T33",
+  "generated_at": "2026-09-22",
+  "contract_version": "job_publication_completeness_v1",
+  "read_only": true,
+  "inputs": {
+    "linkedin": {
+      "snapshot": "2026-09-19",
+      "path": "C:/Users/ahmed/Projects_Local/runr-acquisition-recovery/2026-09-19/linkedin/master_linkedin_jobs_state.db",
+      "bytes": 3479191552,
+      "sha256": "ADC5C1AB7AC5B7BDCA67CDABD7687FDD29913AFAE188FAB2ABA4377A41327525",
+      "rows": 188206
+    },
+    "employer": {
+      "snapshot": "2026-09-19",
+      "path": "C:/Users/ahmed/Projects_Local/runr-acquisition-recovery/2026-09-19/employer/master_employer_jobs_state.db",
+      "bytes": 83841024,
+      "sha256": "4F779500C9CD5FB66342CB36BD2FD236CEFB9B9EEBB3CAF13876FCA8B1265AAF",
+      "rows": 2612
+    },
+    "linkedin_identity_resolution": {
+      "rows": 15454,
+      "sha256": "4DA05480F291DBDF47C4BBD7988D1DA8B79206CB2310332F3F5A32DFBA627F2E"
+    },
+    "company_registry": {
+      "rows": 17601,
+      "resolved_linkedin_ids": 12059,
+      "sha256": "DEDE5FD5052EC8CC85886344C66C1761D818FC686E437670E8B5AC1636914F87"
+    }
+  },
+  "producer_counts": {
+    "linkedin": {
+      "rows": 188206,
+      "unique_source_job_ids": 188206,
+      "duplicate_rows": 0,
+      "publishable": 0,
+      "outcomes": {
+        "not_publishable_unresolved_identity": 145637,
+        "not_publishable_missing_required": 42561,
+        "not_publishable_invalid": 8
+      }
+    },
+    "employer": {
+      "rows": 2612,
+      "unique_source_job_ids": 2440,
+      "duplicate_rows": 172,
+      "publishable": 0,
+      "outcomes": {
+        "not_publishable_unresolved_identity": 2018,
+        "not_publishable_missing_required": 550,
+        "not_publishable_invalid": 41,
+        "not_publishable_placeholder": 3
+      }
+    },
+    "combined": {
+      "rows": 190818,
+      "unique_source_job_ids": 190646,
+      "duplicate_rows": 172,
+      "publishable": 0
+    }
+  },
+  "catalog_join": {
+    "path": "data/audit/runr_readiness/2026-09-22/catalog_join.csv",
+    "rows": 6373,
+    "current_head_rows": 6338,
+    "non_head_rows": 35,
+    "canonical_jobs_snapshot": 6370,
+    "published_jobs_snapshot": 6335,
+    "linkedin_local_ids_in_current_head": 6090,
+    "linkedin_local_ids_absent": 182116,
+    "current_head_ids_absent_from_recovered_linkedin": 248,
+    "non_head_ids_absent_from_recovered_linkedin": 35,
+    "linkedin_ids_in_non_head_only": 0,
+    "employer_source_key_join": "unproven_composite_key_not_in_catalog_export"
+  },
+  "reconciliation_buckets": {
+    "local_only": {
+      "linkedin": 182116,
+      "employer": 2612
+    },
+    "catalog_vps_only_candidate_current_head": 248,
+    "published_but_not_visible_proven": 0,
+    "stale_closed_or_superseded": 35,
+    "vps_only": "unknown_without_live_vps_inventory"
+  },
+  "evidence_files": {
+    "producer_audit": "data/audit/runr_readiness/2026-09-22/producer/completeness_audit_real.json",
+    "catalog_readiness": "data/audit/runr_readiness/2026-09-22/audit_summary.json",
+    "catalog_join": "data/audit/runr_readiness/2026-09-22/catalog_join.csv",
+    "recovery_manifest": "data/audit/runr_source_state/2026-09-19/recovery_manifest.md"
+  },
+  "limitations": [
+    "The VPS-only bucket remains unknown until the corrected read-only VPS inventory is performed.",
+    "The catalog export has no employer-family source key, so employer joins are not inferred.",
+    "No live catalog, VPS, or publisher mutation was performed."
+  ]
+}

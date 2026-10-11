@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <label for="same-frame-portfolio">Same-frame portfolio</label>
+    <input id="same-frame-portfolio" name="portfolio" type="text" />
+    <script>
+      const control = document.getElementById("same-frame-portfolio");
+      for (const eventName of ["focus", "input", "change", "blur"]) {
+        control.addEventListener(eventName, () => {
+          document.body.dataset.events = [document.body.dataset.events, eventName].filter(Boolean).join(",");
+        });
+      }
+    </script>
+  </body>
+</html>

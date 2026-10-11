@@ -1,0 +1,11 @@
+[Unit]
+Description=Runr daily bounded acquisition cycle
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=runr-acquisition-cycle.service
+
+[Install]
+WantedBy=timers.target

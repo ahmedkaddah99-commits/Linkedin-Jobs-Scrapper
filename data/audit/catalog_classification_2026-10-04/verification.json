@@ -1,0 +1,943 @@
+{
+  "verified_at": "2026-10-04T15:03:00.444956+00:00",
+  "publication_id": "acq_publication_489ec6e8b1b6413e9eefa5054408aeed",
+  "transport": "Bounded Hrana HTTP executing unchanged customer repository SQL",
+  "unfiltered_jobs": 22009,
+  "blue_detail_excluded": true,
+  "function_checks": [
+    {
+      "function": "Backend Engineer",
+      "jobs": 871,
+      "passed": true
+    },
+    {
+      "function": "Full Stack Engineer",
+      "jobs": 138,
+      "passed": true
+    },
+    {
+      "function": "Data Analyst",
+      "jobs": 742,
+      "passed": true
+    },
+    {
+      "function": "Data Scientist",
+      "jobs": 129,
+      "passed": true
+    },
+    {
+      "function": "Data Engineer",
+      "jobs": 96,
+      "passed": true
+    },
+    {
+      "function": "Business/BI Analyst",
+      "jobs": 356,
+      "passed": true
+    },
+    {
+      "function": "Machine Learning Engineer",
+      "jobs": 13,
+      "passed": true
+    },
+    {
+      "function": "AI Engineer",
+      "jobs": 127,
+      "passed": true
+    },
+    {
+      "function": "Frontend Software Engineer",
+      "jobs": 90,
+      "passed": true
+    },
+    {
+      "function": "DevOps",
+      "jobs": 106,
+      "passed": true
+    },
+    {
+      "function": "Cyber Security Analyst",
+      "jobs": 131,
+      "passed": true
+    },
+    {
+      "function": "Software Testing/Quality Assurance Engineer",
+      "jobs": 64,
+      "passed": true
+    },
+    {
+      "function": "Project/Program Manager",
+      "jobs": 1845,
+      "passed": true
+    },
+    {
+      "function": "Engineering Manager",
+      "jobs": 175,
+      "passed": true
+    },
+    {
+      "function": "Business Analyst",
+      "jobs": 995,
+      "passed": true
+    },
+    {
+      "function": "Data Consultant",
+      "jobs": 118,
+      "passed": true
+    },
+    {
+      "function": "IT Consultant",
+      "jobs": 368,
+      "passed": true
+    },
+    {
+      "function": "Business Strategy Consultant",
+      "jobs": 599,
+      "passed": true
+    },
+    {
+      "function": "Market Research Analyst",
+      "jobs": 132,
+      "passed": true
+    },
+    {
+      "function": "Operations Consultant",
+      "jobs": 6,
+      "passed": true
+    },
+    {
+      "function": "Financial Consultant",
+      "jobs": 39,
+      "passed": true
+    },
+    {
+      "function": "Content Marketing/Strategy",
+      "jobs": 79,
+      "passed": true
+    },
+    {
+      "function": "Social Media Management",
+      "jobs": 74,
+      "passed": true
+    },
+    {
+      "function": "SEO",
+      "jobs": 24,
+      "passed": true
+    },
+    {
+      "function": "Copywriter",
+      "jobs": 7,
+      "passed": true
+    },
+    {
+      "function": "Brand Manager",
+      "jobs": 32,
+      "passed": true
+    },
+    {
+      "function": "Growth Marketing",
+      "jobs": 23,
+      "passed": true
+    },
+    {
+      "function": "Performance Marketing",
+      "jobs": 32,
+      "passed": true
+    },
+    {
+      "function": "Product Marketing",
+      "jobs": 54,
+      "passed": true
+    },
+    {
+      "function": "Financial Analyst",
+      "jobs": 118,
+      "passed": true
+    },
+    {
+      "function": "Risk Analyst",
+      "jobs": 38,
+      "passed": true
+    },
+    {
+      "function": "Quantitative Analyst/Researcher",
+      "jobs": 1,
+      "passed": true
+    },
+    {
+      "function": "Portfolio Manager",
+      "jobs": 8,
+      "passed": true
+    },
+    {
+      "function": "Investment Banker",
+      "jobs": 8,
+      "passed": true
+    },
+    {
+      "function": "Credit Analyst",
+      "jobs": 27,
+      "passed": true
+    },
+    {
+      "function": "Corporate Finance Analyst",
+      "jobs": 9,
+      "passed": true
+    },
+    {
+      "function": "Underwriter",
+      "jobs": 25,
+      "passed": true
+    },
+    {
+      "function": "Actuary",
+      "jobs": 9,
+      "passed": true
+    },
+    {
+      "function": "Product Manager",
+      "jobs": 478,
+      "passed": true
+    },
+    {
+      "function": "Product Analyst",
+      "jobs": 55,
+      "passed": true
+    },
+    {
+      "function": "Technical Product Manager",
+      "jobs": 244,
+      "passed": true
+    },
+    {
+      "function": "AI Product Manager",
+      "jobs": 57,
+      "passed": true
+    },
+    {
+      "function": "Game Designer",
+      "jobs": 11,
+      "passed": true
+    },
+    {
+      "function": "Healthcare Data Analyst",
+      "jobs": 535,
+      "passed": true
+    },
+    {
+      "function": "Health Product Manager",
+      "jobs": 74,
+      "passed": true
+    },
+    {
+      "function": "Clinical Research Associate",
+      "jobs": 62,
+      "passed": true
+    },
+    {
+      "function": "Clinical Research Scientist",
+      "jobs": 20,
+      "passed": true
+    },
+    {
+      "function": "Biostatistician",
+      "jobs": 2,
+      "passed": true
+    },
+    {
+      "function": "Medical Writer",
+      "jobs": 0,
+      "passed": true
+    },
+    {
+      "function": "Biomedical Engineer",
+      "jobs": 4,
+      "passed": true
+    },
+    {
+      "function": "Medical Professional",
+      "jobs": 985,
+      "passed": true
+    },
+    {
+      "function": "Nursing Professional",
+      "jobs": 1249,
+      "passed": true
+    },
+    {
+      "function": "Therapist",
+      "jobs": 320,
+      "passed": true
+    },
+    {
+      "function": "Embedded Software Engineer",
+      "jobs": 35,
+      "passed": true
+    },
+    {
+      "function": "Electronics Engineer",
+      "jobs": 61,
+      "passed": true
+    },
+    {
+      "function": "Hardware Engineer",
+      "jobs": 40,
+      "passed": true
+    },
+    {
+      "function": "Electrical Engineer",
+      "jobs": 266,
+      "passed": true
+    },
+    {
+      "function": "Robotics Engineer",
+      "jobs": 6,
+      "passed": true
+    },
+    {
+      "function": "Network Engineer",
+      "jobs": 40,
+      "passed": true
+    },
+    {
+      "function": "Battery Engineer",
+      "jobs": 2,
+      "passed": true
+    },
+    {
+      "function": "Engineering Specialist",
+      "jobs": 206,
+      "passed": true
+    },
+    {
+      "function": "Administrative Assistant",
+      "jobs": 869,
+      "passed": true
+    },
+    {
+      "function": "Executive Assistant",
+      "jobs": 64,
+      "passed": true
+    },
+    {
+      "function": "Office Manager",
+      "jobs": 86,
+      "passed": true
+    },
+    {
+      "function": "Human Resource Specialist",
+      "jobs": 144,
+      "passed": true
+    },
+    {
+      "function": "Recruiter/Sourcer",
+      "jobs": 88,
+      "passed": true
+    },
+    {
+      "function": "Paralegal",
+      "jobs": 5,
+      "passed": true
+    },
+    {
+      "function": "Corporate Counsel",
+      "jobs": 56,
+      "passed": true
+    },
+    {
+      "function": "Business Development",
+      "jobs": 886,
+      "passed": true
+    },
+    {
+      "function": "Sales Development Representative",
+      "jobs": 791,
+      "passed": true
+    },
+    {
+      "function": "Account Executive",
+      "jobs": 113,
+      "passed": true
+    },
+    {
+      "function": "Sales Manager",
+      "jobs": 821,
+      "passed": true
+    },
+    {
+      "function": "Enterprise Sales",
+      "jobs": 41,
+      "passed": true
+    },
+    {
+      "function": "Retail Sales",
+      "jobs": 1166,
+      "passed": true
+    },
+    {
+      "function": "Medical Sales",
+      "jobs": 28,
+      "passed": true
+    },
+    {
+      "function": "Mechanical Engineer",
+      "jobs": 89,
+      "passed": true
+    },
+    {
+      "function": "Manufacturing Engineer",
+      "jobs": 13,
+      "passed": true
+    },
+    {
+      "function": "Process Engineer",
+      "jobs": 113,
+      "passed": true
+    },
+    {
+      "function": "Operations Manager/Director",
+      "jobs": 858,
+      "passed": true
+    },
+    {
+      "function": "Quality Assurance Specialist",
+      "jobs": 234,
+      "passed": true
+    },
+    {
+      "function": "Automotive Engineer",
+      "jobs": 13,
+      "passed": true
+    },
+    {
+      "function": "Customer Service Representative",
+      "jobs": 223,
+      "passed": true
+    },
+    {
+      "function": "Customer Service Manager",
+      "jobs": 27,
+      "passed": true
+    },
+    {
+      "function": "Customer Support",
+      "jobs": 26,
+      "passed": true
+    },
+    {
+      "function": "Customer Success",
+      "jobs": 46,
+      "passed": true
+    },
+    {
+      "function": "UX Designer",
+      "jobs": 16,
+      "passed": true
+    },
+    {
+      "function": "UI Designer",
+      "jobs": 6,
+      "passed": true
+    },
+    {
+      "function": "Graphic Designer",
+      "jobs": 49,
+      "passed": true
+    },
+    {
+      "function": "UX Researcher",
+      "jobs": 3,
+      "passed": true
+    },
+    {
+      "function": "Video Editor",
+      "jobs": 38,
+      "passed": true
+    },
+    {
+      "function": "Illustrator",
+      "jobs": 0,
+      "passed": true
+    },
+    {
+      "function": "3D Designer",
+      "jobs": 13,
+      "passed": true
+    },
+    {
+      "function": "Industrial Designer",
+      "jobs": 65,
+      "passed": true
+    },
+    {
+      "function": "Supply Chain Manager",
+      "jobs": 88,
+      "passed": true
+    },
+    {
+      "function": "Inventory Manager",
+      "jobs": 9,
+      "passed": true
+    },
+    {
+      "function": "Logistics Manager",
+      "jobs": 127,
+      "passed": true
+    },
+    {
+      "function": "Warehouse Manager",
+      "jobs": 2,
+      "passed": true
+    },
+    {
+      "function": "Procurement Manager",
+      "jobs": 48,
+      "passed": true
+    },
+    {
+      "function": "Program Manager",
+      "jobs": 54,
+      "passed": true
+    },
+    {
+      "function": "Policy Analyst",
+      "jobs": 2,
+      "passed": true
+    },
+    {
+      "function": "Government Relations Manager",
+      "jobs": 8,
+      "passed": true
+    },
+    {
+      "function": "Compliance Specialist",
+      "jobs": 65,
+      "passed": true
+    },
+    {
+      "function": "Legal Assistant",
+      "jobs": 74,
+      "passed": true
+    },
+    {
+      "function": "Legal Operations Manager",
+      "jobs": 75,
+      "passed": true
+    },
+    {
+      "function": "Lawyer",
+      "jobs": 3,
+      "passed": true
+    },
+    {
+      "function": "Higher Education Teaching",
+      "jobs": 75,
+      "passed": true
+    },
+    {
+      "function": "K-12 Teaching",
+      "jobs": 50,
+      "passed": true
+    },
+    {
+      "function": "Corporate Training and Development",
+      "jobs": 8,
+      "passed": true
+    },
+    {
+      "function": "Educational Administration",
+      "jobs": 77,
+      "passed": true
+    },
+    {
+      "function": "Early Childhood Educator",
+      "jobs": 153,
+      "passed": true
+    },
+    {
+      "function": "Education and Care Specialist",
+      "jobs": 91,
+      "passed": true
+    },
+    {
+      "function": "Accountant",
+      "jobs": 338,
+      "passed": true
+    },
+    {
+      "function": "Controller",
+      "jobs": 39,
+      "passed": true
+    },
+    {
+      "function": "Auditor",
+      "jobs": 26,
+      "passed": true
+    },
+    {
+      "function": "Tax Specialist",
+      "jobs": 196,
+      "passed": true
+    },
+    {
+      "function": "Construction Project Manager",
+      "jobs": 443,
+      "passed": true
+    },
+    {
+      "function": "Civil Engineer",
+      "jobs": 161,
+      "passed": true
+    },
+    {
+      "function": "Property Manager",
+      "jobs": 64,
+      "passed": true
+    },
+    {
+      "function": "Architect",
+      "jobs": 40,
+      "passed": true
+    },
+    {
+      "function": "Urban Planner",
+      "jobs": 1,
+      "passed": true
+    },
+    {
+      "function": "Renewable Energy Engineer",
+      "jobs": 2,
+      "passed": true
+    },
+    {
+      "function": "Energy Engineer",
+      "jobs": 21,
+      "passed": true
+    },
+    {
+      "function": "Environmental Scientist",
+      "jobs": 18,
+      "passed": true
+    },
+    {
+      "function": "Environmental Engineer",
+      "jobs": 10,
+      "passed": true
+    },
+    {
+      "function": "General Management",
+      "jobs": 66,
+      "passed": true
+    },
+    {
+      "function": "Administrative Specialist",
+      "jobs": 35,
+      "passed": true
+    },
+    {
+      "function": "Operations Analyst",
+      "jobs": 11,
+      "passed": true
+    },
+    {
+      "function": "Business Operations Specialist",
+      "jobs": 82,
+      "passed": true
+    },
+    {
+      "function": "Customer Account Manager",
+      "jobs": 3,
+      "passed": true
+    },
+    {
+      "function": "Insurance Specialist",
+      "jobs": 9,
+      "passed": true
+    },
+    {
+      "function": "Banking Specialist",
+      "jobs": 6,
+      "passed": true
+    },
+    {
+      "function": "Real Estate Sales",
+      "jobs": 190,
+      "passed": true
+    },
+    {
+      "function": "Technical Sales Engineer",
+      "jobs": 10,
+      "passed": true
+    },
+    {
+      "function": "Purchasing Specialist",
+      "jobs": 36,
+      "passed": true
+    },
+    {
+      "function": "Payroll Specialist",
+      "jobs": 32,
+      "passed": true
+    },
+    {
+      "function": "Regulatory Affairs Specialist",
+      "jobs": 55,
+      "passed": true
+    },
+    {
+      "function": "Public Relations Specialist",
+      "jobs": 46,
+      "passed": true
+    },
+    {
+      "function": "Event Manager",
+      "jobs": 55,
+      "passed": true
+    },
+    {
+      "function": "IT Administrator",
+      "jobs": 80,
+      "passed": true
+    },
+    {
+      "function": "IT Support Specialist",
+      "jobs": 91,
+      "passed": true
+    },
+    {
+      "function": "Software Engineer",
+      "jobs": 423,
+      "passed": true
+    },
+    {
+      "function": "Social Worker",
+      "jobs": 303,
+      "passed": true
+    },
+    {
+      "function": "Safety Specialist",
+      "jobs": 71,
+      "passed": true
+    },
+    {
+      "function": "Technical Documentation Specialist",
+      "jobs": 21,
+      "passed": true
+    },
+    {
+      "function": "Translator",
+      "jobs": 56,
+      "passed": true
+    },
+    {
+      "function": "Journalist",
+      "jobs": 23,
+      "passed": true
+    },
+    {
+      "function": "Librarian",
+      "jobs": 1,
+      "passed": true
+    },
+    {
+      "function": "Hospitality Manager",
+      "jobs": 18,
+      "passed": true
+    },
+    {
+      "function": "Facilities Manager",
+      "jobs": 36,
+      "passed": true
+    },
+    {
+      "function": "Professional Services Specialist",
+      "jobs": 1,
+      "passed": true
+    },
+    {
+      "function": "Sales Support Specialist",
+      "jobs": 164,
+      "passed": true
+    },
+    {
+      "function": "Structural Engineer",
+      "jobs": 55,
+      "passed": true
+    },
+    {
+      "function": "CAD Engineer",
+      "jobs": 29,
+      "passed": true
+    },
+    {
+      "function": "BIM Engineer",
+      "jobs": 20,
+      "passed": true
+    },
+    {
+      "function": "Receptionist",
+      "jobs": 58,
+      "passed": true
+    },
+    {
+      "function": "Sales Specialist",
+      "jobs": 59,
+      "passed": true
+    },
+    {
+      "function": "Franchise Manager",
+      "jobs": 8,
+      "passed": true
+    },
+    {
+      "function": "Research Scientist",
+      "jobs": 183,
+      "passed": true
+    },
+    {
+      "function": "Research Associate",
+      "jobs": 14,
+      "passed": true
+    },
+    {
+      "function": "Scientific Laboratory Specialist",
+      "jobs": 25,
+      "passed": true
+    }
+  ],
+  "field_checks": [
+    {
+      "filter": "work_arrangement",
+      "value": "onsite",
+      "jobs": 1544,
+      "returned_row": true
+    },
+    {
+      "filter": "work_arrangement",
+      "value": "hybrid",
+      "jobs": 1309,
+      "returned_row": true
+    },
+    {
+      "filter": "work_arrangement",
+      "value": "remote",
+      "jobs": 790,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "full_time",
+      "jobs": 18922,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "part_time",
+      "jobs": 1440,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "contract",
+      "jobs": 110,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "internship",
+      "jobs": 185,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "working_student",
+      "jobs": 44,
+      "returned_row": true
+    },
+    {
+      "filter": "employment_type",
+      "value": "apprenticeship",
+      "jobs": 35,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "intern",
+      "jobs": 828,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "entry",
+      "jobs": 585,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "mid",
+      "jobs": 721,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "senior",
+      "jobs": 1914,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "lead",
+      "jobs": 1007,
+      "returned_row": true
+    },
+    {
+      "filter": "experience_level",
+      "value": "director",
+      "jobs": 76,
+      "returned_row": true
+    },
+    {
+      "filter": "role_type",
+      "value": "ic",
+      "jobs": 989,
+      "returned_row": true
+    },
+    {
+      "filter": "role_type",
+      "value": "manager",
+      "jobs": 1327,
+      "returned_row": true
+    },
+    {
+      "filters": {
+        "required_experience_min": 1,
+        "required_experience_max": 3
+      },
+      "jobs": 688,
+      "returned_row": true
+    },
+    {
+      "filters": {
+        "skills_include": [
+          "SQL"
+        ]
+      },
+      "jobs": 282,
+      "returned_row": true
+    },
+    {
+      "filters": {
+        "role": [
+          "Data Analyst"
+        ],
+        "skills_include": [
+          "SQL"
+        ]
+      },
+      "jobs": 104,
+      "returned_row": true
+    }
+  ],
+  "browser_visual_check": "Not performed: browser security policy blocked the signed-in Runr page."
+}

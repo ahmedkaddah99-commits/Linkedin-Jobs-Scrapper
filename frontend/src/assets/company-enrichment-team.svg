@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Generic hiring team illustration</title>
+  <desc id="desc">Abstract shapes representing a team reviewing company information.</desc>
+  <rect width="640" height="360" rx="28" fill="#e9f5f3"/>
+  <circle cx="180" cy="145" r="54" fill="#0d628c" opacity=".9"/>
+  <circle cx="320" cy="118" r="42" fill="#6d50c7" opacity=".9"/>
+  <circle cx="455" cy="152" r="58" fill="#c35c35" opacity=".88"/>
+  <path d="M90 302c15-68 48-102 90-102s75 34 90 102M230 302c12-57 42-86 90-86s78 29 90 86M365 302c14-72 47-108 91-108s79 36 94 108" fill="none" stroke="#183448" stroke-linecap="round" stroke-width="24"/>
+  <rect x="260" y="236" width="120" height="34" rx="17" fill="#fff" opacity=".9"/>
+</svg>

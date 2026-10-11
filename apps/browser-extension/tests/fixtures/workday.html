@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+  Sanitized workday application fixture.
+
+  Reproduces the control mix and labelling of a real workday application form so
+  provider support is proven by inspection and filling, not by URL detection.
+  Employer, job, and identifiers are fictional; no candidate data appears here.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Software Engineer | Application</title>
+    <meta property="og:title" content="Software Engineer" />
+    <meta property="og:site_name" content="Northwind Industries" />
+  </head>
+  <body>
+    <main data-automation-id="applyFlow">
+      <h1>Software Engineer</h1>
+      <form id="application">
+        <label for="legalNameSection_firstName">First Name *</label>
+        <input id="legalNameSection_firstName" name="legalNameSection_firstName" type="text" required />
+        <label for="legalNameSection_lastName">Last Name *</label>
+        <input id="legalNameSection_lastName" name="legalNameSection_lastName" type="text" required />
+        <label for="email">Email Address *</label>
+        <input id="email" name="email" type="email" required />
+        <label for="phone-number">Phone Number *</label>
+        <input id="phone-number" name="phone-number" type="tel" required />
+        <label for="addressSection_city">City *</label>
+        <input id="addressSection_city" name="addressSection_city" type="text" required />
+        <label for="addressSection_postalCode">Postal Code</label>
+        <input id="addressSection_postalCode" name="addressSection_postalCode" type="text" />
+
+        <label for="resume">Resume/CV *</label>
+        <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+
+        <label for="cover-letter">Cover Letter</label>
+        <input id="cover-letter" name="cover_letter" type="file" accept=".pdf,.doc,.docx" />
+
+        <label for="work-auth">Are you authorized to work in this country? *</label>
+        <select id="work-auth" name="work_authorization" required>
+          <option value="">Select an option</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+
+        <label for="why">Why are you interested in this role?</label>
+        <textarea id="why" name="why"></textarea>
+
+        <button type="submit" id="send">Submit application</button>
+      </form>
+    </main>
+  </body>
+</html>

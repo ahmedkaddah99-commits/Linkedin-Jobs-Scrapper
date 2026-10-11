@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-runr-assisted-apply-fixture="lever">
+  <head><meta charset="UTF-8"><title>Lever application fixture</title></head>
+  <body data-submit-clicks="0" data-native-events="" data-aa201-submit-events="0" data-aa201-request-submit-calls="0" data-aa201-form-submit-calls="0" data-aa201-enter-submissions="0" data-aa201-terminal-clicks="0" data-aa201-terminal-requests="0" data-aa201-success-transitions="0" data-aa201-final-navigation="0"><form class="application-form">
+    <label>Full name <input name="name" autocomplete="name" required></label>
+    <label>Email <input name="email" type="email" autocomplete="email" required></label>
+    <label>Phone <input name="phone" type="tel" autocomplete="tel" required></label>
+    <label>Current location <input name="location"></label>
+    <label>Current company <input name="company"></label>
+    <label>GitHub URL <input name="github"></label>
+    <label>LinkedIn URL <input name="linkedin"></label>
+    <label>Other website <input name="website"></label>
+    <label>Why this company? <textarea name="why_company"></textarea></label>
+    <label for="lever-summary">Professional summary</label><textarea id="lever-summary" name="summary" required></textarea>
+    <label for="lever-country">Country</label><select id="lever-country" name="country" required>
+      <option value="">Choose</option><option value="DE">Germany</option><option value="GB">United Kingdom</option>
+    </select>
+    <fieldset><legend>Work authorization</legend>
+      <label for="lever-work-yes">Yes</label><input id="lever-work-yes" name="work_authorization" type="radio" value="yes" required>
+      <label for="lever-work-no">No</label><input id="lever-work-no" name="work_authorization" type="radio" value="no">
+    </fieldset>
+    <label for="lever-remote">Open to remote work</label><input id="lever-remote" name="remote" type="checkbox" value="yes">
+    <label for="lever-start-date">Start date</label><input id="lever-start-date" name="start_date" type="date" required>
+    <label for="lever-employee-code">Employee code</label><input id="lever-employee-code" name="employee_code" pattern="[A-Z]{3}" required>
+    <label for="lever-resume">CV / Resume</label><input id="lever-resume" name="resume" type="file" accept="application/pdf,.pdf" required>
+    <label for="lever-cover-letter">Cover letter</label><input id="lever-cover-letter" name="cover_letter" type="file" accept="application/pdf,.pdf">
+    <label for="lever-supporting-document">Additional supporting document</label><input id="lever-supporting-document" name="supporting_document" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple>
+    <button id="submit" type="submit">Submit application</button>
+  </form><script>
+    for (const controlId of ["lever-summary", "lever-country", "lever-work-yes", "lever-remote", "lever-start-date"]) {
+      const control = document.getElementById(controlId);
+      for (const eventName of ["focus", "input", "change", "blur"]) {
+        control.addEventListener(eventName, () => {
+          document.body.dataset.nativeEvents = [document.body.dataset.nativeEvents, `${controlId}:${eventName}`].filter(Boolean).join(",");
+        });
+      }
+    }
+    document.querySelector("form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      document.body.dataset.submitClicks = String(Number(document.body.dataset.submitClicks || "0") + 1);
+      document.body.dataset.aa201SubmitEvents = String(Number(document.body.dataset.aa201SubmitEvents || "0") + 1);
+    });
+    for (const [controlId, dataKey] of [["lever-resume", "uploadedCv"], ["lever-cover-letter", "uploadedCoverLetter"], ["lever-supporting-document", "uploadedSupportingDocument"]]) {
+      document.getElementById(controlId).addEventListener("change", (event) => {
+        document.body.dataset[dataKey] = Array.from(event.currentTarget.files).map((file) => file.name).join(",");
+      });
+    }
+    // AA-201 disposable fixture instrumentation for final-submit paths.
+    const body = document.body;
+    const increment = (key) => { body.dataset[key] = String(Number(body.dataset[key] || "0") + 1); };
+    const originalSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function (...args) { increment("aa201FormSubmitCalls"); return originalSubmit.apply(this, args); };
+    const originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+    HTMLFormElement.prototype.requestSubmit = function (...args) { increment("aa201RequestSubmitCalls"); return originalRequestSubmit.apply(this, args); };
+    document.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest("button[type=submit], input[type=submit]")) increment("aa201TerminalClicks");
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target instanceof Element && event.target.closest("form")) increment("aa201EnterSubmissions");
+    }, true);
+    const originalFetch = window.fetch;
+    window.fetch = (...args) => { if (/submit|application/iu.test(String(args[0]))) increment("aa201TerminalRequests"); return originalFetch(...args); };
+    const originalXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (...args) {
+      this.__aa201TerminalRequest = /submit|application/iu.test(String(args[1]));
+      return originalXhrOpen.apply(this, args);
+    };
+    const originalXhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (...args) {
+      if (this.__aa201TerminalRequest) increment("aa201TerminalRequests");
+      return originalXhrSend.apply(this, args);
+    };
+    const successObserver = new MutationObserver(() => {
+      if (body.dataset.runrApplicationSuccess === "true") increment("aa201SuccessTransitions");
+    });
+    successObserver.observe(body, { attributes: true, attributeFilter: ["data-runr-application-success"] });
+    for (const method of ["pushState", "replaceState"]) {
+      const originalHistoryMethod = history[method];
+      history[method] = function (...args) {
+        const before = window.location.href;
+        const result = originalHistoryMethod.apply(this, args);
+        if (window.location.href !== before) increment("aa201FinalNavigation");
+        return result;
+      };
+    }
+    window.addEventListener("beforeunload", () => increment("aa201FinalNavigation"));
+  </script></body>
+</html>

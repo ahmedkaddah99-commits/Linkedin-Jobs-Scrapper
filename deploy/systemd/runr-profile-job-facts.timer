@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Runr acquisition profile matching facts
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

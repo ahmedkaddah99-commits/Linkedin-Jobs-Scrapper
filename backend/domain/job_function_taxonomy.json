@@ -1,0 +1,556 @@
+{
+  "Software/Internet/AI": {
+    "Backend Engineering": [
+      "Backend Engineer",
+      "Full Stack Engineer",
+      "Python Engineer",
+      "Java Engineer",
+      "C/C++ Engineer",
+      ".Net Engineer",
+      "Golang Engineer",
+      "Salesforce Developer",
+      "Blockchain Engineer"
+    ],
+    "Data & Analytics": [
+      "Data Analyst",
+      "Data Scientist",
+      "Data Engineer",
+      "Business/BI Analyst",
+      "Power BI Developer",
+      "ETL Developer",
+      "Data Warehouse Engineer"
+    ],
+    "Machine Learning & AI": [
+      "Machine Learning Engineer",
+      "AI Engineer",
+      "Machine Learning/AI Researcher",
+      "Machine Learning, Deep Learning",
+      "LLM Engineer",
+      "Machine Learning, Model Training and Inference",
+      "Machine Learning, Computer Vision",
+      "Machine Learning, Operations (ML Ops)",
+      "Machine Learning, Search System",
+      "Machine Learning, Infrastructure",
+      "Data Annotation/AI Tutor",
+      "Machine Learning, Ads"
+    ],
+    "Frontend/Mobile/Game": [
+      "Frontend Software Engineer",
+      "React Developer",
+      "UI/UX Developer",
+      "Android Developer",
+      "Game Developer",
+      "iOS/Swift Developer",
+      "Flutter Developer",
+      "Unity Developer",
+      "Unreal Engine Developer",
+      "AR/VR Developer"
+    ],
+    "System Reliability & Security": [
+      "DevOps",
+      "Cyber Security Analyst",
+      "Cyber Security Engineer",
+      "Cloud Security Engineer",
+      "Systems Engineer",
+      "Network Security Engineer",
+      "Network Engineer",
+      "Site Reliability Engineer (SRE)",
+      "SoC Analyst"
+    ],
+    "Testing": [
+      "Software Testing/Quality Assurance Engineer",
+      "Automation Test Engineer",
+      "QA Manager"
+    ],
+    "Project Management": [
+      "Project/Program Manager",
+      "Technical Project Manager",
+      "Scrum Master"
+    ],
+    "Technical Leadership": [
+      "Engineering Manager",
+      "Software Architect",
+      "Engineering Director/VP",
+      "CTO"
+    ],
+    "Technical Support": [
+      "IT Support Specialist",
+      "Help Desk Technician/Desktop Support Technician",
+      "Database Administrator",
+      "System Administrator",
+      "Network Support Specialist",
+      "Salesforce Administrator"
+    ],
+    "Technical Sales": [
+      "Solutions Architect/Forward Deployed Engineer",
+      "Sales Engineer",
+      "Technical Writing",
+      "Developer Relations",
+      "Technical Account Manager"
+    ]
+  },
+  "Consulting": {
+    "IT Consulting": [
+      "Business Analyst",
+      "Data Consultant",
+      "IT Consultant",
+      "Cyber Security Consultant"
+    ],
+    "Business Strategy & Management Consulting": [
+      "Business Strategy Consultant",
+      "Market Research Analyst",
+      "Operations Consultant",
+      "Change Management Consultant"
+    ],
+    "Financial Advisory": [
+      "Financial Consultant",
+      "Risk Management Consultant",
+      "Mergers & Acquisitions (M&A) Consultant"
+    ]
+  },
+  "Marketing": {
+    "SEO and Content Marketing": [
+      "Content Marketing/Strategy",
+      "Social Media Management",
+      "SEO",
+      "Copywriter"
+    ],
+    "Brand and Communications Marketing": [
+      "Brand Manager",
+      "Public Relations",
+      "Event Marketing Specialist",
+      "Community Manager"
+    ],
+    "Growth Marketing": [
+      "Growth Marketing",
+      "Performance Marketing",
+      "Advertising Specialist"
+    ],
+    "Product Marketing": [
+      "Product Marketing"
+    ],
+    "Lifecycle and Email Marketing": [
+      "Email Marketing",
+      "Lifecycle Marketing"
+    ]
+  },
+  "Finance": {
+    "Investment/Financing": [
+      "Financial Analyst",
+      "Risk Analyst",
+      "Quantitative Analyst/Researcher",
+      "Portfolio Manager",
+      "Equity Analyst",
+      "Asset Manager",
+      "Investment Manager",
+      "Securities Trader"
+    ],
+    "Banking": [
+      "Investment Banker",
+      "Credit Analyst",
+      "Commercial Banker",
+      "Loan Officer"
+    ],
+    "Corporate Finance": [
+      "Corporate Finance Analyst",
+      "Treasury"
+    ],
+    "Insurance": [
+      "Underwriter",
+      "Actuary"
+    ],
+    "VC/PE": [
+      "Investment Analyst/Associate",
+      "Portfolio Operations Manager",
+      "Investor Relations Manager",
+      "Investment Direct/VP",
+      "Investment Partner",
+      "Fundraising Manager"
+    ]
+  },
+  "Product": {
+    "Product Management": [
+      "Product Manager",
+      "Product Analyst",
+      "Technical Product Manager",
+      "AI Product Manager",
+      "Game Designer",
+      "Product Manager, B2B/SaaS",
+      "Product Manager, Consumer Software",
+      "Product Manager, Hardware/Robotics/IoT"
+    ]
+  },
+  "Healthcare": {
+    "Healthcare IT": [
+      "Healthcare Data Analyst",
+      "Healthcare Data Scientist",
+      "Healthcare IT Specialist",
+      "EHR (Electronic Health Records) System Administrator"
+    ],
+    "Health Product & Operations Management": [
+      "Health Product Manager",
+      "Healthcare Quality Improvement Specialist",
+      "Clinical Operations Manager",
+      "Healthcare Compliance Manager"
+    ],
+    "Clinical & Regulatory": [
+      "Clinical Research Associate",
+      "Clinical Research Scientist",
+      "Biostatistician",
+      "Medical Writer",
+      "Regulatory Affairs Specialist"
+    ],
+    "Biomedical Engineering & Technology": [
+      "Biomedical Engineer",
+      "Clinical Engineer",
+      "Biomedical Equipment Technician"
+    ],
+    "Clinical Practice": [
+      "Medical Professional",
+      "Nursing Professional",
+      "Therapist"
+    ],
+    "Drug Discovery & Development": [
+      "Biologist",
+      "Biochemist",
+      "Chemist",
+      "Pharmacologist",
+      "Formulation Scientist",
+      "Toxicologist",
+      "DMPK Scientist"
+    ]
+  },
+  "Electrical Engineering": {
+    "Electronics & Hardware": [
+      "Embedded Software Engineer",
+      "Electronics Engineer",
+      "Hardware Engineer",
+      "Systems Integration Engineer",
+      "FPGA Engineer",
+      "PCB Engineer",
+      "ASIC Engineer",
+      "RF (Radio Frequency) Engineer"
+    ],
+    "Electrical & Automation": [
+      "Electrical Engineer",
+      "Robotics Engineer",
+      "Automation Engineer",
+      "Controls Engineer",
+      "Electromechanical Engineer"
+    ],
+    "Telecommunications": [
+      "Network Engineer",
+      "Telecommunications Engineer",
+      "Wireless/Antenna Engineer"
+    ],
+    "Electrical Vehicles": [
+      "Battery Engineer",
+      "Motor Engineer"
+    ],
+    "General Engineering": [
+      "Engineering Specialist"
+    ],
+    "Semiconductors & Chips": [
+      "IC Design Engineer",
+      "Digital IC Verification Engineer",
+      "Analog IC Design Engineer"
+    ],
+    "Testing": [
+      "Hardware Test Engineer",
+      "Electrical Test Engineer"
+    ],
+    "Technical Project Management": [
+      "Project/Program Manager"
+    ],
+    "Sales & Technical Support": [
+      "Solutions Architect",
+      "Sales Engineer"
+    ],
+    "Aerospace Engineering": [
+      "Aerospace Engineer"
+    ]
+  },
+  "Human Resource/Administrative/Legal": {
+    "Executive and Administrative": [
+      "Administrative Assistant",
+      "Executive Assistant",
+      "Office Manager",
+      "Data Entry Clerk",
+      "Receptionist",
+      "Chief of Staff"
+    ],
+    "Human Resource": [
+      "Human Resource Specialist",
+      "Recruiter/Sourcer",
+      "Recruiting Coordinator",
+      "HR Business Partner",
+      "Human Resource Manager/Director",
+      "Payroll Specialist"
+    ],
+    "Legal": [
+      "Paralegal",
+      "Corporate Counsel"
+    ]
+  },
+  "Sales": {
+    "Business Development": [
+      "Business Development",
+      "Partnership"
+    ],
+    "Inside Sales": [
+      "Sales Development Representative",
+      "Account Executive",
+      "Inside Sales Representative",
+      "Account Executive, SMB"
+    ],
+    "Sales Management": [
+      "Sales Manager",
+      "Regional Sales Manager",
+      "Sales Director/VP"
+    ],
+    "Outside Sales": [
+      "Enterprise Sales",
+      "Field Sales Representative",
+      "Channel Sales"
+    ],
+    "Retail Sales": [
+      "Retail Sales",
+      "Store Manager"
+    ],
+    "Medical Sales": [
+      "Medical Sales",
+      "Medical Device Sales"
+    ],
+    "Sales Operations": [
+      "Sales Operations Specialist",
+      "Sales Support"
+    ],
+    "Financial Sales": [
+      "Financial Advisor",
+      "Insurance Sales"
+    ],
+    "Real Estate Sales/Leasing": [
+      "Real Estate Sales",
+      "Leasing Manager"
+    ],
+    "Automotive Sales": [
+      "Automotive Sales"
+    ]
+  },
+  "Production/Manufacturing": {
+    "Mechanical Design & Manufacturing": [
+      "Mechanical Engineer",
+      "Manufacturing Engineer",
+      "Process Engineer",
+      "Industrial Engineer",
+      "Mechatronics Engineer"
+    ],
+    "Operations & Safety": [
+      "Operations Manager/Director",
+      "Safety Engineer"
+    ],
+    "Quality Management": [
+      "Quality Assurance Specialist"
+    ],
+    "Automotive R&D & Manufacturing": [
+      "Automotive Engineer",
+      "Autonomous Driving System Engineer",
+      "Powertrain Engineer"
+    ],
+    "Technical Project Management": [
+      "Project/Program Manager"
+    ],
+    "Chemical Engineering": [
+      "Chemical Engineer",
+      "Laboratory Technician"
+    ],
+    "Environmental Protection": [
+      "EHS (Environment, Health, Safety) Engineer"
+    ]
+  },
+  "Customer Service": {
+    "Customer Service": [
+      "Customer Service Representative",
+      "Customer Service Manager"
+    ],
+    "Customer Support": [
+      "Customer Support"
+    ],
+    "Customer Success": [
+      "Customer Success"
+    ]
+  },
+  "Creative & Design": {
+    "UI/UX Design": [
+      "UX Designer",
+      "UI Designer",
+      "Graphic Designer",
+      "UX Researcher"
+    ],
+    "Art/3D/Animation": [
+      "Video Editor",
+      "Illustrator",
+      "3D Designer",
+      "Creative/Art Director",
+      "Motion Designer",
+      "Animator"
+    ],
+    "Industrial Design": [
+      "Industrial Designer"
+    ],
+    "Environmental Design": [
+      "Interior Designer",
+      "Landscape Designer"
+    ]
+  },
+  "Logistics/Supply Chain": {
+    "Supply Chain Management": [
+      "Supply Chain Manager",
+      "Inventory Manager"
+    ],
+    "Logistics Operations": [
+      "Logistics Manager",
+      "Warehouse Manager",
+      "Distribution Center Manager"
+    ],
+    "Procurement and Facilities": [
+      "Procurement Manager",
+      "Facilities Manager"
+    ]
+  },
+  "Public Sector and Government": {
+    "Non-profit": [
+      "Program Manager",
+      "Volunteer Coordinator",
+      "Fundraising Coordinator"
+    ],
+    "Policy and Planning": [
+      "Policy Analyst"
+    ],
+    "Public Administration": [
+      "Government Relations Manager"
+    ]
+  },
+  "Legal Services": {
+    "Compliance & Risk Management": [
+      "Compliance Specialist",
+      "Risk Analyst"
+    ],
+    "Paralegals & Legal Support": [
+      "Legal Assistant",
+      "Paralegal"
+    ],
+    "Legal Operations & Administration": [
+      "Legal Operations Manager",
+      "Case Manager",
+      "Court Clerk"
+    ],
+    "Legal Practice": [
+      "Lawyer",
+      "Intellectual Property Lawyer",
+      "Litigation Lawyer",
+      "Immigration Lawyer",
+      "Criminal Lawyer",
+      "Family Lawyer"
+    ]
+  },
+  "Education and Training": {
+    "Academic Teaching": [
+      "Higher Education Teaching",
+      "K-12 Teaching"
+    ],
+    "Corporate Training and Development": [
+      "Corporate Training and Development"
+    ],
+    "Educational Administration": [
+      "Educational Administration",
+      "Academic Dean"
+    ],
+    "Early Childhood and Care Education": [
+      "Early Childhood Educator",
+      "Education and Care Specialist"
+    ]
+  },
+  "Accounting": {
+    "Accounting": [
+      "Accountant",
+      "Controller"
+    ],
+    "Tax and Audit": [
+      "Auditor",
+      "Tax Specialist"
+    ]
+  },
+  "Real Estate/Architecture": {
+    "Construction": [
+      "Construction Project Manager",
+      "Civil Engineer",
+      "Structural Engineer"
+    ],
+    "Real Estate": [
+      "Property Manager",
+      "Leasing Consultant"
+    ],
+    "Architecture": [
+      "Architect",
+      "Urban Planner",
+      "Landscape Architect"
+    ]
+  },
+  "Energy/Environmental": {
+    "Energy Engineering": [
+      "Renewable Energy Engineer",
+      "Energy Engineer",
+      "Power Systems Engineer",
+      "Nuclear Engineer"
+    ],
+    "Environmental Engineering": [
+      "Environmental Scientist",
+      "Environmental Engineer"
+    ]
+  },
+  "Additional Professional Functions": {
+    "Business and Administration": [
+      "General Management",
+      "Administrative Specialist",
+      "Operations Analyst",
+      "Business Operations Specialist",
+      "Customer Account Manager",
+      "Insurance Specialist",
+      "Banking Specialist",
+      "Real Estate Sales",
+      "Technical Sales Engineer",
+      "Purchasing Specialist",
+      "Payroll Specialist",
+      "Regulatory Affairs Specialist",
+      "Public Relations Specialist",
+      "Event Manager",
+      "IT Administrator",
+      "IT Support Specialist",
+      "Software Engineer",
+      "Social Worker",
+      "Safety Specialist",
+      "Technical Documentation Specialist",
+      "Translator",
+      "Journalist",
+      "Librarian",
+      "Hospitality Manager",
+      "Facilities Manager",
+      "Professional Services Specialist",
+      "Sales Support Specialist",
+      "Structural Engineer",
+      "CAD Engineer",
+      "BIM Engineer",
+      "Receptionist",
+      "Sales Specialist",
+      "Franchise Manager"
+    ]
+  },
+  "Research and Science": {
+    "Scientific Research and Laboratories": [
+      "Research Scientist",
+      "Research Associate",
+      "Scientific Laboratory Specialist"
+    ]
+  }
+}

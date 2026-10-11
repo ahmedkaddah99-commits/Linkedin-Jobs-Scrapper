@@ -1,0 +1,456 @@
+"""Command-line shell for the local Runr automation controller."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sys
+import time
+from pathlib import Path
+
+from .config import load_config
+from .runtime_env import load_runtime_environment
+from .approvals import ApprovalManager
+from .linear_client import LinearGraphQLClient
+from .lock import ControllerLock, LockUnavailable
+from .migration import LinearMigrationClient, SubsystemMigrator
+from .poller import Poller
+from .reconciler import Reconciler
+from .queue import JobQueue
+from .state import StateStore
+from .providers.discovery import discover_providers
+from .providers.codex_cli import CodexCLIProvider
+from .providers.opencode_cli import OpenCodeCLIProvider
+from .providers.openrouter import OpenRouterProvider
+from .attempts import AttemptRecorder
+from .engine import ControllerCycle, ExecutionEngine
+from .execution import ImplementationRunner, run_required_tests
+from .worktrees import GitWorktreeManager
+from .smoke import run_provider_verification
+
+
+COMMANDS = (
+    "daemon",
+    "once",
+    "status",
+    "doctor",
+    "pause",
+    "resume",
+    "reconcile",
+    "migrate-subsystems",
+    "approve",
+    "reject",
+    "retry",
+    "verify-provider",
+    "draft-ticket",
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="runr-auto")
+    parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in COMMANDS:
+        subparser = subparsers.add_parser(command)
+        if command == "migrate-subsystems":
+            modes = subparser.add_mutually_exclusive_group(required=True)
+            modes.add_argument("--dry-run", action="store_true")
+            modes.add_argument("--apply", action="store_true")
+        elif command == "approve":
+            subparser.add_argument("approval_id")
+        elif command == "reject":
+            subparser.add_argument("approval_id")
+            subparser.add_argument("--reason", required=True)
+        elif command == "retry":
+            subparser.add_argument("job_id")
+        elif command == "verify-provider":
+            subparser.add_argument("provider", choices=("codex", "opencode_subscription", "openrouter"))
+            subparser.add_argument("--run-id", required=True)
+        elif command == "draft-ticket":
+            subparser.add_argument("--request", required=True)
+            subparser.add_argument("--job-id", default="ticket-draft")
+    return parser
+
+
+def _doctor(config, environment=None) -> int:
+    StateStore(config.state_db)
+    environment = environment or load_runtime_environment(config.repo_root)
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
+    print(
+        json.dumps(
+            {
+                "repo_root": str(config.repo_root),
+                "data_dir": str(config.data_dir),
+                "state_db": str(config.state_db),
+                "python_executable": sys.executable,
+                "providers": {
+                    "order": config.provider_order,
+                    **{
+                        name: {
+                            "available": True,
+                            "model": provider.model,
+                            "source": provider.source,
+                            "version": provider.version,
+                            "executable": provider.executable,
+                        }
+                        for name, provider in discovered.items()
+                    },
+                    "openrouter": {
+                        "available": bool(
+                            config.openrouter_enabled
+                            and environment.get(config.openrouter_api_key_env)
+                            and config.openrouter_max_usd_per_job > 0
+                            and config.openrouter_max_usd_per_day > 0
+                        ),
+                        "enabled": config.openrouter_enabled,
+                        "key_configured": bool(environment.get(config.openrouter_api_key_env)),
+                        "base_url": config.openrouter_base_url,
+                        "model": config.openrouter_model("implementation"),
+                        "models": dict(config.openrouter_models),
+                        "max_usd_per_job": config.openrouter_max_usd_per_job,
+                        "max_usd_per_day": config.openrouter_max_usd_per_day,
+                        "estimated_request_cost_usd": config.openrouter_estimated_request_cost_usd,
+                    },
+                    "unavailable": [
+                        name
+                        for name in ("codex", "opencode_subscription")
+                        if name not in discovered
+                    ],
+                },
+                "safe_stop": {
+                    "max_attempt_seconds": config.max_attempt_seconds,
+                    "max_attempt_tokens": config.max_attempt_tokens,
+                    "reserve_tokens": config.reserve_tokens,
+                },
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _status(config) -> int:
+    store = StateStore(config.state_db)
+    with store.connect() as connection:
+        issues = connection.execute("SELECT COUNT(*) FROM issues").fetchone()[0]
+        jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    print(
+        json.dumps(
+            {
+                "issues": issues,
+                "jobs": jobs,
+                "paused": (config.data_dir / "paused").exists(),
+                "state_db": str(config.state_db),
+            }
+        )
+    )
+    return 0
+
+
+def _set_paused(config, paused: bool) -> int:
+    marker = config.data_dir / "paused"
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    if paused:
+        marker.write_text("paused by local operator\n", encoding="utf-8")
+    else:
+        marker.unlink(missing_ok=True)
+    print(json.dumps({"paused": paused, "data_dir": str(config.data_dir)}))
+    return 0
+
+
+def _reconcile(config) -> int:
+    result = Reconciler(StateStore(config.state_db)).run_once()
+    print(json.dumps({"enqueued_jobs": result.enqueued_jobs}))
+    return 0
+
+
+def _once(config) -> int:
+    environment = load_runtime_environment(config.repo_root)
+    token = environment.get("LINEAR_API_TOKEN")
+    team_id = environment.get("RUNR_LINEAR_TEAM_ID") or config.linear_team_id
+    if not token or not team_id:
+        print(
+            "runr-auto once requires LINEAR_API_TOKEN and RUNR_LINEAR_TEAM_ID; no work was performed",
+            file=sys.stderr,
+        )
+        return 2
+    store = StateStore(config.state_db)
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
+    providers = {}
+    if "codex" in discovered:
+        command = discovered["codex"]
+        providers["codex"] = CodexCLIProvider(
+            command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds
+        )
+    if "opencode_subscription" in discovered:
+        command = discovered["opencode_subscription"]
+        providers["opencode_subscription"] = OpenCodeCLIProvider(
+            command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds
+        )
+    openrouter_key = environment.get(config.openrouter_api_key_env, "")
+    if (
+        config.openrouter_enabled
+        and openrouter_key
+        and config.openrouter_max_usd_per_job > 0
+        and config.openrouter_max_usd_per_day > 0
+    ):
+        providers["openrouter"] = OpenRouterProvider(
+            openrouter_key,
+            model=config.openrouter_model("implementation"),
+            endpoint=config.openrouter_base_url,
+            store=store,
+            max_usd_per_job=config.openrouter_max_usd_per_job,
+            max_usd_per_day=config.openrouter_max_usd_per_day,
+            max_tool_calls=config.openrouter_max_tool_calls,
+            estimated_request_cost_usd=config.openrouter_estimated_request_cost_usd,
+            timeout_seconds=config.max_attempt_seconds,
+            purpose_models=dict(config.openrouter_models),
+        )
+    runner = ImplementationRunner(
+        GitWorktreeManager(config.repo_root, config.data_dir / "worktrees"),
+        AttemptRecorder(store),
+        config.data_dir,
+        test_runner=lambda worktree, tests: run_required_tests(
+            worktree, tests, python_executable=Path(sys.executable)
+        ),
+    )
+    engine = ExecutionEngine(
+        store,
+        config.repo_root,
+        runner,
+        providers,
+        provider_order=config.provider_order,
+        owner=f"{socket.gethostname()}-{os.getpid()}",
+        approval_ttl_seconds=config.approval_ttl_seconds,
+    )
+    cycle = ControllerCycle(
+        Poller(
+            store,
+            LinearGraphQLClient(token, team_id),
+            overlap_seconds=config.overlap_seconds,
+        ),
+        Reconciler(store),
+        engine,
+    ).run()
+    print(
+        json.dumps(
+            {
+                "pages": cycle.poll.pages,
+                "recorded_events": cycle.poll.recorded_events,
+                "enqueued_jobs": cycle.reconcile.enqueued_jobs,
+                "watermark": cycle.poll.watermark,
+                "processed_jobs": cycle.engine.processed,
+                "awaiting_approval": cycle.engine.awaiting_approval,
+                "waiting_for_capacity": cycle.engine.waiting,
+                "failed_jobs": cycle.engine.failed,
+            }
+        )
+    )
+    return 0
+
+
+def _migrate_subsystems(config, *, dry_run: bool) -> int:
+    environment = load_runtime_environment(config.repo_root)
+    token = environment.get("LINEAR_API_TOKEN")
+    team_id = environment.get("RUNR_LINEAR_TEAM_ID", "a6a93ab8-96eb-4ada-84e0-d4942d64db09")
+    if not token:
+        print("migrate-subsystems requires LINEAR_API_TOKEN; no Linear mutation was performed", file=sys.stderr)
+        return 2
+    result = SubsystemMigrator(
+        LinearMigrationClient(token, team_id),
+        snapshot_dir=config.data_dir / "backups",
+        team_id=team_id,
+    ).run(dry_run=dry_run)
+    print(json.dumps(result.__dict__, sort_keys=True))
+    return 0 if result.success else 3
+
+
+def _daemon(config, *, run_cycle=_once, sleep=time.sleep, max_cycles: int | None = None) -> int:
+    lock = ControllerLock(config.data_dir / "locks" / "controller.lock")
+    try:
+        lock.acquire()
+    except LockUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 4
+    cycles = 0
+    try:
+        while max_cycles is None or cycles < max_cycles:
+            if not (config.data_dir / "paused").exists():
+                result = run_cycle(config)
+                if result not in (0,):
+                    return result
+            cycles += 1
+            if max_cycles is None or cycles < max_cycles:
+                sleep(config.poll_interval_seconds)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        lock.release()
+    return 0
+
+
+def _decide_approval(config, approval_id: str, *, approved: bool, reason: str | None = None) -> int:
+    actor = os.environ.get("USERNAME") or os.environ.get("USER") or "local-user"
+    try:
+        ApprovalManager(StateStore(config.state_db)).decide(
+            approval_id, approved=approved, actor=actor, reason=reason
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps({"approval_id": approval_id, "decision": "approved" if approved else "rejected"}))
+    return 0
+
+
+def _retry(config, job_id: str) -> int:
+    try:
+        JobQueue(StateStore(config.state_db)).retry(job_id)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps({"job_id": job_id, "status": "queued"}))
+    return 0
+
+
+def _verify_provider(config, provider_name: str, run_id: str) -> int:
+    if provider_name == "openrouter":
+        environment = load_runtime_environment(config.repo_root)
+        api_key = environment.get(config.openrouter_api_key_env, "")
+        if not (
+            config.openrouter_enabled
+            and api_key
+            and config.openrouter_max_usd_per_job > 0
+            and config.openrouter_max_usd_per_day > 0
+        ):
+            print(
+                "openrouter is unavailable; enable it, configure a key, and set positive budgets",
+                file=sys.stderr,
+            )
+            return 2
+        provider = OpenRouterProvider(
+            api_key,
+            model=config.openrouter_model("implementation"),
+            endpoint=config.openrouter_base_url,
+            store=StateStore(config.data_dir / "verification" / run_id / "runtime" / "state.db"),
+            max_usd_per_job=config.openrouter_max_usd_per_job,
+            max_usd_per_day=config.openrouter_max_usd_per_day,
+            max_tool_calls=config.openrouter_max_tool_calls,
+            estimated_request_cost_usd=config.openrouter_estimated_request_cost_usd,
+            timeout_seconds=config.max_attempt_seconds,
+            purpose_models=dict(config.openrouter_models),
+        )
+        report = run_provider_verification(config.data_dir, provider_name, provider, run_id=run_id)
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report["status"] == "awaiting_approval" and report["tests_passed"] else 3
+
+    discovered = discover_providers(
+        config.codex_command,
+        config.opencode_subscription_command,
+        config.codex_model,
+        config.opencode_subscription_model,
+    )
+    command = discovered.get(provider_name)
+    if command is None:
+        print(f"{provider_name} is unavailable; run doctor", file=sys.stderr)
+        return 2
+    provider = (
+        CodexCLIProvider(command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds)
+        if provider_name == "codex"
+        else OpenCodeCLIProvider(command.argv, model=command.model, timeout_seconds=config.max_attempt_seconds)
+    )
+    report = run_provider_verification(config.data_dir, provider_name, provider, run_id=run_id)
+    print(json.dumps(report, sort_keys=True))
+    return 0 if report["status"] == "awaiting_approval" and report["tests_passed"] else 3
+
+
+def _draft_ticket(config, request: str, job_id: str) -> int:
+    environment = load_runtime_environment(config.repo_root)
+    api_key = environment.get(config.openrouter_api_key_env, "")
+    if not (
+        config.openrouter_enabled
+        and api_key
+        and config.openrouter_max_usd_per_job > 0
+        and config.openrouter_max_usd_per_day > 0
+    ):
+        print(
+            "draft-ticket requires enabled OpenRouter, a configured key, and positive budgets",
+            file=sys.stderr,
+        )
+        return 2
+    provider = OpenRouterProvider(
+        api_key,
+        model=config.openrouter_model("implementation"),
+        endpoint=config.openrouter_base_url,
+        store=StateStore(config.state_db),
+        max_usd_per_job=config.openrouter_max_usd_per_job,
+        max_usd_per_day=config.openrouter_max_usd_per_day,
+        max_tool_calls=config.openrouter_max_tool_calls,
+        estimated_request_cost_usd=config.openrouter_estimated_request_cost_usd,
+        timeout_seconds=config.max_attempt_seconds,
+        purpose_models=dict(config.openrouter_models),
+    )
+    prompt = (
+        "Create a proposed Runr Linear ticket from this request. Return Markdown only with these exact "
+        "sections: Primary subsystem, Allowed paths, Minimal required reading, Acceptance criteria, "
+        "Safe local verification commands, and Co-owners. Do not claim that you inspected files or Linear. "
+        f"\n\nRequest:\n{request}"
+    )
+    try:
+        print(provider.complete("ticket_creation", prompt, job_id=job_id))
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    environment = load_runtime_environment(args.repo_root, os.environ)
+    config = load_config(args.repo_root, environment)
+    if args.command == "doctor":
+        return _doctor(config, environment)
+    if args.command == "status":
+        return _status(config)
+    if args.command == "reconcile":
+        return _reconcile(config)
+    if args.command == "pause":
+        return _set_paused(config, True)
+    if args.command == "resume":
+        return _set_paused(config, False)
+    if args.command == "once":
+        return _once(config)
+    if args.command == "daemon":
+        return _daemon(config)
+    if args.command == "migrate-subsystems":
+        return _migrate_subsystems(config, dry_run=args.dry_run)
+    if args.command == "approve":
+        return _decide_approval(config, args.approval_id, approved=True)
+    if args.command == "reject":
+        return _decide_approval(config, args.approval_id, approved=False, reason=args.reason)
+    if args.command == "retry":
+        return _retry(config, args.job_id)
+    if args.command == "verify-provider":
+        return _verify_provider(config, args.provider, args.run_id)
+    if args.command == "draft-ticket":
+        return _draft_ticket(config, args.request, args.job_id)
+    print(
+        f"runr-auto {args.command} is not implemented in the core package phase",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,39 @@
+[Unit]
+Description=Runr scheduled acquisition off-host backup (RC-024)
+After=network-online.target time-sync.target
+Wants=network-online.target
+PartOf=runr.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/runr
+User=runr-acquisition
+Group=runr-acquisition
+UMask=0077
+EnvironmentFile=/opt/runr/.env.acquisition
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
+ExecStart=/opt/runr/.venv/bin/python scripts/acquisition_state_backup.py scheduled-backup --role linkedin --source-db ${RUNR_LINKEDIN_STATE_DB} --checkpoint-root ${RUNR_ACQUISITION_BACKUP_ROOT} --data-manifest ${RUNR_ACQUISITION_DATA_MANIFEST} --source-version ${RUNR_SOURCE_VERSION} --release-commit ${RUNR_SOURCE_VERSION} --remote-prefix ${RUNR_ACQUISITION_BACKUP_REMOTE_PREFIX} --local-keep ${RUNR_ACQUISITION_BACKUP_LOCAL_KEEP} --remote-keep ${RUNR_ACQUISITION_BACKUP_REMOTE_KEEP} --upload
+ExecStart=/opt/runr/.venv/bin/python scripts/acquisition_state_backup.py scheduled-backup --role employer --source-db ${RUNR_EMPLOYER_STATE_DB} --checkpoint-root ${RUNR_ACQUISITION_BACKUP_ROOT} --data-manifest ${RUNR_ACQUISITION_DATA_MANIFEST} --source-version ${RUNR_SOURCE_VERSION} --release-commit ${RUNR_SOURCE_VERSION} --remote-prefix ${RUNR_ACQUISITION_BACKUP_REMOTE_PREFIX} --local-keep ${RUNR_ACQUISITION_BACKUP_LOCAL_KEEP} --remote-keep ${RUNR_ACQUISITION_BACKUP_REMOTE_KEEP} --upload
+CPUAccounting=true
+CPUQuota=200%
+MemoryAccounting=true
+MemoryHigh=4G
+MemoryMax=6G
+TasksMax=256
+TimeoutStartSec=4h
+TimeoutStopSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/runr/state /srv/runr/backups
+
+[Install]
+WantedBy=multi-user.target

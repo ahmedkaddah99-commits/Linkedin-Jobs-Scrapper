@@ -1,0 +1,51 @@
+<!doctype html>
+<!--
+  Sanitized recruitee application fixture.
+
+  Reproduces the control mix and labelling of a real recruitee application form so
+  provider support is proven by inspection and filling, not by URL detection.
+  Employer, job, and identifiers are fictional; no candidate data appears here.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Marketing Lead | Application</title>
+    <meta property="og:title" content="Marketing Lead" />
+    <meta property="og:site_name" content="Northwind Industries" />
+  </head>
+  <body>
+    <main class="c-application">
+      <h1>Marketing Lead</h1>
+      <form id="application">
+        <label for="candidate_name">Full name *</label>
+        <input id="candidate_name" name="candidate_name" type="text" required />
+        <label for="candidate_email">Email *</label>
+        <input id="candidate_email" name="candidate_email" type="email" required />
+        <label for="candidate_phone">Phone number</label>
+        <input id="candidate_phone" name="candidate_phone" type="tel" />
+        <label for="candidate_city">City</label>
+        <input id="candidate_city" name="candidate_city" type="text" />
+        <label for="candidate_website">Website</label>
+        <input id="candidate_website" name="candidate_website" type="text" />
+
+        <label for="resume">Resume/CV *</label>
+        <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+
+        <label for="cover-letter">Cover Letter</label>
+        <input id="cover-letter" name="cover_letter" type="file" accept=".pdf,.doc,.docx" />
+
+        <label for="work-auth">Are you authorized to work in this country? *</label>
+        <select id="work-auth" name="work_authorization" required>
+          <option value="">Select an option</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+
+        <label for="why">Why are you interested in this role?</label>
+        <textarea id="why" name="why"></textarea>
+
+        <button type="submit" id="send">Submit application</button>
+      </form>
+    </main>
+  </body>
+</html>

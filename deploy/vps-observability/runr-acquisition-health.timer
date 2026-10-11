@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Runr scraper outcomes and timer policy every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5
+Unit=runr-acquisition-health.service
+
+[Install]
+WantedBy=timers.target

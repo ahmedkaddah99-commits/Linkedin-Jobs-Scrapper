@@ -1,0 +1,24 @@
+// BEGIN RUNR ACQUISITION OBSERVABILITY
+prometheus.exporter.unix "runr_acquisition_health" {
+  set_collectors = ["textfile"]
+  textfile {
+    directory = "/var/lib/runr/observability"
+  }
+}
+
+prometheus.scrape "runr_acquisition_health" {
+  targets = prometheus.exporter.unix.runr_acquisition_health.targets
+  scrape_interval = "60s"
+  forward_to = [prometheus.remote_write.metrics_service.receiver]
+}
+
+loki.source.file "runr_acquisition_health" {
+  targets = [{
+    __path__ = "/var/lib/runr/observability/health-events.jsonl",
+    job = "runr/acquisition-health",
+    service_name = "runr-acquisition-health",
+    instance = constants.hostname,
+  }]
+  forward_to = [loki.write.grafana_cloud_loki.receiver]
+}
+// END RUNR ACQUISITION OBSERVABILITY

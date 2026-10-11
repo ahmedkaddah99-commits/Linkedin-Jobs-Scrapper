@@ -1,0 +1,2 @@
+# Streaming parser keeps the 42 MB manifest / 44 MB crosswalk out of memory.
+ijson==3.3.0

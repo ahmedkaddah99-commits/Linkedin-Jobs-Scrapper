@@ -1,0 +1,181 @@
+{
+  "contract_version": "job_publication_completeness_v1",
+  "generated_at": "2026-09-10T15:19:02.879242+00:00",
+  "input_records": 300,
+  "unique_canonical_jobs": 300,
+  "duplicate_identity_records_skipped": 0,
+  "reconciliation": {
+    "input_records": 300,
+    "unique_canonical_jobs": 300,
+    "duplicate_identity_records_skipped": 0,
+    "unique_plus_duplicates_equals_input": true,
+    "outcome_total_equals_unique": true,
+    "outcome_total": 300
+  },
+  "outcome_counts": {
+    "publishable_complete": 60,
+    "not_publishable_invalid": 58,
+    "stale_or_closed": 61,
+    "not_publishable_placeholder": 35,
+    "not_publishable_unresolved_identity": 36,
+    "not_publishable_missing_required": 50
+  },
+  "outcome_summary": {
+    "publishable_complete": {
+      "count": 60,
+      "percent": 20.0
+    },
+    "not_publishable_missing_required": {
+      "count": 50,
+      "percent": 16.67
+    },
+    "not_publishable_invalid": {
+      "count": 58,
+      "percent": 19.33
+    },
+    "not_publishable_unresolved_identity": {
+      "count": 36,
+      "percent": 12.0
+    },
+    "not_publishable_placeholder": {
+      "count": 35,
+      "percent": 11.67
+    },
+    "stale_or_closed": {
+      "count": 61,
+      "percent": 20.33
+    }
+  },
+  "counts_by_source": {
+    "employer_site": 174,
+    "linkedin": 126
+  },
+  "outcome_by_source": {
+    "employer_site": {
+      "publishable_complete": 32,
+      "not_publishable_invalid": 34,
+      "not_publishable_placeholder": 18,
+      "not_publishable_missing_required": 32,
+      "stale_or_closed": 34,
+      "not_publishable_unresolved_identity": 24
+    },
+    "linkedin": {
+      "not_publishable_invalid": 24,
+      "stale_or_closed": 27,
+      "publishable_complete": 28,
+      "not_publishable_unresolved_identity": 12,
+      "not_publishable_placeholder": 17,
+      "not_publishable_missing_required": 18
+    }
+  },
+  "top_blocking_reasons": [
+    {
+      "code": "missing_description",
+      "count": 59,
+      "status": "see status mapping"
+    },
+    {
+      "code": "insufficient_description",
+      "count": 55,
+      "status": "see status mapping"
+    },
+    {
+      "code": "missing_location",
+      "count": 41,
+      "status": "see status mapping"
+    },
+    {
+      "code": "missing_canonical_company_id",
+      "count": 36,
+      "status": "see status mapping"
+    },
+    {
+      "code": "closed_lifecycle_state",
+      "count": 34,
+      "status": "see status mapping"
+    },
+    {
+      "code": "missing_application_url",
+      "count": 33,
+      "status": "see status mapping"
+    },
+    {
+      "code": "stale_observation",
+      "count": 31,
+      "status": "see status mapping"
+    },
+    {
+      "code": "tracking_only_application_url",
+      "count": 28,
+      "status": "see status mapping"
+    },
+    {
+      "code": "listing_fallback_application_url",
+      "count": 28,
+      "status": "see status mapping"
+    },
+    {
+      "code": "placeholder_description",
+      "count": 27,
+      "status": "see status mapping"
+    },
+    {
+      "code": "placeholder_title",
+      "count": 13,
+      "status": "see status mapping"
+    },
+    {
+      "code": "missing_title",
+      "count": 13,
+      "status": "see status mapping"
+    },
+    {
+      "code": "unknown_canonical_company_id",
+      "count": 13,
+      "status": "see status mapping"
+    },
+    {
+      "code": "blocked_or_error_body",
+      "count": 6,
+      "status": "see status mapping"
+    },
+    {
+      "code": "future_posted_at",
+      "count": 6,
+      "status": "see status mapping"
+    }
+  ],
+  "company_coverage": {
+    "publishable_jobs": 60,
+    "distinct_publishable_companies": 50
+  },
+  "missing_canonical_company_identity": 36,
+  "invalid_or_missing_application_url_count": 89,
+  "missing_description_count": 59,
+  "placeholder_description_count": 27,
+  "published_that_would_fail": {
+    "count": 219,
+    "canonical_job_ids": [
+      "job-00000002",
+      "job-00000003",
+      "job-00000004",
+      "job-00000006",
+      "job-00000007",
+      "job-00000008",
+      "job-0000000b",
+      "job-0000000c",
+      "job-0000000d",
+      "job-0000000e",
+      "job-0000000f",
+      "job-00000010",
+      "job-00000011",
+      "job-00000013",
+      "job-00000016",
+      "job-00000017",
+      "job-00000019",
+      "job-0000001a",
+      "job-0000001b",
+      "job-0000001e"
+    ]
+  }
+}

@@ -1,0 +1,80 @@
+<!doctype html>
+<!--
+  Sanitized Avature-style job-detail fixture.
+
+  Modeled on the structure of an employer-hosted Avature candidate portal
+  posting page. Employer, job, and identifiers are fictional. No candidate data
+  appears anywhere in this file.
+
+  Detection contract: this page MUST classify as `job_detail`. It deliberately
+  carries two fillable controls (a site search box and a locale select) plus an
+  application-shaped URL path, to prove that neither is sufficient to raise the
+  assistant panel.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Automation Platform Engineer (m/w/d) | Careers Marketplace</title>
+    <meta property="og:site_name" content="Northwind Industries" />
+    <meta property="og:title" content="Automation Platform Engineer (m/w/d)" />
+    <script src="/assets/avature/portal-runtime.js"></script>
+  </head>
+  <body>
+    <header>
+      <img src="/assets/logo.svg" alt="Northwind Industries" />
+      <nav>
+        <a href="/en_US/externaljobs/SearchJobs">Job Search</a>
+        <a href="/en_US/externaljobs/AllJobs">All Jobs</a>
+        <a href="/en_US/externaljobs/Recommendations">AI Recommendations</a>
+        <a href="/en_US/externaljobs/Support">FAQs &amp; Support</a>
+        <label for="site-search">Search jobs</label>
+        <input id="site-search" name="q" type="text" placeholder="Search jobs" />
+        <label for="locale">Language</label>
+        <select id="locale" name="locale">
+          <option value="en_US" selected>English</option>
+          <option value="de_DE">Deutsch</option>
+        </select>
+        <a href="/en_US/externaljobs/Login">Login</a>
+      </nav>
+    </header>
+
+    <main>
+      <a href="/en_US/externaljobs/SearchJobs">Back to search</a>
+      <h1>Job details</h1>
+
+      <section class="job-summary">
+        <h2>Automation Platform Engineer (m/w/d)</h2>
+        <dl>
+          <div><dt>Job ID:</dt><dd>618402</dd></div>
+          <div><dt>Posted since:</dt><dd>14-Aug-2026</dd></div>
+          <div><dt>Organization:</dt><dd>Digital Industries</dd></div>
+          <div><dt>Field of work:</dt><dd>Manufacturing</dd></div>
+          <div><dt>Company:</dt><dd>Northwind Industries AG</dd></div>
+          <div><dt>Experience level:</dt><dd>Experienced Professional</dd></div>
+          <div><dt>Job type:</dt><dd>Full-time</dd></div>
+          <div><dt>Work mode:</dt><dd>Office/Site only</dd></div>
+          <div><dt>Employment type:</dt><dd>Permanent</dd></div>
+          <div><dt>Location(s):</dt><dd>Erlangen, Bavaria, Germany</dd></div>
+        </dl>
+
+        <div class="job-description" data-job-description>
+          We are building an adaptive, autonomous, software-defined factory where
+          people and technology reinvent production processes together. You will
+          design distributed control systems, build Kubernetes-based automation
+          platforms, and lead integration of industrial edge devices. Required
+          skills include Python, Go, Kubernetes, industrial networking, OPC UA,
+          and a strong background in real-time systems engineering.
+        </div>
+      </section>
+
+      <aside>
+        <a class="apply-cta" href="/en_US/externaljobs/ApplicationMethods?folderId=618402">Apply</a>
+        <a href="#share">Share</a>
+        <a href="#copy">Copy link</a>
+        <h3>Similar jobs</h3>
+        <a href="/en_US/externaljobs/JobDetail/618411">Manufacturing Quality Planner (w/m/d)</a>
+        <a href="/en_US/externaljobs/AllJobs">View all jobs</a>
+      </aside>
+    </main>
+  </body>
+</html>

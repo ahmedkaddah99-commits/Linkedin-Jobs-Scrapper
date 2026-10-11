@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Review application | Careers Marketplace</title>
+    <meta property="og:title" content="Automation Platform Engineer (m/w/d)" />
+    <meta property="og:site_name" content="Northwind Industries" />
+  </head>
+  <body>
+    <main>
+      <h1>Automation Platform Engineer (m/w/d)</h1>
+      <ol class="application-stepper" aria-label="Application steps">
+        <li>Login / Registration</li>
+        <li>Profile information</li>
+        <li>Global questions</li>
+        <li aria-current="step" data-final-step="true">Review and submit</li>
+      </ol>
+      <form id="application-form" action="/en_US/externaljobs/CountryQuestions" method="post">
+        <label for="review-confirmation">Review confirmed</label>
+        <input id="review-confirmation" name="reviewConfirmation" type="checkbox" />
+        <button type="submit" id="final-submit">Submit Application</button>
+      </form>
+      <script>
+        window.__finalApplicationSubmitClicks = 0;
+        document.querySelector("#final-submit").addEventListener("click", () => {
+          window.__finalApplicationSubmitClicks += 1;
+        });
+        document.querySelector("#application-form").addEventListener("submit", (event) => {
+          event.preventDefault();
+        });
+      </script>
+    </main>
+  </body>
+</html>

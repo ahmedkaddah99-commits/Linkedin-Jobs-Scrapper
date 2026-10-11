@@ -1,0 +1,22 @@
+[Unit]
+Description=Runr complete easy-first employer acquisition drain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=runr-acquisition
+Group=runr-acquisition
+WorkingDirectory=/opt/runr
+EnvironmentFile=/opt/runr/.env.acquisition
+ExecStart=/opt/runr/deploy/run-employer-easy-drain.sh
+Restart=on-failure
+RestartSec=60
+SuccessExitStatus=75
+TimeoutStopSec=45
+MemoryHigh=6G
+MemoryMax=9G
+TasksMax=384
+
+[Install]
+WantedBy=runr.target

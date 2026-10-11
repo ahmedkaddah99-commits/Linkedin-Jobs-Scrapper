@@ -1,0 +1,9 @@
+# Preserve authoritative CSV seed bytes exactly; embedded prose legitimately
+# contains trailing spaces and must retain the recorded SHA-256.
+data/acquisition/inputs/*.csv binary
+
+# Shell and systemd files must use LF line endings so they are valid on Linux.
+*.sh text eol=lf
+deploy/systemd/*.service text eol=lf
+deploy/systemd/*.timer text eol=lf
+deploy/systemd/*.target text eol=lf

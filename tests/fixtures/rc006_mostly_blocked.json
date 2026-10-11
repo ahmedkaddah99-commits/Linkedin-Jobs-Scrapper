@@ -1,0 +1,16 @@
+{
+  "description": "Deterministic provider sequence for the RC-006a circuit/recovery proof.",
+  "provider": "webshare",
+  "sequence": [
+    {"classification": "blocked", "status_code": 403},
+    {"classification": "blocked", "status_code": 429},
+    {"classification": "blocked", "status_code": 403},
+    {"classification": "valid_html", "status_code": 200}
+  ],
+  "expected": {
+    "requests_before_open": 2,
+    "requests_while_open": 0,
+    "recovery_probe_requests": 1,
+    "upper_request_bound": 4
+  }
+}

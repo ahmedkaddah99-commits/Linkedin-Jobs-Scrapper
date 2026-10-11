@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Runr acquisition manifest every six hours
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=6h
+Persistent=true
+RandomizedDelaySec=5min
+Unit=runr-acquisition-manifest-refresh.service
+
+[Install]
+WantedBy=timers.target

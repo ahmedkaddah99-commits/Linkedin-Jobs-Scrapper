@@ -1,0 +1,14 @@
+{
+  "offers": [
+    {
+      "id": "rc002-5001",
+      "title": "Operations Specialist",
+      "careers_url": "https://rc002-recruitee.example.com/o/rc002-5001",
+      "apply_url": "https://rc002-recruitee.example.com/o/rc002-5001/apply",
+      "location": "Cologne, Germany",
+      "department": "Operations",
+      "employment_type": "Full-time",
+      "description": "Improve dependable customer operations."
+    }
+  ]
+}
