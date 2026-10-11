@@ -795,7 +795,8 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
 
   return <div className="jobs-experience">
-    <section aria-label="Company and title search" className="jobs-search-heading"><div><h1>Find your next opportunity</h1><p>Explore a company or find roles that fit you.</p></div><CompanySearch connected={isConnected} onClear={() => {
+    <section className="jobs-search-bar" aria-label="Job search filters">
+      <CompanySearch connected={isConnected} onClear={() => {
       filtersTouchedRef.current = true;
       setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
     }} onQuery={(value) => {
@@ -804,8 +805,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     }} onSelect={(company) => {
       filtersTouchedRef.current = true;
       setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
-    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} /></section>
-    <section className="jobs-search-bar" aria-label="Job search filters">
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />
       <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}

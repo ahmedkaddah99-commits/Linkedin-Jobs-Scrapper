@@ -50,7 +50,9 @@ test("company selection works without a function and saved filters survive reloa
   expect(feeds.at(-1)?.has("role")).toBe(false);
   const bounds = await search.boundingBox();
   const filters = await page.locator(".jobs-search-bar").boundingBox();
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(filters!.y);
+  expect(bounds!.y).toBeGreaterThanOrEqual(filters!.y);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(filters!.y + filters!.height);
+  await expect(page.getByRole("heading", { name: "Find your next opportunity" })).toHaveCount(0);
   if (!await page.getByRole("button", { name: "Add saved filter" }).isVisible()) await page.getByRole("button", { name: "Saved filters", exact: true }).click();
   await page.getByRole("button", { name: "Add saved filter" }).click();
   await page.getByRole("textbox", { name: "Filter name" }).fill("Acme jobs");
