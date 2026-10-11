@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import requests
+
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 
 
 def register_routes(registry: RouteRegistry) -> None:
+    registry.exact('POST', ('personalized-jobs', 'import'), _handle_import, auth_required=True, name='personalized_jobs.import')
+    registry.exact('GET', ('personalized-jobs', 'external'), _handle_external, auth_required=True, name='personalized_jobs.external')
     registry.exact("GET", ("personalized-jobs",), _handle_get, auth_required=True, name="personalized_jobs.read")
     registry.exact("GET", ("personalized-jobs", "preferences"), _handle_preferences, auth_required=True, name="personalized_jobs.preferences.read")
     registry.exact("PUT", ("personalized-jobs", "preferences"), _handle_preferences, auth_required=True, name="personalized_jobs.preferences.write")
@@ -25,6 +29,24 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix("GET", ("personalized-jobs",), _handle_job_or_feed, auth_required=True, name="personalized_jobs.job.read")
     registry.prefix("POST", ("personalized-jobs",), _handle_job_action, auth_required=True, name="personalized_jobs.job.action")
     registry.prefix("DELETE", ("personalized-jobs",), _handle_job_delete, auth_required=True, name="personalized_jobs.job.delete")
+
+
+def _handle_import(context: ApiRouteContext) -> bool | None:
+    user_id = _identity_user_id(context)
+    try:
+        context.send_json(context.application.import_personalized_job(user_id, _body(context), plan_id=_plan_id(context, user_id)))
+    except ValueError as error:
+        return _error(context, 400, 'invalid_job_import', str(error))
+    return True
+
+
+def _handle_external(context: ApiRouteContext) -> bool | None:
+    user_id = _identity_user_id(context)
+    try:
+        context.send_json(context.application.list_external_jobs(user_id, plan_id=_plan_id(context, user_id), cursor=_query_value(context.query, 'cursor')))
+    except ValueError as error:
+        return _error(context, 400, 'invalid_cursor', str(error))
+    return True
 
 
 def _handle_get(context: ApiRouteContext) -> bool | None:
@@ -177,6 +199,10 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
                 mode=_text(body.get("mode") or "review"),
                 plan_id=_plan_id(context, user_id),
             )
+        elif action == "email-lookup":
+            result = context.application.find_personalized_job_contact_email(
+                user_id, posting_id, _text(body.get("linkedin_url")),
+            )
         else:
             return False
     except KeyError:
@@ -185,6 +211,8 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
         return _error(context, 400, "invalid_job_action", str(exc))
     except PermissionError as exc:
         return _error(context, 403, "runr_pro_required", str(exc))
+    except requests.RequestException:
+        return _error(context, 503, "email_provider_unavailable", "Email lookup is temporarily unavailable")
     context.send_json(result)
     return True
 

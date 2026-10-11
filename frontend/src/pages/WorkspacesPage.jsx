@@ -45,7 +45,7 @@ const FIXED_TAILORED_MODULE_IDS = ["screening_filter", "tailored_document_genera
 const OPTIONAL_PRIORITY_MODULE_ID = "priority_ranking";
 const JOB_FILTERING_STRICT = "Strict Match";
 const JOB_FILTERING_BROADER = "Broader Match";
-const QUICK_APPLY_ROUTE = "/quick-apply";
+const EXTERNAL_JOBS_ROUTE = "/external-jobs";
 const TARGETING_FIELD_DISPLAY_ORDER = [
   "keywords",
   "target_roles",
@@ -2362,9 +2362,9 @@ export default function WorkspacesPage() {
               </button>
               <Link
                 className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                to={`${QUICK_APPLY_ROUTE}?workspace_id=${workspace.id}`}
+                to={EXTERNAL_JOBS_ROUTE}
               >
-                Quick Apply
+                External jobs
               </Link>
               <button
                 className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
@@ -2411,7 +2411,7 @@ export default function WorkspacesPage() {
               </div>
               <Link
                 className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
-                to={`${QUICK_APPLY_ROUTE}?workspace_id=${workspace.id}`}
+                to={EXTERNAL_JOBS_ROUTE}
               >
                 Create Quick Application
               </Link>
@@ -2499,15 +2499,15 @@ export default function WorkspacesPage() {
             Workspaces
           </h1>
           <p className="text-sm text-on-surface-variant">
-            Browse workspaces as simple rows. Use them for recurring sourcing workflows, and use Quick Apply when you already have an exact job link.
+            Browse workspaces as simple rows. Use them for recurring sourcing workflows, and use External jobs when you already have an exact job link.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
             className="rounded bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-            to={QUICK_APPLY_ROUTE}
+            to={EXTERNAL_JOBS_ROUTE}
           >
-            Quick Apply
+            External jobs
           </Link>
           <button
             className="rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"

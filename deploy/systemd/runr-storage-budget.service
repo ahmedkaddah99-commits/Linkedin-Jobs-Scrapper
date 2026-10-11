@@ -1,0 +1,13 @@
+[Unit]
+Description=Runr bounded disk capacity receipt
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/runr-ops/run-storage-budget.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=5min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/runr/storage-budget

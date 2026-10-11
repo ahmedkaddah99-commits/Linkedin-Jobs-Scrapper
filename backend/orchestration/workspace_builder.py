@@ -2171,49 +2171,6 @@ def _build_tailored_stages(source_output_key: str, module_ids: list[str]) -> lis
     return stages
 
 
-def build_quick_apply_workflow_template() -> WorkflowTemplate:
-    return WorkflowTemplate(
-        id="quick_apply_tailored_documents",
-        name="Quick Apply Workflow",
-        description="Ingest exact job links and generate application documents without creating a dedicated workspace.",
-        stages=[
-            StageDefinition(
-                stage_id="source_exact_job_links",
-                stage_type="jobs.ingest.curated_urls",
-                name="Ingest Exact Job Links",
-                description="Load exact job posting URLs into the shared job schema.",
-                output_key="source_exact_job_links",
-                config={"connector_id": "curated_job_urls"},
-            ),
-            StageDefinition(
-                stage_id="merge_exact_job_links",
-                stage_type="jobs.merge.dedupe",
-                name="Merge Exact Job Links",
-                description="Remove duplicate job links before document generation.",
-                input_keys=["source_exact_job_links"],
-                output_key="quick_apply_jobs",
-                config={"dedupe_against_tracker": True},
-            ),
-            StageDefinition(
-                stage_id="generate_quick_apply_documents",
-                stage_type="applications.generate.documents",
-                name="Generate Application Documents",
-                description="Create application documents for the pasted job links.",
-                input_keys=["quick_apply_jobs"],
-                output_key="generated_jobs",
-                config={
-                    "generation_id": "tailored_application_documents",
-                    "renderer_id": "application_document_export",
-                },
-            ),
-        ],
-        default_run_settings={
-            "builder_mode": "quick_apply",
-            "automation_flow": FLOW_TAILORED_DOCUMENTS,
-        },
-    )
-
-
 def _build_reusable_package_stages(source_output_key: str, module_ids: list[str]) -> list[StageDefinition]:
     stages: list[StageDefinition] = []
     current_key = source_output_key

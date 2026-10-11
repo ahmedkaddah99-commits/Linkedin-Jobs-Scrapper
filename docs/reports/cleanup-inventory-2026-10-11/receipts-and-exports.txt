@@ -1,0 +1,213 @@
+﻿{
+  "source": "/srv/runr/backups/employer/employer-20261008T055910027049Z-1ce8c78e7303",
+  "receipt": {
+    "checkpoint_id": "employer-20261008T055910027049Z-1ce8c78e7303",
+    "database": {
+      "bytes": 555094016,
+      "key": "runr/acquisition/checkpoints/employer/employer-20261008T055910027049Z-1ce8c78e7303/master_employer_jobs_state.db",
+      "sha256": "de9b57b12a163e6c39ac288b267c42ab93ba06331b3bcbe4069586628dd2dd71",
+      "status": "uploaded"
+    },
+    "manifest": {
+      "bytes": 2360,
+      "key": "runr/acquisition/checkpoints/employer/employer-20261008T055910027049Z-1ce8c78e7303/checkpoint.json",
+      "sha256": "4ee0f2bb3177bb07fc9be492897e8d6899d19476e6efe47ebb5828f820690789",
+      "status": "uploaded"
+    },
+    "manifest_is_commit_record": true,
+    "publication_order": [
+      "database",
+      "manifest"
+    ],
+    "published_at": "2026-10-08T05:59:32.546411Z",
+    "role": "employer",
+    "schema_version": "runr.acquisition.off-host-receipt.v1"
+  },
+  "verified_full_readback": [
+    "database",
+    "manifest"
+  ],
+  "retained": [
+    "/srv/runr/backups/employer/employer-20261009T055745881710Z-465c5c02efcd",
+    "/srv/runr/backups/employer/employer-20261010T055933898950Z-302b1e923f2b"
+  ],
+  "verified_at": 1791670509.6930387
+}{
+  "source": "/srv/runr/backups/linkedin/linkedin-20261008T050232738579Z-239b2625fbeb",
+  "receipt": {
+    "checkpoint_id": "linkedin-20261008T050232738579Z-239b2625fbeb",
+    "database": {
+      "bytes": 7231045632,
+      "key": "runr/acquisition/checkpoints/linkedin/linkedin-20261008T050232738579Z-239b2625fbeb/master_linkedin_jobs_state.db",
+      "sha256": "d669667404f2c1f0a7e361bc2845ede06c4a435ca3a570f2e3edb9b12a6b936e",
+      "status": "uploaded"
+    },
+    "manifest": {
+      "bytes": 2983,
+      "key": "runr/acquisition/checkpoints/linkedin/linkedin-20261008T050232738579Z-239b2625fbeb/checkpoint.json",
+      "sha256": "e3dce9a8327b188bebcabe6d673b7358fc08499688fc592d157d40d8fceb8102",
+      "status": "uploaded"
+    },
+    "manifest_is_commit_record": true,
+    "publication_order": [
+      "database",
+      "manifest"
+    ],
+    "published_at": "2026-10-08T05:23:39.285850Z",
+    "role": "linkedin",
+    "schema_version": "runr.acquisition.off-host-receipt.v1"
+  },
+  "verified_full_readback": [
+    "database",
+    "manifest"
+  ],
+  "retained": [
+    "/srv/runr/backups/linkedin/linkedin-20261009T050223741176Z-43b5b1646746",
+    "/srv/runr/backups/linkedin/linkedin-20261010T050611407150Z-361bd2ebba86"
+  ],
+  "verified_at": 1791670491.9392543
+}{
+  "checkpoint_id": "employer-20261008T055910027049Z-1ce8c78e7303",
+  "database": {
+    "bytes": 555094016,
+    "key": "runr/acquisition/checkpoints/employer/employer-20261008T055910027049Z-1ce8c78e7303/master_employer_jobs_state.db",
+    "sha256": "de9b57b12a163e6c39ac288b267c42ab93ba06331b3bcbe4069586628dd2dd71",
+    "status": "uploaded"
+  },
+  "manifest": {
+    "bytes": 2360,
+    "key": "runr/acquisition/checkpoints/employer/employer-20261008T055910027049Z-1ce8c78e7303/checkpoint.json",
+    "sha256": "4ee0f2bb3177bb07fc9be492897e8d6899d19476e6efe47ebb5828f820690789",
+    "status": "uploaded"
+  },
+  "manifest_is_commit_record": true,
+  "publication_order": [
+    "database",
+    "manifest"
+  ],
+  "published_at": "2026-10-08T05:59:32.546411Z",
+  "role": "employer",
+  "schema_version": "runr.acquisition.off-host-receipt.v1"
+}
+{
+  "checkpoint_id": "linkedin-20261008T050232738579Z-239b2625fbeb",
+  "database": {
+    "bytes": 7231045632,
+    "key": "runr/acquisition/checkpoints/linkedin/linkedin-20261008T050232738579Z-239b2625fbeb/master_linkedin_jobs_state.db",
+    "sha256": "d669667404f2c1f0a7e361bc2845ede06c4a435ca3a570f2e3edb9b12a6b936e",
+    "status": "uploaded"
+  },
+  "manifest": {
+    "bytes": 2983,
+    "key": "runr/acquisition/checkpoints/linkedin/linkedin-20261008T050232738579Z-239b2625fbeb/checkpoint.json",
+    "sha256": "e3dce9a8327b188bebcabe6d673b7358fc08499688fc592d157d40d8fceb8102",
+    "status": "uploaded"
+  },
+  "manifest_is_commit_record": true,
+  "publication_order": [
+    "database",
+    "manifest"
+  ],
+  "published_at": "2026-10-08T05:23:39.285850Z",
+  "role": "linkedin",
+  "schema_version": "runr.acquisition.off-host-receipt.v1"
+}
+/srv/runr/state/versions/t42-restored-20260923
+/srv/runr/releases/description-60097a9838c4e3d52f119127b6cb23025e52d0da
+/opt/runr-profile-matching/releases/0f0a81b29c580633c05df0f2c4843aee90821da8
+restored-before.sqlite3-journal 1024 bytes
+restored-before.sqlite3 4339732480 bytes
+restored-before-no-cache.sqlite3 0 bytes
+restore-verified.json 240 bytes
+offhost-verified.json 316 bytes
+before.sql.gz.json 324 bytes
+before.sql.gz 4046598196 bytes
+{
+  "completed_at": 1791662689.3703413,
+  "object_key": "private/customer-database/backups/20261010T193057Z/database.sqlite3.gz",
+  "database_bytes": 33902178304,
+  "compressed_bytes": 4312396133,
+  "sha256": "ae98c6875dd731348e54285fbe03e3288ada193ea1a239cbd00f2cb62e93b7d1",
+  "compressed_sha256": "fa6d12802ab2f2df40bdaa0d619a6211421a542689d21a79d6d6162728261993",
+  "migration_head": "077_employer_job_counters",
+  "integrity_check": "ok",
+  "foreign_key_violations": 0,
+  "gzip_restore_hash_verified": true,
+  "full_offhost_readback_verified": true,
+  "elapsed_seconds": 2031
+}/srv/runr/exports/acquisition-live-ab1a6a32/producer-state-delivery.error.log 0 bytes
+/srv/runr/exports/acquisition-live-ab1a6a32/producer-state-delivery.json 23391497 bytes
+/srv/runr/exports/employer/employer_company_method_audit.jsonl 33619202 bytes
+/srv/runr/exports/employer/master_employer_jobs.csv 189253105 bytes
+/srv/runr/exports/employer/master_employer_jobs.jsonl 209652664 bytes
+/srv/runr/exports/employer/master_employer_jobs_metrics.json 2129 bytes
+/srv/runr/exports/linkedin/.master_linkedin_jobs.lock 838 bytes
+/srv/runr/exports/linkedin/master_linkedin_jobs.csv 1095007763 bytes
+/srv/runr/exports/linkedin/master_linkedin_jobs.jsonl 978677 bytes
+/srv/runr/exports/linkedin/master_linkedin_jobs_generation.json 311 bytes
+/srv/runr/exports/linkedin/master_linkedin_jobs_metrics.json 2596 bytes
+/srv/runr/exports/producer-state-delivery.json 23391658 bytes
+/srv/runr/exports/rc027-browser-15f58623/receipt.json 1362 bytes
+/srv/runr/exports/rc027-direct-2ab1da7f/receipt.json 158 bytes
+/srv/runr/exports/rc027-direct-2ab1da7f/stderr.log 0 bytes
+/srv/runr/exports/rc027-direct-2ab1da7f/stdout.log 0 bytes
+/srv/runr/exports/rc027-discovery-42f150f5/receipt.json 848 bytes
+/srv/runr/exports/rc027-proxy-547ff5a7/receipt.json 849 bytes
+/srv/runr/exports/receipts/catalog-exact-data-inventory-20261008.json 39181 bytes
+/srv/runr/exports/receipts/catalog-exact-data-inventory-20261008.partial.json 35063 bytes
+/srv/runr/exports/receipts/catalog-exact-data-supplement-20261008.json 604 bytes
+/srv/runr/exports/receipts/catalog-exact-intelligence-duplicate-delta-20261008.json 394 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-49081ylk 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-BGe1ailk 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-D1aczFky 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-ErPQbjZi 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-MKi5NdQB 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-QSjCLgV2 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-YhAuNR8s 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-latest.jsonl 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-mFLphHAq 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-publications-latest.jsonl 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-qPceWLoN 0 bytes
+/srv/runr/exports/receipts/catalog-history-pruning-rejections-latest.jsonl 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-3yeWisUm 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-IZ22J1Ab 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-LU4xFKNl 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-NBtrChbI 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-OOYkFj07 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-atlfWiUi 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-gAOwy1q6 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-k4xUaSiM 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-latest.json 1447 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-p2DEQ3ab 0 bytes
+/srv/runr/exports/receipts/catalog-storage-maintenance-tfhq58fV 0 bytes
+/srv/runr/exports/receipts/employer-latest-metrics.json 3458 bytes
+/srv/runr/exports/receipts/employer-latest-telemetry.json 234 bytes
+/srv/runr/exports/receipts/employer-latest.json 4334 bytes
+/srv/runr/exports/receipts/employer-receipt-write.json 4334 bytes
+/srv/runr/exports/receipts/employer-validation.json 643 bytes
+/srv/runr/exports/receipts/linkedin-latest-metrics.json 3617 bytes
+/srv/runr/exports/receipts/linkedin-latest-telemetry.json 234 bytes
+/srv/runr/exports/receipts/linkedin-latest.json 4498 bytes
+/srv/runr/exports/receipts/linkedin-receipt-write.json 4498 bytes
+/srv/runr/exports/receipts/linkedin-validation.json 1119 bytes
+/srv/runr/exports/receipts/owner-closed-job-cleanup-20261008.json 21765 bytes
+/srv/runr/exports/receipts/publication-recovery-latest.jsonl 324 bytes
+/srv/runr/exports/receipts/publisher-latest-metrics.json 0 bytes
+/srv/runr/exports/receipts/publisher-latest-telemetry.json 246 bytes
+/srv/runr/exports/receipts/publisher-latest.json 632 bytes
+/srv/runr/exports/receipts/publisher-progress.json 99 bytes
+/srv/runr/exports/receipts/publisher-quality-repair-latest.json 1055 bytes
+/srv/runr/exports/receipts/publisher-receipt-write.json 632 bytes
+/srv/runr/exports/receipts/publisher-source-snapshots-latest.jsonl 171 bytes
+/srv/runr/exports/receipts/publisher-timings.jsonl 608331 bytes
+/srv/runr/exports/receipts/publisher-verification-d40df6d3.json 368388 bytes
+ 842237 python
+ 843329 python
+ 892511 python
+ 892538 sshd
+3431060 python
+3431062 python
+3439944 python
+3440347 sshd
+3440411 sshd
+3440413 bash

@@ -100,6 +100,8 @@ sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions.service" /etc/systemd
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions.timer" /etc/systemd/system/runr-job-descriptions.timer
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions-rules.service" /etc/systemd/system/runr-job-descriptions-rules.service
 sudo cp "$INSTALL_DIR/deploy/systemd/runr-job-descriptions-rules.timer" /etc/systemd/system/runr-job-descriptions-rules.timer
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-network-discovery.service" /etc/systemd/system/runr-network-discovery.service
+sudo cp "$INSTALL_DIR/deploy/systemd/runr-network-discovery.timer" /etc/systemd/system/runr-network-discovery.timer
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-linkedin.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-linkedin.timer.d/continuous.conf
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-employer.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-employer.timer.d/continuous.conf
 sudo install -D -m 0644 "$INSTALL_DIR/deploy/systemd/runr-acquisition-publisher.timer.d/continuous.conf" /etc/systemd/system/runr-acquisition-publisher.timer.d/continuous.conf
@@ -127,6 +129,7 @@ sudo systemctl enable runr.target
 # failed backup unit is always visible in `systemctl list-timers`.
 sudo systemctl enable --now runr-acquisition-backup.timer
 sudo systemctl enable --now runr-acquisition-manifest-refresh.timer
+sudo systemctl enable --now runr-network-discovery.timer
 
 cat <<'EOF'
 Next steps:

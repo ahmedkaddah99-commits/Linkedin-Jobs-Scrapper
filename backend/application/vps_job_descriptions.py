@@ -608,12 +608,12 @@ def _normalize_description(row: Mapping[str, Any], original: Mapping[str, Any], 
     }
 
 
-def openrouter_generate(prompt: str) -> Mapping[str, Any]:
+def openrouter_generate(prompt: str, *, model: str | None = None, timeout: int = 90, max_tokens: int = 16384) -> Mapping[str, Any]:
     """Call a schema-capable OpenRouter model from the VPS acquisition process."""
     key = os.getenv("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("description_model_key_missing")
-    model = os.getenv("RUNR_DESCRIPTION_MODEL", DEFAULT_MODEL)
+    model = model or os.getenv("RUNR_DESCRIPTION_MODEL", DEFAULT_MODEL)
     if not (model == "openrouter/free" or model.endswith(":free") or model == NEMO_MODEL):
         raise ValueError("description model must be free-tier or the approved Nemo pilot")
     parameters = {
@@ -622,7 +622,7 @@ def openrouter_generate(prompt: str) -> Mapping[str, Any]:
         "response_format": {"type": "json_object"},
         "provider": {"require_parameters": True},
         "temperature": 0,
-        "max_tokens": 16384,
+        "max_tokens": max_tokens,
     }
     if model != NEMO_MODEL:
         parameters["reasoning"] = {"effort": "none"}
@@ -633,7 +633,7 @@ def openrouter_generate(prompt: str) -> Mapping[str, Any]:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=timeout) as response:
             payload = json.load(response)
     except HTTPError as exc:
         if exc.code == 429:

@@ -24,7 +24,6 @@ from backend.application.quota import get_usage_snapshot
 from backend.application.run_services import RunLifecycleService
 from backend.application.tracker_services import TrackerApplicationService
 from backend.capabilities.networking import build_relevant_people_discovery
-from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
 from backend.config.plans import DEFAULT_PLAN_ID, get_limit, normalize_plan_id
 from backend.config.scrapeops_admin_policy import (
     SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY,
@@ -75,7 +74,6 @@ from backend.integrations.scrapeops import (
     fetch_domain_stats,
 )
 from backend.orchestration import (
-    build_quick_apply_workflow_template,
     build_workspace_from_scratch,
     validate_workspace_source_configuration,
     workspace_builder_catalog,
@@ -1218,8 +1216,72 @@ class BackendApplication:
     def delete_personalized_filter_set(self, user_id: str, filter_set_id: str) -> bool:
         return self._personalized_jobs_service.delete_filter_set(user_id, filter_set_id)
 
+    def import_personalized_job(self, user_id: str, payload: Mapping[str, Any], *, plan_id: str = DEFAULT_PLAN_ID):
+        return self._personalized_jobs_service.import_job(user_id, payload, plan_id=plan_id)
+
+    def list_external_jobs(self, user_id: str, *, plan_id: str = DEFAULT_PLAN_ID, cursor: str = ''):
+        return self._personalized_jobs_service.external_jobs(user_id, plan_id=plan_id, cursor=cursor)
+
     def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
-        return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+        detail = self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+        if detail is None:
+            return None
+        company = " ".join(str(detail.get("company") or "").casefold().split())
+        connections = []
+        shared_background = []
+        for contact in self.list_referral_contacts(user_id):
+            if not contact.is_active:
+                continue
+            payload = {"contact_id": contact.contact_id, "name": contact.name,
+                       "company": contact.primary_company(), "role": next(
+                           (str(item.get("role_title") or "") for item in contact.companies
+                            if str(item.get("company_name") or "").casefold() == company), ""),
+                       "linkedin_url": contact.linkedin_url,
+                       "connection_strength": contact.relationship_note}
+            if company and any(" ".join(name.casefold().split()) == company for name in contact.company_names()):
+                connections.append(payload)
+                if contact.metadata.get("shared_school") or contact.metadata.get("shared_previous_company"):
+                    shared_background.append({**payload, "shared_school": str(contact.metadata.get("shared_school") or ""),
+                                              "shared_previous_company": str(contact.metadata.get("shared_previous_company") or "")})
+        profiles = self.list_career_profiles(user_id=user_id)
+        if profiles:
+            profile = profiles[0].to_dict() if hasattr(profiles[0], "to_dict") else {}
+            metadata = profile.get("metadata") if isinstance(profile.get("metadata"), Mapping) else {}
+            def labels(items, keys):
+                return [str(item.get(key) or "").strip() for item in (items or []) if isinstance(item, Mapping)
+                        for key in keys if len(str(item.get(key) or "").strip()) >= 5]
+            schools = labels(metadata.get("education"), ("school", "institution", "university"))
+            previous_companies = labels(metadata.get("experience") or metadata.get("recent_experience"),
+                                        ("company", "employer"))
+            for candidate in detail.get("network_discovery", {}).get("candidates", []):
+                evidence = str(candidate.get("evidence_snippet") or "").casefold()
+                school = next((name for name in schools if name.casefold() in evidence), "")
+                previous = next((name for name in previous_companies if name.casefold() in evidence), "")
+                if school or previous:
+                    shared_background.append({**candidate, "shared_school": school,
+                                              "shared_previous_company": previous})
+        detail["network_connections"] = connections
+        detail["shared_background_connections"] = shared_background
+        return detail
+
+    def find_personalized_job_contact_email(self, user_id: str, posting_id: str, linkedin_url: str) -> dict[str, str]:
+        if self._personalized_jobs_service.detail(user_id, posting_id) is None:
+            raise KeyError("job_not_found")
+        from backend.capabilities.networking.email_lookup import find_work_email, linkedin_handle
+        handle = linkedin_handle(linkedin_url)
+        if not os.getenv("HUNTER_API_KEY"):
+            return {"state": "unavailable", "reason": "email_provider_not_configured"}
+        store = self._personalized_jobs_service.store
+        reserved = store.reserve_email_lookup(user_id, handle)
+        if reserved["state"] != "reserved":
+            return reserved
+        try:
+            result = find_work_email(linkedin_url)
+        except Exception:
+            store.complete_email_lookup(user_id, handle, "unavailable")
+            raise
+        store.complete_email_lookup(user_id, handle, result["state"], result.get("email", ""))
+        return result
 
     def process_next_personalized_intelligence(
         self,
@@ -2216,75 +2278,6 @@ class BackendApplication:
             "run_user_quota_overrides": runtime_quota_overrides,
         }
         return report
-
-    def start_quick_apply_run(
-        self,
-        workspace_id: str,
-        *,
-        manual_urls: list[str] | tuple[str, ...] | set[str] | str,
-        run_input_overrides: Mapping[str, Any] | None = None,
-        execute: bool = True,
-        enqueue: bool = False,
-        requested_by: str = "api",
-        max_attempts: int = 1,
-    ) -> tuple[RunRecord, list[dict[str, Any]]]:
-        if execute and enqueue:
-            raise ValueError("run cannot be both queued and synchronously executed")
-
-        workspace = self.repositories.workspace_repository.get_workspace(workspace_id)
-        automation_flow = str(
-            workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""
-        ).strip()
-        if automation_flow and automation_flow != "tailored_documents":
-            raise ValueError("Quick apply requires a tailored-documents workspace.")
-
-        valid_urls, invalid_entries = normalize_manual_urls(manual_urls)
-        if not valid_urls:
-            raise ValueError("Add at least one valid exact job URL.")
-
-        workflow = build_quick_apply_workflow_template()
-        effective_run_input_overrides = dict(run_input_overrides or {})
-        effective_run_input_overrides.update(
-            {
-                "manual_urls_inline": list(valid_urls),
-                "manual_url_seed_list": list(valid_urls),
-                "stage4_max_jobs": len(valid_urls),
-            }
-        )
-        planned_run_settings = dict(workspace.settings or {})
-        planned_run_settings.update(effective_run_input_overrides)
-        _validate_builder_workspace_definition(
-            workspace,
-            phase="run_preflight",
-            error_code="run_preflight_failed",
-            run_plan_settings=planned_run_settings,
-            object_storage=self.object_storage,
-        )
-        run = RunRecord.create(
-            workspace_id=workspace.id,
-            workflow_template_id=workflow.id,
-            run_input_overrides=effective_run_input_overrides,
-            requested_by=requested_by,
-            max_attempts=max_attempts,
-            metadata={
-                "workspace_type": workspace.workspace_type,
-                "run_kind": "quick_apply",
-                "accepted_url_count": len(valid_urls),
-                "invalid_url_count": len(invalid_entries),
-            },
-        )
-        run.run_plan = self.stage_engine.build_run_plan(
-            workspace=workspace,
-            workflow=workflow,
-            run_input_overrides=effective_run_input_overrides,
-        )
-        self.repositories.run_repository.save(run)
-
-        if enqueue:
-            return self._queue_run(run), invalid_entries
-        if not execute:
-            return self.repositories.run_repository.get(run.id), invalid_entries
-        return self._execute_run(run, workspace=workspace, workflow=workflow, auto_retry_failed=False), invalid_entries
 
     def create_workspace_from_scratch(self, payload: Mapping[str, Any]) -> WorkspaceDefinition:
         builder_payload = dict(payload)

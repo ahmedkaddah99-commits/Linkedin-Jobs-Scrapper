@@ -44,10 +44,10 @@ const navItems = [
     ],
   },
   {
-    label: "Quick Apply",
-    icon: "bolt",
-    to: "/quick-apply",
-    matchers: [{ path: "/quick-apply", end: false }],
+    label: "External jobs",
+    icon: "add_link",
+    to: "/external-jobs",
+    matchers: [{ path: "/external-jobs", end: false }],
   },
   {
     label: "Runs",
@@ -77,7 +77,7 @@ const navItems = [
     ],
   },
   {
-    label: "Referrals",
+    label: "Connections",
     icon: "group_add",
     to: "/referrals",
     matchers: [{ path: "/referrals", end: false }],
@@ -143,6 +143,7 @@ function BrandMark() {
 function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme }) {
   const links = [
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
+    { label: "External jobs", icon: "add_link", to: "/external-jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
     { label: "Refer", icon: "group_add", to: "/refer" },
@@ -524,7 +525,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   const routeParent = resolveRouteParent(location);
   const isDocumentsExperience = location.pathname === "/documents" || location.pathname === "/master-cv";
   const isMasterCvExperience = location.pathname === "/master-cv";
-  const productRoutes = ["/", "/jobs", "/tracker", "/documents", "/master-cv", "/refer", "/profile", "/apply-extension", "/referrals/linkedin-csv-guide"];
+  const productRoutes = ["/", "/jobs", "/external-jobs", "/tracker", "/documents", "/master-cv", "/refer", "/profile", "/apply-extension", "/referrals/linkedin-csv-guide"];
   const isJobsExperience = productRoutes.some((route) => route === "/" ? location.pathname === "/" : location.pathname === route || location.pathname.startsWith(`${route}/`));
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")

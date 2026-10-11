@@ -2,6 +2,16 @@
 
 # Repository artifacts: documentation corpus, root reports and non-code assets
 
+**Current correction, 11 October 2026:** the classification and counts below are
+historical observations at `58a96674`. Current Git inspection finds no tracked
+files under `test CV/` or `test-CV/`; both paths are ignored. Commit `de093182`
+already removed historical readiness CSVs and the monetization document's embedded
+code snapshot. `ARCHITECTURE.md` is now a short pointer; its original is preserved
+at `56deb5a5:ARCHITECTURE.md` and in the owner's local historical archive. Do not
+repeat completed cleanup or treat these old counts as a current deletion inventory.
+Use [the cleanup inventory](../../reports/runr-cleanup-inventory-2026-10-11.md)
+for exact VPS paths, preservation evidence and deletion gates.
+
 Primary doc for WS-11 (Docs corpus and repository artifacts, classification only). Secondary docs: [retired-features.md](retired-features.md) (admin analytics dashboard retirement), [known-gaps.md](known-gaps.md) (registry of C#/U#/T# items).
 
 WS-11 does not author product documentation. This doc classifies every owned tracked path so later workstreams and Phase 3 know what is authoritative, what is history, and what is safe to ignore. Classification is judged from headers/first lines/dates and spot-checks against code at the cited lines; most files were not read in full. No file listed here was edited, moved or deleted.

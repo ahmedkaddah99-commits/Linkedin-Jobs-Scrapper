@@ -25,26 +25,8 @@ const REFERRAL_OUTREACH_STATUSES = [
   "No referral",
 ];
 const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import", "linkedin_extension"]);
-const REFERRAL_SECTION_OPTIONS = [
-  {
-    id: "people",
-    label: "Relevant People Finder",
-    description: "Find likely hiring managers, team members, and senior leaders.",
-    icon: "person_search",
-  },
-  {
-    id: "manual",
-    label: "Personal Contacts",
-    description: "People you add or maintain yourself.",
-    icon: "person_add",
-  },
-  {
-    id: "linkedin",
-    label: "LinkedIn Connections",
-    description: "Imported from your LinkedIn connections export.",
-    icon: "group",
-  },
-];
+const REFERRAL_SECTION_OPTIONS = [{ id: "connections", label: "Connections", description: "Your people, in one place.", icon: "group" }];
+const CONNECTION_STRENGTHS = ["Close", "Strong", "Familiar", "Acquaintance"];
 const CONTACT_RENDER_BATCH_SIZE = 50;
 let referralWorkspaceCache = null;
 let referralWorkspaceCacheRequest = null;
@@ -225,25 +207,6 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
   );
 }
 
-function parseCompaniesText(value, canRefer) {
-  return String(value || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [companyNameRaw, roleTitleRaw = ""] = line.split("|");
-      const companyName = String(companyNameRaw || "").trim();
-      const roleTitle = String(roleTitleRaw || "").trim();
-      if (!companyName) return null;
-      return {
-        company_name: companyName,
-        role_title: roleTitle,
-        can_refer: Boolean(canRefer),
-      };
-    })
-    .filter(Boolean);
-}
-
 function formatCompaniesForTextarea(contact) {
   const companies = Array.isArray(contact?.companies) && contact.companies.length
     ? contact.companies
@@ -404,7 +367,7 @@ export default function ReferralsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
   const requestedSection = searchParams.get("section");
-  const [activeSection, setActiveSection] = useState(REFERRAL_SECTION_OPTIONS.some((section) => section.id === requestedSection) ? requestedSection : "manual");
+  const [activeSection, setActiveSection] = useState("connections");
   const [visibleContactLimit, setVisibleContactLimit] = useState(CONTACT_RENDER_BATCH_SIZE);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [actionState, setActionState] = useState({ message: "", error: "", busyId: "" });
@@ -433,35 +396,15 @@ export default function ReferralsPage() {
     () => contacts.find((contact) => contact.contact_id === editingId) || null,
     [contacts, editingId],
   );
-  const manualContacts = useMemo(
-    () => contacts.filter((contact) => !isLinkedInImportedContact(contact)),
-    [contacts],
-  );
   const linkedinContacts = useMemo(
     () => contacts.filter((contact) => isLinkedInImportedContact(contact)),
     [contacts],
   );
-  const visibleContacts = activeSection === "linkedin" ? linkedinContacts : manualContacts;
+  const visibleContacts = contacts;
   const renderedContacts = visibleContacts.slice(0, visibleContactLimit);
   const hiddenContactCount = Math.max(0, visibleContacts.length - renderedContacts.length);
   const detailsLoaded = Boolean(data?.meta?.detailsLoaded);
   const editingLinkedInContact = isLinkedInImportedContact(editingContact);
-  const stats = useMemo(() => {
-    const uniqueCompanies = new Set(
-      contacts
-        .flatMap((contact) => companyEntries(contact))
-        .map((entry) => String(entry.company_name || entry.company || "").trim().toLowerCase())
-        .filter(Boolean),
-    );
-    return {
-      total: contacts.length,
-      manual: manualContacts.length,
-      linkedin: linkedinContacts.length,
-      companies: uniqueCompanies.size,
-      canRefer: contacts.filter((contact) => Boolean(contact.can_refer)).length,
-      outreachTracked: outreachItems.length,
-    };
-  }, [contacts, linkedinContacts.length, manualContacts.length, outreachItems]);
   const outreachByContact = useMemo(() => {
     const groups = new Map();
     outreachItems.forEach((item) => {
@@ -579,7 +522,7 @@ export default function ReferralsPage() {
       name: contact.name || "",
       companies_text: formatCompaniesForTextarea(contact),
       linkedin_url: contact.linkedin_url || "",
-      relationship_note: contact.relationship_note || "",
+      relationship_note: CONNECTION_STRENGTHS.includes(contact.relationship_note) ? contact.relationship_note : "",
       can_refer: Boolean(contact.can_refer),
     });
     setActionState({ message: "", error: "", busyId: "" });
@@ -591,7 +534,7 @@ export default function ReferralsPage() {
   }
 
   async function saveContact() {
-    const companies = parseCompaniesText(form.companies_text, form.can_refer);
+    const companies = editingContact?.companies || [];
     setActionState({ message: "", error: "", busyId: editingId || "new" });
     try {
       const path = editingId ? `/referrals/${editingId}` : "/referrals";
@@ -613,11 +556,11 @@ export default function ReferralsPage() {
         method,
         body: {
           name: form.name,
-          company: companies[0]?.company_name || "",
+          company: companies[0]?.company_name || editingContact?.company || "",
           companies,
           linkedin_url: form.linkedin_url,
-          relationship_note: form.relationship_note,
-          can_refer: form.can_refer,
+          relationship_note: form.relationship_note || editingContact?.relationship_note || "",
+          can_refer: Boolean(editingContact?.can_refer || form.can_refer),
           ...sourcePayload,
         },
       });
@@ -825,7 +768,6 @@ export default function ReferralsPage() {
     }));
   }
 
-  const manualCompanies = parseCompaniesText(form.companies_text, form.can_refer);
   const showingLinkedInImportPanel = activeSection === "linkedin" && !editingLinkedInContact;
   const visibleSectionEmptyCopy =
     activeSection === "linkedin"
@@ -836,12 +778,12 @@ export default function ReferralsPage() {
     <div className="referrals-page space-y-8">
       <header className="referrals-page__header">
         <div>
-        <div className="referral-eyebrow">Networking workspace</div>
+        <div className="referral-eyebrow">Your network</div>
         <h1 className="referrals-page__title">
-          Referrals
+          Connections
         </h1>
         <p className="referrals-page__intro">
-          Find warm paths into the roles you care about, keep your own contacts organised, and track every follow-up in one place.
+          Keep your connections together and note how well you know them.
         </p>
         </div>
         <Link className="referrals-page__header-action" to="/tracker">
@@ -850,49 +792,14 @@ export default function ReferralsPage() {
         </Link>
       </header>
 
-      <section className="referral-tabs">
-        {REFERRAL_SECTION_OPTIONS.map((section) => {
-          const isActive = activeSection === section.id;
-          const count =
-            section.id === "people"
-              ? peopleFinderTargets.length
-              : section.id === "linkedin"
-                ? stats.linkedin
-                : stats.manual;
-          return (
-            <button
-              key={section.id}
-              className={[
-                "referral-tab",
-                isActive
-                  ? "is-active"
-                  : "",
-              ].join(" ")}
-              onClick={() => {
-                setActiveSection(section.id);
-                if (editingId && section.id !== (editingLinkedInContact ? "linkedin" : "manual")) {
-                  resetForm();
-                }
-              }}
-              type="button"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="referral-tab__icon">
-                    <span className="material-symbols-outlined text-[20px]">{section.icon}</span>
-                  </div>
-                  <div className="referral-tab__copy">
-                    <div className="referral-tab__title">{section.label}</div>
-                    <div className="referral-tab__description">{section.description}</div>
-                  </div>
-                </div>
-                <span className="referral-tab__count">
-                  {count}
-                </span>
-              </div>
-            </button>
-          );
-        })}
+      <section className="referral-connections-bar">
+        <div><strong>{contacts.length}</strong><span> connections</span></div>
+        <div className="referral-form__actions">
+          <button className="referral-button referral-button--quiet" onClick={() => setActiveSection(activeSection === "linkedin" ? "connections" : "linkedin")} type="button">{activeSection === "linkedin" ? "All connections" : "Import LinkedIn"}</button>
+          <button className="referral-button referral-button--primary" onClick={() => { setActiveSection("connections"); resetForm(); document.getElementById("connection-name")?.focus(); }} type="button">
+            <span className="material-symbols-outlined text-[17px]">person_add</span>Add connection
+          </button>
+        </div>
       </section>
 
       {activeSection === "people" ? (
@@ -985,26 +892,6 @@ export default function ReferralsPage() {
         </section>
       ) : null}
 
-      <section className="referral-metrics">
-        {[
-          { label: "Personal Contacts", value: stats.manual },
-          { label: "LinkedIn Connections", value: stats.linkedin },
-          { label: "Target Companies", value: stats.companies },
-          { label: "Tracked Outreach", value: stats.outreachTracked },
-        ].map((card) => (
-          <div
-            key={card.label}
-            className="referral-metric"
-          >
-            <div className="referral-metric__label">
-              {card.label}
-            </div>
-            <div className="referral-metric__value">{card.value}</div>
-            <div className="referral-metric__detail">Across your current networking workspace</div>
-          </div>
-        ))}
-      </section>
-
       {activeSection !== "people" ? (
         <section className="referral-workspace">
         <div className="space-y-6">
@@ -1013,16 +900,10 @@ export default function ReferralsPage() {
               <div className="referral-panel__header">
                 <div>
                   <h2 className="referral-panel__title">
-                    {editingLinkedInContact
-                      ? "Edit LinkedIn Connection"
-                      : editingId
-                        ? "Edit Personal Contact"
-                        : "Add Personal Contact"}
+                    {editingId ? "Edit connection" : "Add connection"}
                   </h2>
                   <p className="referral-panel__copy">
-                    {editingLinkedInContact
-                      ? "Keep the LinkedIn import source, but adjust notes, company mapping, or referability."
-                      : "Add a person once, then link them to as many relevant companies as needed."}
+                    Add a person and choose how well you know them.
                   </p>
                 </div>
                 {editingId ? (
@@ -1037,74 +918,27 @@ export default function ReferralsPage() {
               </div>
 
               <div className="referral-form">
-                <ReferralFormField label="Contact Name">
+                <ReferralFormField label="Name">
                   <input
                     className="referral-input"
+                    id="connection-name"
                     onChange={(event) => updateForm({ name: event.target.value })}
                     placeholder="Jane Doe"
                     value={form.name}
                   />
                 </ReferralFormField>
 
-                <ReferralFormField
-                  label="Companies"
-                  hint="Use one company per line. Optional role format: Company Name | Role Title"
-                >
-                  <textarea
-                    className="referral-input"
-                    onChange={(event) => updateForm({ companies_text: event.target.value })}
-                    placeholder={"Acme GmbH | Engineering Manager\nContoso SE | Former Team Lead"}
-                    value={form.companies_text}
-                  />
-                </ReferralFormField>
-
-                <ReferralFormField label="LinkedIn URL" hint="Used for quick open or copy later.">
-                  <input
-                    className="referral-input"
-                    onChange={(event) => updateForm({ linkedin_url: event.target.value })}
-                    placeholder="https://www.linkedin.com/in/jane-doe/"
-                    value={form.linkedin_url}
-                  />
-                </ReferralFormField>
-
-                <ReferralFormField label="Relationship Note" hint="How you know them or what context to mention.">
-                  <textarea
+                <ReferralFormField label="Connection strength">
+                  <select
                     className="referral-input"
                     onChange={(event) => updateForm({ relationship_note: event.target.value })}
-                    placeholder="Worked together on the Berlin product launch."
                     value={form.relationship_note}
-                  />
+                  >
+                    <option value="">Choose strength</option>
+                    {CONNECTION_STRENGTHS.map((strength) => <option key={strength} value={strength}>{strength}</option>)}
+                  </select>
                 </ReferralFormField>
-
-                <label className="referral-checkbox">
-                  <input
-                    checked={Boolean(form.can_refer)}
-                    className="h-4 w-4 rounded border-outline-variant/30 text-primary focus:ring-primary/20"
-                    onChange={(event) => updateForm({ can_refer: event.target.checked })}
-                    type="checkbox"
-                  />
-                  <div>
-                    <div className="referral-checkbox__title">Can refer me</div>
-                    <div className="referral-checkbox__copy">
-                      Applies to the listed companies unless you change it later.
-                    </div>
-                  </div>
-                </label>
               </div>
-
-              {manualCompanies.length ? (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {manualCompanies.map((company) => (
-                    <span
-                      key={`${company.company_name}-${company.role_title || "role"}`}
-                      className="referral-tag"
-                    >
-                      {company.company_name}
-                      {company.role_title ? ` | ${company.role_title}` : ""}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
 
               {(actionState.message || actionState.error) && !actionState.busyId ? (
                 <div className={["referral-feedback", actionState.error ? "referral-feedback--error" : "referral-feedback--success"].join(" ")}>
@@ -1115,15 +949,15 @@ export default function ReferralsPage() {
               <div className="referral-form__actions">
                 <button
                   className="referral-button referral-button--primary"
-                  disabled={!form.name.trim() || !manualCompanies.length || Boolean(actionState.busyId)}
+                  disabled={!form.name.trim() || Boolean(actionState.busyId)}
                   onClick={saveContact}
                   type="button"
                 >
                   {editingLinkedInContact
-                    ? "Save Connection"
+                    ? "Save connection"
                     : editingId
-                      ? "Save Contact"
-                      : "Add Personal Contact"}
+                      ? "Save connection"
+                      : "Add connection"}
                 </button>
                 <button
                   className="referral-button referral-button--quiet"
@@ -1240,14 +1074,8 @@ export default function ReferralsPage() {
         <div className="referral-list">
           <div className="referral-list__header">
             <div>
-                <h2 className="referral-list__title">
-                  {activeSection === "linkedin" ? "Imported LinkedIn Connections" : "Personal Contacts"}
-                </h2>
-                <p className="referral-list__copy">
-                  {activeSection === "linkedin"
-                    ? "Imported connections stay grouped here so you can separate export-based matches from the contacts you maintain yourself."
-                    : "These contacts are matched against generated jobs and keep their outreach history in one place."}
-                </p>
+                <h2 className="referral-list__title">All connections</h2>
+                <p className="referral-list__copy">Company and role details appear when available.</p>
               </div>
             </div>
 
@@ -1267,23 +1095,11 @@ export default function ReferralsPage() {
                       <div className="referral-contact__identity">
                         <div className="referral-contact__name">
                           <h3>{contact.name}</h3>
-                          {contact.can_refer ? (
-                            <span className="referral-contact__status referral-contact__status--success">
-                              Can Refer
-                            </span>
-                          ) : (
-                            <span className="referral-contact__status referral-contact__status--warm">
-                              Warm Contact
-                            </span>
-                          )}
                           {contact.is_active === false ? (
                             <span className="referral-contact__status referral-contact__status--muted">
                               Removed from latest upload
                             </span>
                           ) : null}
-                          <span className="referral-contact__status referral-contact__status--muted">
-                            {isLinkedInImportedContact(contact) ? "LinkedIn Import" : "Personal Contact"}
-                          </span>
                         </div>
 
                         <div className="referral-contact__companies">
@@ -1298,9 +1114,7 @@ export default function ReferralsPage() {
                               </span>
                             ))
                           ) : (
-                            <span className="referral-tag">
-                              No company linked yet
-                            </span>
+                            null
                           )}
                         </div>
 
@@ -1323,7 +1137,7 @@ export default function ReferralsPage() {
                         ) : null}
 
                         <p className="referral-contact__note">
-                          {contact.relationship_note || "No relationship note saved yet."}
+                          {contact.relationship_note || "Connection strength not set"}
                         </p>
 
                         {detailsLoaded ? (

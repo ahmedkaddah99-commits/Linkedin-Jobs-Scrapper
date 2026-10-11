@@ -428,6 +428,8 @@ export function toPersonalizedJobView(job = {}) {
     applicantApplyMethod: text(applicantIntelligence.apply_method) || "unknown",
     priority: safeJob.priority && typeof safeJob.priority === "object" ? safeJob.priority : { state: "unknown", score: null },
     improveResume: matchIntelligence.improve_resume && typeof matchIntelligence.improve_resume === "object" ? matchIntelligence.improve_resume : {},
+    externalJob: Boolean(job.external_job),
+    enrichmentState: job.enrichment_state || "",
     dataMode: "real",
   };
 }

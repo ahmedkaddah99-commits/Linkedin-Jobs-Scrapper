@@ -1840,6 +1840,50 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             cache.pop(oldest_key, None)
         cache[cache_key] = dict(capabilities)
 
+    def get_external_job_row(self, user_id: str, job_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? AND job_id=?",
+                                     (str(user_id), str(job_id))).fetchone()
+        return _decode(row["row_json"], {}) if row else None
+
+    def list_external_job_rows(self, user_id: str, *, offset: int = 0, limit: int = 25) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? ORDER BY updated_at DESC,job_id DESC LIMIT ? OFFSET ?",
+                                      (str(user_id), limit, offset)).fetchall()
+            total = connection.execute("SELECT COUNT(*) AS n FROM external_jobs WHERE user_id=?", (str(user_id),)).fetchone()['n']
+        return {'rows': [_decode(row["row_json"], {}) for row in rows], 'total': total,
+                'next_cursor': str(offset + limit) if offset + limit < total else None}
+
+    def find_job_by_url(self, user_id: str, source_url: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            own = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? AND source_url=?",
+                                     (str(user_id), str(source_url))).fetchone()
+            if own:
+                return _decode(own["row_json"], {})
+            row = connection.execute(self._published_jobs_sql() + " AND (j.canonical_url=? OR v.apply_url=?) LIMIT 1",
+                                     (str(self._head_publication_id(connection) or ""), source_url, source_url)).fetchone()
+        return _row_payload(row) if row else None
+
+    def save_external_job_row(self, user_id: str, source_url: str, row: Mapping[str, Any]) -> dict[str, Any]:
+        now = utc_now_iso()
+        def write(connection):
+            connection.execute("""INSERT INTO external_jobs VALUES (?,?,?,?,?,?)
+                ON CONFLICT(user_id,source_url) DO UPDATE SET row_json=excluded.row_json,updated_at=excluded.updated_at""",
+                (row["canonical_job_id"], str(user_id), source_url, _json(row), now, now))
+        self._run_transaction(write)
+        return self.find_job_by_url(user_id, source_url)
+
+    def reserve_external_job_import(self, user_id: str) -> None:
+        day = utc_now_iso()[:10]
+        def write(connection):
+            row = connection.execute("SELECT attempts FROM external_job_import_attempts WHERE user_id=? AND day=?",
+                                     (str(user_id), day)).fetchone()
+            if row and row["attempts"] >= 20:
+                raise ValueError("Daily URL import limit reached. Try again tomorrow.")
+            connection.execute("INSERT INTO external_job_import_attempts VALUES (?,?,1) "
+                               "ON CONFLICT(user_id,day) DO UPDATE SET attempts=attempts+1", (str(user_id), day))
+        self._run_transaction(write)
+
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -1847,6 +1891,47 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 (str(self._head_publication_id(connection) or ""), str(canonical_job_id)),
             ).fetchone()
         return _row_payload(row) if row is not None else None
+
+    def get_published_network_discovery(self, version_id: str, content_hash: str) -> dict[str, Any]:
+        with database_read_session(self.db_path) as connection:
+            row = connection.execute(
+                "SELECT state,candidates_json,updated_at FROM published_job_network_discovery "
+                "WHERE version_id=? AND content_hash=?",
+                (str(version_id), str(content_hash)),
+            ).fetchone()
+        if row is None:
+            return {"state": "pending", "candidates": []}
+        candidates = _decode(row["candidates_json"], [])
+        return {"state": str(row["state"] or "unavailable"),
+                "candidates": candidates if isinstance(candidates, list) else [],
+                "updated_at": str(row["updated_at"] or "")}
+
+    def reserve_email_lookup(self, user_id: str, handle: str) -> dict[str, str]:
+        day = datetime.now(timezone.utc).date().isoformat()
+        timestamp = utc_now_iso()
+        def reserve(connection):
+            prior = connection.execute(
+                "SELECT state,email FROM job_email_lookups WHERE user_id=? AND lookup_day=? AND linkedin_handle=?",
+                (user_id, day, handle),
+            ).fetchone()
+            if prior is not None:
+                return {"state": str(prior["state"]), "email": str(prior["email"] or "")}
+            inserted = connection.execute(
+                "INSERT OR IGNORE INTO job_email_lookups(user_id,lookup_day,linkedin_handle,state,updated_at) "
+                "SELECT ?,?,?,'pending',? WHERE (SELECT COUNT(*) FROM job_email_lookups "
+                "WHERE user_id=? AND lookup_day=?) < 2 RETURNING state",
+                (user_id, day, handle, timestamp, user_id, day),
+            ).fetchone()
+            return {"state": "reserved" if inserted is not None else "limit_reached"}
+        return self._run_transaction(reserve)
+
+    def complete_email_lookup(self, user_id: str, handle: str, state: str, email: str = "") -> None:
+        day = datetime.now(timezone.utc).date().isoformat()
+        self._run_transaction(lambda connection: connection.execute(
+            "UPDATE job_email_lookups SET state=?,email=?,updated_at=? "
+            "WHERE user_id=? AND lookup_day=? AND linkedin_handle=?",
+            (state, email, utc_now_iso(), user_id, day, handle),
+        ))
 
     def get_published_company_rows(self, company_id: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         with self._connect() as connection:
