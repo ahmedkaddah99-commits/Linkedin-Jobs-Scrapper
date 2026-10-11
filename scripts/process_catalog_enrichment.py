@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT))
 from backend.application.catalog_enrichment import EnrichmentStageError, attach_source_metadata, enrich_version
 from backend.application.enrichment_field_pass import missing_fields, supplement
 from backend.application.catalog_job_filters import PROMPT_VERSION as FILTER_PROMPT
-from backend.application.vps_job_descriptions import NEMO_MODEL
+from backend.application.vps_job_descriptions import NEMO_MODEL, SECTIONS
 from backend.config import load_project_dotenv
 from backend.database.connection import database_session, validate_release_provenance
 from backend.acquisition.job_lifecycle import exclusion_reason
@@ -47,7 +47,8 @@ DESCRIPTION_ACCEPTABLE_SQL = """d.prompt_version IN ('runr_description_v1','runr
             OR COALESCE(json_array_length(d.summary_json,'$.preferred_qualifications'),0)>0
             OR COALESCE(json_array_length(d.summary_json,'$.benefits'),0)>0
             OR COALESCE(json_array_length(d.summary_json,'$.application_details'),0)>0
-            OR LENGTH(TRIM(COALESCE(json_extract(d.summary_json,'$.overview'),'')))>0)
+            OR (d.provider NOT IN ('rules','runr_rules')
+                AND LENGTH(TRIM(COALESCE(json_extract(d.summary_json,'$.overview'),'')))>0))
         AND COALESCE(json_extract(d.summary_json,'$.output_language'),'en') IN ('en','und')
         ELSE 0 END"""
 
@@ -262,7 +263,7 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         tuple(ids))
     for row in candidates:
         if row['description_ready'] and row.get('description_provider') in ('rules','runr_rules'):
-            row['description_ready'] = english_summary(row.get('existing_summary_json'))
+            row['description_ready'] = usable_rule_summary(row.get('existing_summary_json'))
     return token, candidates
 
 
@@ -273,6 +274,12 @@ def english_summary(raw):
         for items in summary.values() if isinstance(items,list)
         for item in items if isinstance(item,dict) and isinstance(item.get('text'),str)])
     return bool(text.strip()) and source_language(text)=='en'
+
+
+def usable_rule_summary(raw):
+    summary = json.loads(raw or '{}')
+    return any(isinstance(summary.get(section), list) and summary[section]
+               for section in SECTIONS) and english_summary(raw)
 
 
 def save_stage(row: dict, token: str, output: dict) -> None:
@@ -473,7 +480,7 @@ def requeue_repairable(generate, limit):
             WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
             AND pj.canonical_job_id=j.canonical_job_id)
         LIMIT ?''', (limit,))
-    needs_translation=[row['version_id'] for row in native if not english_summary(row['summary_json'])]
+    needs_translation=[row['version_id'] for row in native if not usable_rule_summary(row['summary_json'])]
     if needs_translation:
         execute("UPDATE job_enrichment_queue SET state='pending',error_code='english_description_repair',next_attempt_at='' "
                 "WHERE state='completed' AND version_id IN (SELECT value FROM json_each(?))", (json.dumps(needs_translation),))
