@@ -8,7 +8,7 @@ export function profileMissingFields(settings, preferences = {}) {
     ["location", filled(profile.location)], ["skills", items(profile.competencies).some(filled)],
     ["professional summary", filled(profile.summary)],
     ["dated experience", items(profile.recent_experience).some((role) => filled(role.title || role.role) && filled(role.company) && filled(role.start_date || role.start) && filled(role.description || role.summary))],
-    ["education", items(profile.education).some((entry) => filled(entry.institution || entry.school) && filled(entry.degree))],
+    ["education", items(profile.education).some((entry) => filled(entry.institution || entry.school) && filled(entry.degree_title || entry.degree))],
     ["target roles", items(preferences.target_roles).some(filled)],
     ["preferred locations", items(preferences.preferred_locations).some(filled)],
   ];

@@ -682,9 +682,9 @@ def _normalize_experience_list(raw_value: Any) -> list[dict[str, Any]]:
         end_date = compact_whitespace(str(item.get("end_date") or item.get("end") or ""))
         industry = compact_whitespace(str(item.get("industry") or ""))
         description = str(item.get("description") or item.get("summary") or "").strip()
-        bullets = _normalize_multiline_notes(item.get("bullets"), limit=6)
+        bullets = _normalize_multiline_notes(item.get("bullets"), limit=100)
         if not bullets:
-            bullets = _normalize_multiline_notes(item.get("bulletsText") or "", limit=6)
+            bullets = _normalize_multiline_notes(item.get("bulletsText") or "", limit=100)
         if title or company or period or bullets or description:
             entries.append(
                 {
@@ -695,12 +695,15 @@ def _normalize_experience_list(raw_value: Any) -> list[dict[str, Any]]:
                     "start_date": start_date,
                     "end_date": end_date,
                     "industry": industry,
+                    "job_type": str(item.get("job_type") or ""),
+                    "location": str(item.get("location") or ""),
+                    "current": bool(item.get("current")),
                     "description": description,
                     "bullets": bullets,
                     "bulletsText": "\n".join(bullets),
                 }
             )
-    return entries[:8]
+    return entries[:100]
 
 
 def _normalize_education_list(raw_value: Any) -> list[dict[str, Any]]:
@@ -728,25 +731,30 @@ def _normalize_education_list(raw_value: Any) -> list[dict[str, Any]]:
         )
         institution = compact_whitespace(str(item.get("institution") or item.get("school") or ""))
         period = compact_whitespace(str(item.get("period") or ""))
-        details = _normalize_multiline_notes(item.get("details"), limit=6)
+        details = _normalize_multiline_notes(item.get("details"), limit=100)
         if not details:
-            details = _normalize_multiline_notes(item.get("thesis_bullets"), limit=6)
+            details = _normalize_multiline_notes(item.get("thesis_bullets"), limit=100)
         thesis_title = compact_whitespace(str(item.get("thesis_title") or ""))
         if thesis_title:
-            details = _dedupe_text_list([thesis_title, *details], limit=6)
+            details = _dedupe_text_list([thesis_title, *details], limit=100)
         if not details:
-            details = _normalize_multiline_notes(item.get("detailsText") or "", limit=6)
+            details = _normalize_multiline_notes(item.get("detailsText") or "", limit=100)
         if degree_title or institution or period or details:
             items.append(
                 {
                     "degree_title": degree_title,
                     "institution": institution,
+                    "field": str(item.get("field") or item.get("field_of_study") or ""),
+                    "gpa": str(item.get("gpa") or ""),
+                    "start_date": str(item.get("start_date") or ""),
+                    "end_date": str(item.get("end_date") or ""),
+                    "current": bool(item.get("current")),
                     "period": period,
                     "details": details,
                     "detailsText": "\n".join(details),
                 }
             )
-    return items[:6]
+    return items[:100]
 
 
 def _normalize_project_list(raw_value: Any) -> list[dict[str, Any]]:
@@ -837,12 +845,13 @@ def normalize_profile_payload(payload: Mapping[str, Any] | None) -> dict[str, An
         "role_title": compact_whitespace(str(raw.get("role_title") or raw.get("headline") or "")),
         "industry": compact_whitespace(str(raw.get("industry") or "")),
         "email": compact_whitespace(str(raw.get("email") or "")),
+        "phone": compact_whitespace(str(raw.get("phone") or "")),
         "location": compact_whitespace(str(raw.get("location") or "")),
         "website": _normalize_url(str(website_value or "")),
         "linkedin_url": _normalize_url(str(raw.get("linkedin_url") or raw.get("linkedin") or "")),
         "github_url": _normalize_url(str(raw.get("github_url") or raw.get("github") or "")),
         "summary": compact_whitespace(str(raw.get("summary") or "")),
-        "competencies": _normalize_string_list(raw.get("competencies") or raw.get("skills") or [], limit=25),
+        "competencies": (_dedupe_text_list([compact_whitespace(item) for item in (raw.get("competencies") or raw.get("skills") or []) if isinstance(item, str)], limit=100) if isinstance(raw.get("competencies") or raw.get("skills") or [], list) else _normalize_string_list(raw.get("competencies") or raw.get("skills") or [], limit=100)),
         "languages": _normalize_string_list(raw.get("languages") or [], limit=15),
         "recent_experience": _normalize_experience_list(raw.get("recent_experience") or raw.get("experience") or []),
         "education": _normalize_education_list(raw.get("education") or []),

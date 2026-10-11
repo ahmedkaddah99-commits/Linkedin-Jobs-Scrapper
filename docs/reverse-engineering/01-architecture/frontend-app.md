@@ -2,6 +2,35 @@
 
 # Customer web frontend (WS-8)
 
+## Profile reference correction (2026-10-12)
+
+`/profile` removes the promotional header, privacy banner and profile side card.
+Profile details use the available width. Sticky section navigation highlights the
+current section with Runr teal. Section edits open a compact modal right drawer
+with a header Update action; Jobs completion stays in a popup.
+
+The shared editor reads canonical CV fields: `degree_title`, `period`, `details`,
+and experience `bullets`. Skills and target roles are individual removable tags,
+with Add/Enter controls. Dates use month inputs and reject reversed ranges.
+Education major/GPA/dates and experience job type/location/current flags now
+round-trip through settings. Explicit clears remain clears. Optional application
+answers are self-declared and whitelisted, never inferred from CV text.
+
+Persisted ready CV extraction fills absent profile fields without downloading or
+parsing files on page load. Changed field names are recorded in
+`profile_edited_fields` so a deliberately cleared value is not restored from a CV.
+The source resume can be applied explicitly for review. Upload polling reads the
+existing authenticated CV status endpoint and fills the draft when ready; saves
+use settings/preferences APIs. Matching still uses the saved profile.
+
+Read-only production evidence: existing ready resumes contain canonical education
+and experience records, while the old UI looked for `degree` rather than
+`degree_title`. An account with parsed resume facts also had no saved profile facts.
+Tests cover canonical settings round trips, older records, clear semantics, skill
+names containing commas, resume defaults and desktop/mobile edit/upload/save flows.
+The profile release script updates API and frontend together with rollback; no
+schema migration or worker/acquisition restart is required.
+
 ## Profile completion popup revision (2026-10-11)
 
 The Jobs quick-access profile action keeps its native modal and shared settings

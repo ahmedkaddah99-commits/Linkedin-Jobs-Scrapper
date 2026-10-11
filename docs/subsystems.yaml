@@ -286,7 +286,7 @@ subsystems:
       - The Profile page has no profile preview or print action.
       - Opening a posting retains the jobs feed and uses its embedded company profile without fetching employer jobs.
       - Authenticated landing opens Jobs; account setup stays compact beside desktop jobs and expands without navigating away.
-      - Compact LinkedIn and Apply tool rows remain visible with verified connection checkmarks; saved filters share their rail, and profile completion uses one modal with focused steps, draft retention, save-and-close, and existing save APIs.
+      - Compact LinkedIn and Apply tool rows remain visible with verified connection checkmarks; saved filters share their rail, and profile completion uses one modal with focused steps, individual skill tags, canonical CV fields, draft retention, and existing save APIs.
       - frontend/.env.local values are never read or printed.
       - CV-render files (package.json, package-lock.json, scripts/render-cv-pdf.mjs, lib/cvStudio.js, lib/cvSocialLinks.js) change only with a coordinated WS-4/WS-7 review (they affect the deployed API/worker image filter).
 

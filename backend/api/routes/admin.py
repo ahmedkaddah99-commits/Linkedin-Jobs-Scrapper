@@ -388,6 +388,9 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
                         if "profile" in payload:
                             profile_payload = dict(payload.get("profile") or {})
                             metadata["profile"] = _merge_profile_metadata(existing_profile, profile_payload, user)
+                            edited = payload.get("profile_edited_fields")
+                            if isinstance(edited, list):
+                                metadata["profile_edited_fields"] = sorted(set(metadata.get("profile_edited_fields") or []) | {key for key in edited if isinstance(key, str) and key in profile_payload})
 
                         if "defaults" in payload:
                             defaults_payload = dict(payload.get("defaults") or {})

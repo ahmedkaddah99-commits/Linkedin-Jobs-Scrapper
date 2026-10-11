@@ -2273,6 +2273,7 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
         "role_title": str(normalized_payload.get("role_title") or normalized_existing.get("role_title") or ""),
         "industry": str(normalized_payload.get("industry") or normalized_existing.get("industry") or ""),
         "email": str(payload_email or existing_email or public_email),
+        "phone": str(normalized_payload.get("phone") if "phone" in payload_keys else normalized_existing.get("phone") or ""),
         "location": str(normalized_payload.get("location") or normalized_existing.get("location") or ""),
         "website": str(normalized_payload.get("website") or normalized_existing.get("website") or ""),
         "linkedin_url": str(normalized_payload.get("linkedin_url") or normalized_existing.get("linkedin_url") or ""),
@@ -2312,6 +2313,9 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
                     "start_date": str(item.get("start_date") or ""),
                     "end_date": str(item.get("end_date") or ""),
                     "industry": str(item.get("industry") or ""),
+                    "job_type": str(item.get("job_type") or ""),
+                    "location": str(item.get("location") or ""),
+                    "current": bool(item.get("current")),
                     "description": str(item.get("description") or ""),
                     "period": str(item.get("period") or ""),
                     "bullets": list(item.get("bullets") or []),
@@ -2329,6 +2333,9 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
                     "start_date": str(item.get("start_date") or ""),
                     "end_date": str(item.get("end_date") or ""),
                     "industry": str(item.get("industry") or ""),
+                    "job_type": str(item.get("job_type") or ""),
+                    "location": str(item.get("location") or ""),
+                    "current": bool(item.get("current")),
                     "description": str(item.get("description") or ""),
                     "period": str(item.get("period") or ""),
                     "bullets": list(item.get("bullets") or []),
@@ -2342,6 +2349,11 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
             [
                 {
                     "degree_title": str(item.get("degree_title") or ""),
+                    "field": str(item.get("field") or ""),
+                    "gpa": str(item.get("gpa") or ""),
+                    "start_date": str(item.get("start_date") or ""),
+                    "end_date": str(item.get("end_date") or ""),
+                    "current": bool(item.get("current")),
                     "institution": str(item.get("institution") or ""),
                     "period": str(item.get("period") or ""),
                     "details": list(item.get("details") or []),
@@ -2354,6 +2366,11 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
             else [
                 {
                     "degree_title": str(item.get("degree_title") or ""),
+                    "field": str(item.get("field") or ""),
+                    "gpa": str(item.get("gpa") or ""),
+                    "start_date": str(item.get("start_date") or ""),
+                    "end_date": str(item.get("end_date") or ""),
+                    "current": bool(item.get("current")),
                     "institution": str(item.get("institution") or ""),
                     "period": str(item.get("period") or ""),
                     "details": list(item.get("details") or []),
@@ -2410,6 +2427,20 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
             ]
         ),
     }
+    for key in ("name", "role_title", "industry", "email", "location", "website", "linkedin_url", "github_url", "summary"):
+        if key in payload_keys:
+            merged[key] = str(normalized_payload.get(key) or "")
+    application_details = profile_payload.get("application_details") if "application_details" in payload_keys else existing_profile.get("application_details")
+    if isinstance(application_details, dict):
+        options = {
+            "us_work_authorized": {"", "Yes", "No", "Decline to state"},
+            "requires_sponsorship": {"", "Yes", "No", "Decline to state"},
+            "disability": {"", "Yes", "No", "Decline to state"},
+            "veteran": {"", "Yes", "No", "Decline to state"},
+            "gender": {"", "Male", "Female", "Non-binary", "Decline to state"},
+            "lgbtq": {"", "Yes", "No", "Decline to state"},
+        }
+        merged["application_details"] = {key: value for key, value in application_details.items() if key in options and isinstance(value, str) and value in options[key]}
     if not merged["avatar_url"] and merged["photo_data_url"]:
         merged["avatar_url"] = merged["photo_data_url"]
     return merged
@@ -2787,6 +2818,7 @@ def _build_settings_payload(application, user) -> dict:
     return {
         "profile": profile_section,
         "candidate_assets": _load_candidate_assets(user),
+        "profile_edited_fields": list(metadata.get("profile_edited_fields") or []),
         "defaults": defaults,
         "documents": documents,
         "review_preferences": review_preferences,
