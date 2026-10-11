@@ -20,6 +20,11 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
     result = dict(source=source,apply=apply,scanned=0,removed=0,candidates=0,pass_complete=False)
     db = sqlite3.connect('file:'+str(Path(path).resolve())+'?mode=rw', uri=True, timeout=30)
     db.execute('PRAGMA foreign_keys=ON')
+    # Producer payloads are large. Keep SQLite's page cache and temporary JSON
+    # work off the process heap so this maintenance job stays small on the VPS.
+    db.execute('PRAGMA cache_size=-16384')
+    db.execute('PRAGMA temp_store=FILE')
+    db.execute('PRAGMA mmap_size=0')
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if apply:
         with db:
@@ -75,7 +80,8 @@ def main():
     parser.add_argument('--state-root',type=Path,default=Path('/srv/runr/state/active'))
     parser.add_argument('--lock-root',type=Path,default=Path('/srv/runr/state/locks'))
     parser.add_argument('--apply',action='store_true')
-    parser.add_argument('--max-seconds',type=int,default=60)
+    parser.add_argument('--batch-size',type=int,default=100)
+    parser.add_argument('--max-seconds',type=int,default=30)
     parser.add_argument('--receipt',type=Path)
     args = parser.parse_args()
     streams = []
@@ -85,7 +91,7 @@ def main():
         except BlockingIOError: return 75
         streams.append(stream)
     result = [maintain(args.state_root/source/('master_'+source+'_jobs_state.db'),source,
-                      apply=args.apply,max_seconds=args.max_seconds) for source in ('linkedin','employer')]
+                      apply=args.apply,batch_size=args.batch_size,max_seconds=args.max_seconds) for source in ('linkedin','employer')]
     rendered = json.dumps(result)
     if args.receipt:
         temporary = args.receipt.with_suffix('.tmp')
