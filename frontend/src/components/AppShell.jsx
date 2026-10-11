@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useRef, useState } from "react";
 import { Show, SignInButton, SignUpButton, UserButton, useUser } from "@clerk/react";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
@@ -11,6 +11,7 @@ import {
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
+const SettingsPanel = lazy(() => import("../pages/SettingsPage"));
 
 export const careerAssetSections = [
   {
@@ -174,6 +175,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
         <button aria-label="Notifications" type="button"><span className="material-symbols-outlined">notifications</span></button>
         <div className="jobs-top-nav__divider" />
         <NavLink aria-label="Open profile" className="jobs-top-nav__avatar" to="/profile">{String(displayName || "AK").split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</NavLink>
+        <NavLink to="/settings" aria-label="Open settings" className="jobs-top-nav__avatar"><span className="material-symbols-outlined">settings</span></NavLink>
         <UserButton />
       </div>
     </header>
@@ -517,6 +519,12 @@ function SidebarContents({
 }
 
 export default function AppShell({ children, muteSidebar = false }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenerRef = useRef(null);
+  function closeSettings() {
+    setSettingsOpen(false);
+    requestAnimationFrame(() => settingsOpenerRef.current?.focus());
+  }
   const navigate = useNavigate();
   const location = useLocation();
   const isPreviewOnboarding = location.pathname === "/onboarding";
@@ -525,7 +533,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   const routeParent = resolveRouteParent(location);
   const isDocumentsExperience = location.pathname === "/documents" || location.pathname === "/master-cv";
   const isMasterCvExperience = location.pathname === "/master-cv";
-  const productRoutes = ["/", "/jobs", "/external-jobs", "/tracker", "/documents", "/master-cv", "/refer", "/profile", "/apply-extension", "/referrals/linkedin-csv-guide"];
+  const productRoutes = ["/", "/jobs", "/external-jobs", "/tracker", "/documents", "/master-cv", "/refer", "/profile", "/settings", "/pricing", "/apply-extension", "/referrals/linkedin-csv-guide"];
   const isJobsExperience = productRoutes.some((route) => route === "/" ? location.pathname === "/" : location.pathname === route || location.pathname.startsWith(`${route}/`));
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")
@@ -625,6 +633,11 @@ export default function AppShell({ children, muteSidebar = false }) {
         isMasterCvExperience ? "app-shell--master-cv-experience" : "",
       ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
+      onClickCapture={event => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        const link = event.target.closest("a[href='/settings']");
+        if (link) { event.preventDefault(); event.stopPropagation(); settingsOpenerRef.current = link; link.focus(); setMobileNavOpen(false); setSettingsOpen(true); }
+      }}
     >
       <div
         aria-hidden={!mobileNavOpen}
@@ -808,6 +821,7 @@ export default function AppShell({ children, muteSidebar = false }) {
           {isCareerAssetsRoute ? <CareerAssetsNavigation /> : null}
           {children}
         </main>
+        {settingsOpen ? <Suspense fallback={null}><SettingsPanel onClose={closeSettings} /></Suspense> : null}
       </div>
     </div>
   );

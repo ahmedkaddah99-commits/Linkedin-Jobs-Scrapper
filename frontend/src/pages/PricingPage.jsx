@@ -3,6 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { getApiErrorMessage } from "../lib/api";
+import SubscriptionComparison from "../components/SubscriptionComparison";
+import "../settings.css";
 
 const quotaLabels = {
   runs_per_month: "Runs / month",
@@ -12,10 +14,6 @@ const quotaLabels = {
   runner_credits_per_month: "Runner credits / month",
   workspaces: "Workspaces",
 };
-
-function formatQuotaValue(value) {
-  return Number(value) === -1 ? "Unlimited" : String(value ?? "0");
-}
 
 function formatUsageLimit(limit) {
   return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
@@ -54,7 +52,6 @@ export default function PricingPage() {
   const { request, refreshSession, user } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
-  const [selectedOfferId, setSelectedOfferId] = useState("one_month");
   const [checkoutConfirmationState, setCheckoutConfirmationState] = useState("idle");
   const [checkoutConfirmationError, setCheckoutConfirmationError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -229,12 +226,12 @@ export default function PricingPage() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft md:p-10">
+      <section className="runr-pricing-heading">
         <p className="text-xs font-bold uppercase tracking-[0.28em] text-primary">Pricing</p>
         <div className="mt-4 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="font-headline text-[2.35rem] font-extrabold leading-tight tracking-tight text-on-surface">
-              Pick the plan that fits your job-search operating rhythm.
+              Get more from your job search with Runr Pro
             </h1>
           </div>
           <Link
@@ -348,159 +345,7 @@ export default function PricingPage() {
         </div>
       </section>
 
-      {isLoading ? (
-        <div className="grid gap-6 lg:grid-cols-2">
-          {Array.from({ length: 2 }).map((_, index) => (
-            <div
-              className="h-[20rem] animate-pulse rounded-[2rem] border border-outline-variant/20 bg-surface-container-low"
-              key={`pricing-skeleton-${index + 1}`}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
-          {plans.map((plan) => {
-            const planId = String(plan.plan_id || "").trim();
-            const isCurrentPlan = planId === currentPlanId;
-            const isPaidPlan = planId === "runr_pro";
-            const planQuotas = plan.quotas || {};
-            const offers = Array.isArray(plan.offers) ? plan.offers : [];
-            const activeOfferId = offers.some((offer) => String(offer.offer_id || "") === selectedOfferId)
-              ? selectedOfferId
-              : String(offers[0]?.offer_id || "one_month");
-            const activeOffer = offers.find((offer) => String(offer.offer_id || "") === activeOfferId);
-            return (
-              <section
-                className={[
-                  "relative overflow-hidden rounded-[2rem] border p-7 shadow-soft transition-transform",
-                  isCurrentPlan
-                    ? "border-primary/30 bg-surface-container-lowest"
-                    : "border-outline-variant/20 bg-surface-container-lowest",
-                ].join(" ")}
-                key={planId}
-              >
-                <div className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(135deg,rgba(var(--color-primary),0.14),transparent_70%)]" />
-                <div className="relative z-10">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-on-surface">{plan.display_name}</p>
-                      <div className="mt-3 flex items-end gap-2">
-                        <span className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-                          {activeOffer ? `$${Number(activeOffer.price || 0).toFixed(2)}` : "$0.00"}
-                        </span>
-                        <span className="pb-1 text-sm text-on-surface-variant">
-                          {activeOffer?.billing_type === "onetime" ? "total" : "every period"}
-                        </span>
-                      </div>
-                    </div>
-                    {isCurrentPlan ? (
-                      <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.2em] text-primary">
-                        Current
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-6 space-y-3">
-                    {featureRows.map((row) => (
-                      <div className="flex items-center justify-between gap-4 text-sm" key={`${planId}-${row.quotaType}`}>
-                        <span className="text-on-surface-variant">{row.label}</span>
-                        <span className="font-semibold text-on-surface">
-                          {formatQuotaValue(planQuotas[row.quotaType])}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-7 flex flex-col gap-3">
-                    {isPaidPlan && offers.length ? (
-                      <div className="grid grid-cols-3 gap-2" role="group" aria-label="Runr Pro duration">
-                        {offers.map((offer) => {
-                          const offerId = String(offer.offer_id || "");
-                          const isSelected = offerId === activeOfferId;
-                          return (
-                            <button
-                              className={[
-                                "rounded-xl border px-2 py-2 text-xs font-semibold transition-colors",
-                                isSelected
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-low",
-                              ].join(" ")}
-                              key={offerId}
-                              onClick={() => setSelectedOfferId(offerId)}
-                              type="button"
-                            >
-                              {offer.display_name}
-                              <span className="mt-1 block text-[11px] font-normal">
-                                ${Number(offer.price || 0).toFixed(2)}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {isCurrentPlan && isPaidPlan ? (
-                      <button
-                        className="rounded-full bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={actionState.managing}
-                        onClick={handleManageSubscription}
-                        type="button"
-                      >
-                        {actionState.managing ? "Opening portal..." : "Manage subscription"}
-                      </button>
-                    ) : null}
-                    {!isCurrentPlan && isPaidPlan ? (
-                      <button
-                        className="rounded-full bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={Boolean(actionState.loadingPlanId)}
-                        onClick={() => handleUpgrade(planId, activeOfferId)}
-                        type="button"
-                      >
-                        {actionState.loadingPlanId === planId ? "Preparing checkout..." : `Upgrade to ${plan.display_name}`}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-            );
-          })}
-        </div>
-      )}
-
-      {!isLoading && plans.length ? (
-        <section className="overflow-hidden rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
-          <div className="border-b border-outline-variant/10 px-7 py-5">
-            <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-              Feature comparison
-            </h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead>
-                <tr className="bg-surface-container-low">
-                  <th className="px-7 py-4 font-semibold text-on-surface">Quota</th>
-                  {plans.map((plan) => (
-                    <th className="px-7 py-4 font-semibold text-on-surface" key={`head-${plan.plan_id}`}>
-                      {plan.display_name}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {featureRows.map((row) => (
-                  <tr className="border-t border-outline-variant/10" key={`row-${row.quotaType}`}>
-                    <td className="px-7 py-4 text-on-surface-variant">{row.label}</td>
-                    {plans.map((plan) => (
-                      <td className="px-7 py-4 font-medium text-on-surface" key={`${row.quotaType}-${plan.plan_id}`}>
-                        {formatQuotaValue((plan.quotas || {})[row.quotaType])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
+      {isLoading ? <p role="status">Loading plans…</p> : plans.length ? <SubscriptionComparison plans={plans} currentPlanId={currentPlanId} featureRows={featureRows} actionState={actionState} onUpgrade={handleUpgrade} onManage={handleManageSubscription} /> : null}
 
       <div className="flex justify-end">
         <button

@@ -2,6 +2,33 @@
 
 # Customer web frontend (WS-8)
 
+## Settings reference popup (2026-10-12)
+
+The customer navigation opens settings in a native modal over the current page.
+The October 12 owner video guides its compact left menu, subscription card,
+refresh/support panel, and separate instant/digest alert sections. Runr plan names
+and existing pricing/Creem portal actions remain authoritative. Login & Security
+retains account edits, photo upload, extension settings and account deletion.
+Direct `/settings` links also open the dialog; closing returns to Jobs.
+
+Pricing uses a shared comparison panel with adjacent paid duration offers and a
+free-plan column, using prices, quotas and offer IDs from `/billing/plans`.
+Existing signed checkout confirmation, promo codes and portal handling remain.
+No reference-site savings percentages, testimonials or unsupported features are
+invented. Desktop/mobile checks verify the selected offer's checkout payload and
+failed-checkout recovery without creating a real payment.
+
+Automatic emails, both alert sections and Email Providers are marked Coming soon.
+Alert switches, frequency selections and provider connection are disabled and do
+not persist preferences or invoke an email service. Preference chips use saved
+profile/job preferences; Filters returns to the Jobs filter workspace.
+
+Verification: frontend unit tests, lint/build and desktop/mobile Playwright checks
+cover modal navigation retention, subscription refresh, disabled email controls,
+Escape/focus restoration and screenshots. `deploy/deploy-settings-frontend.sh`
+installs a separate frontend release with nginx rollback and checks public release
+metadata and API readiness. No API/worker/schema change is required.
+
 ## Profile reference correction (2026-10-12)
 
 `/profile` removes the promotional header, privacy banner and profile side card.

@@ -1,60 +1,10 @@
 import { useUser } from "@clerk/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { profilePlaceholderSrc } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
-
-const usageLabels = {
-  runs_per_month: "Runs",
-  applications_per_month: "Applications",
-  cv_exports_per_month: "CV exports",
-  referral_drafts_per_month: "Referral drafts",
-  runner_credits_per_month: "Runner credits",
-  workspaces: "Workspaces",
-};
-
-function formatUsageLimit(limit) {
-  return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
-}
-
-function formatDateTime(value) {
-  const normalizedValue = String(value || "").trim();
-  if (!normalizedValue) return "Not available";
-  const parsed = new Date(normalizedValue);
-  if (Number.isNaN(parsed.getTime())) return normalizedValue;
-  return parsed.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function UsageMetric({ label, quota }) {
-  const used = Number(quota?.used || 0);
-  const limit = Number(quota?.limit ?? 0);
-  const isUnlimited = Boolean(quota?.is_unlimited) || limit === -1;
-  const width = isUnlimited
-    ? 24
-    : Math.max(8, Math.min(100, (used / Math.max(1, limit)) * 100));
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-4 text-sm">
-        <span className="font-medium text-on-surface">{label}</span>
-        <span className="text-on-surface-variant">
-          {used} / {formatUsageLimit(limit)}
-        </span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-surface-container-high">
-        <div
-          className="h-full rounded-full bg-primary"
-          style={{ width: `${width}%` }}
-        />
-      </div>
-    </div>
-  );
-}
+import "../settings.css";
 
 async function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -328,145 +278,6 @@ function PersonalDetailsSection({ account, profile, updateSection }) {
   );
 }
 
-function BillingSection({
-  billingPortalState,
-  currentPlanId,
-  currentPlanName,
-  hasBillingPortalAccess,
-  onManageBilling,
-  onRefreshUsage,
-  scrapeopsPolicy,
-  subscriptionDetails,
-  usageError,
-  usageLoading,
-  usageQuotas,
-}) {
-  const subscriptionStatus = String(subscriptionDetails.status || "").trim();
-
-  return (
-    <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary/80">Billing</p>
-          <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-            Plan And Consumption
-          </h2>
-        </div>
-        <button
-          className="inline-flex items-center justify-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-          onClick={onRefreshUsage}
-          type="button"
-        >
-          <span className="material-symbols-outlined text-[18px]">refresh</span>
-          Refresh
-        </button>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-        <div className="rounded-xl border border-outline-variant/10 bg-surface p-5">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-on-surface-variant">
-            Current Plan
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <div className="font-headline text-3xl font-bold text-on-surface">{currentPlanName}</div>
-            {subscriptionStatus ? (
-              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-primary">
-                {subscriptionStatus}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-3 text-sm leading-6 text-on-surface-variant">
-            Period: {formatDateTime(subscriptionDetails.current_period_start)} to{" "}
-            {formatDateTime(subscriptionDetails.current_period_end)}.
-          </p>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {hasBillingPortalAccess ? (
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={billingPortalState.loading}
-                onClick={onManageBilling}
-                type="button"
-              >
-                <span className="material-symbols-outlined text-[18px]">credit_card</span>
-                {billingPortalState.loading ? "Opening..." : "Manage billing"}
-              </button>
-            ) : (
-              <Link
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-                to="/pricing"
-              >
-                <span className="material-symbols-outlined text-[18px]">diamond</span>
-                Choose a plan
-              </Link>
-            )}
-            {currentPlanId !== "none" ? (
-              <Link
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                to="/pricing"
-              >
-                Compare plans
-              </Link>
-            ) : null}
-          </div>
-
-          {billingPortalState.error ? (
-            <p className="mt-4 rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
-              {billingPortalState.error}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="rounded-xl border border-outline-variant/10 bg-surface p-5">
-          <div className="mb-5 flex items-center justify-between gap-4">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-on-surface-variant">
-              This Month
-            </p>
-            {usageLoading ? (
-              <span className="text-xs font-medium text-on-surface-variant">Loading...</span>
-            ) : null}
-          </div>
-
-          {usageError ? (
-            <p className="mb-4 rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
-              {usageError}
-            </p>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {Object.entries(usageLabels).map(([quotaType, label]) => (
-              <UsageMetric
-                key={quotaType}
-                label={label}
-                quota={usageQuotas[quotaType] || { used: 0, limit: 0 }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-4 rounded-xl border border-outline-variant/10 bg-surface p-5 text-sm text-on-surface-variant md:grid-cols-2">
-        <div>
-          <div className="font-semibold text-on-surface">Company sites per run</div>
-          <div className="mt-2">
-            {Number(scrapeopsPolicy.company_sites_per_run) === -1
-              ? "Unlimited"
-              : String(scrapeopsPolicy.company_sites_per_run ?? 0)}
-          </div>
-        </div>
-        <div>
-          <div className="font-semibold text-on-surface">Runner-credit budget per run</div>
-          <div className="mt-2">
-            {Number(scrapeopsPolicy.effective_runner_credits_per_run) === -1
-              ? "Unlimited"
-              : String(scrapeopsPolicy.effective_runner_credits_per_run ?? 0)}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function DeleteAccountSection({
   accountEmail,
   confirmation,
@@ -552,8 +363,18 @@ function AssistedApplyConnectionCard() {
   );
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ onClose }) {
+  const navigate = useNavigate();
+  const [tab, setTab] = useState("subscriptions");
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  const close = () => onClose ? onClose() : navigate("/jobs");
   const { disconnect, getAccessToken, request, resolvePath } = useSession();
+  const preferences = useApiResource(() => request("/personalized-jobs/preferences"), [request], { cacheKey: "job-preferences", staleMs: 30000 });
   const { user: clerkUser } = useUser();
   const [draft, setDraft] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "" });
@@ -731,120 +552,34 @@ export default function SettingsPage() {
   const profile = draft?.profile || {};
   const account = draft?.account || {};
   const hasProfilePhoto = Boolean(String(profile.photo_data_url || profile.avatar_url || "").trim());
-  const usageQuotas = subscriptionData?.usage?.quotas || {};
   const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
   const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
   const subscriptionDetails = subscriptionData?.subscription || {};
   const hasBillingPortalAccess =
     currentPlanId !== "free" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
-  const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
 
-  return (
-    <div className="space-y-8">
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.24em] text-primary">Account</p>
-          <h1 className="mt-3 font-headline text-[2rem] font-extrabold leading-tight tracking-tight text-on-surface">
-            Account Settings
-          </h1>
-        </div>
-        <Link
-          className="inline-flex w-fit items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-          to="/career-assets"
-        >
-          <span className="material-symbols-outlined text-[18px]">inventory_2</span>
-          Career Assets
-        </Link>
+
+  const tabs = [["login", "person", "Login & Security"], ["subscriptions", "account_balance_wallet", "Subscriptions"], ["alerts", "notifications", "Job Alerts Preference"], ["email", "mail", "Email Providers"]];
+  const pref = preferences.data?.preferences || preferences.data || {};
+  const chips = [pref.target_roles, pref.job_functions, pref.employment_types, pref.work_arrangements, pref.experience_levels, pref.preferred_locations, pref.countries].flat().filter(value => typeof value === "string" && value);
+  return <dialog ref={dialogRef} className="runr-settings-dialog" aria-labelledby="settings-title" onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+    <div className="runr-settings-layout">
+      <nav className="runr-settings-menu" aria-label="Settings sections">
+        <div>{tabs.map(([id, icon, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}><span aria-hidden="true" className="material-symbols-outlined">{icon}</span>{label}{id === "email" ? <small>Coming soon</small> : null}</button>)}</div>
+        <div className="runr-settings-footer"><a href="https://userunr.com/privacy" target="_blank" rel="noreferrer"><span className="material-symbols-outlined">description</span>Privacy Policy</a><button type="button" onClick={disconnect}><span className="material-symbols-outlined">logout</span>Log Out</button></div>
+      </nav>
+      <section className="runr-settings-content">
+        <header><h1 id="settings-title">{tabs.find(([id]) => id === tab)[2]}</h1><button aria-label="Close settings" type="button" onClick={close}><span className="material-symbols-outlined">close</span></button></header>
+        {tab === "subscriptions" ? <>
+          <h2>Current Plan</h2>
+          {usageLoading ? <p role="status">Loading subscription…</p> : usageError ? <p role="alert">{usageError}</p> : <div className="runr-settings-plan"><div className="runr-settings-plan-heading"><strong>{currentPlanName}</strong><Link to="/pricing" onClick={onClose}>View Detail</Link><a href="https://userunr.com/terms-and-conditions" target="_blank" rel="noreferrer">Terms and Conditions</a></div><div className="runr-settings-plan-action"><p>{currentPlanId === "free" ? "Unlock more features with Runr Pro" : `Subscription status: ${subscriptionDetails.status || "Not available"}`}</p>{hasBillingPortalAccess ? <button type="button" disabled={billingPortalState.loading} onClick={handleManageBilling}>{billingPortalState.loading ? "Opening…" : "Manage subscription"}</button> : <Link to="/pricing" onClick={onClose}>Upgrade Now</Link>}</div></div>}
+          {billingPortalState.error ? <p role="alert">{billingPortalState.error}</p> : null}
+          <div className="runr-settings-refresh"><h3>Not Seeing Your Updated Subscription?</h3><p>If you’ve completed your payment or changed your subscription but don’t see the latest status, refresh your subscription or contact support for assistance.</p><button type="button" disabled={usageLoading} onClick={() => refreshUsage().catch(() => undefined)}>Refresh Status</button><a href="https://userunr.com/#contact" target="_blank" rel="noreferrer">Contact Support</a></div>
+        </> : null}
+        {tab === "alerts" ? <><div className="runr-settings-chips">{[...new Set(chips)].map(chip => <span key={chip}>{chip.replaceAll("_", " ")}</span>)}<Link to="/jobs" onClick={onClose}><span className="material-symbols-outlined">edit</span>Filters</Link></div><p className="runr-settings-coming-note">Automatic emails <span className="runr-coming-soon">Coming soon</span></p>{[["Instant Job Alerts", "Be the first to apply — get fresh, tailored job alerts within an hour of posting.", ["Up to 1 alert/day", "Up to 2 alerts/day", "Up to 5 alerts/day", "Unlimited"]], ["Digest Job Alerts", "Receive a curated list of matching job opportunities in a single email, delivered daily or weekly.", ["Daily", "Weekly"]]].map(([title, description, options]) => <section className="runr-settings-alert" key={title}><h2>{title}<span className="runr-coming-soon">Coming soon</span></h2><div><label>Enable {title}<small>{description}</small></label><button type="button" role="switch" aria-label={`Enable ${title}`} aria-checked="false" disabled className="runr-settings-switch"><span /></button></div><div><label htmlFor={title}>Job Alerts Frequency</label><select id={title} disabled defaultValue={options[0]}>{options.map(option => <option key={option}>{option}</option>)}</select></div></section>)}</> : null}
+        {tab === "email" ? <><h2>Automatic emails <span className="runr-coming-soon">Coming soon</span></h2><p className="runr-settings-coming-note">Connect an email provider to receive job alerts when this feature becomes available.</p><button type="button" disabled className="runr-settings-provider">Connect email provider</button></> : null}
+        {tab === "login" ? <>{loading && !draft ? <p role="status">Loading account…</p> : error && !draft ? <><p role="alert">{error}</p><button type="button" onClick={() => refresh().catch(() => undefined)}>Retry</button></> : draft ? <div className="runr-settings-account"><ProfileCard account={account} profile={profile} hasProfilePhoto={hasProfilePhoto} onPhotoRemove={handlePhotoRemove} onPhotoUpload={handlePhotoUpload} photoFileInputRef={photoFileInputRef} photoUploadState={photoUploadState} /><PersonalDetailsSection account={account} profile={profile} updateSection={updateSection} /><div className="runr-settings-save"><p role="status">{saveState.error || saveState.message}</p><button type="button" onClick={handleDiscard}>Discard Changes</button><button type="button" disabled={!isDirty} onClick={handleSave}>Save Account</button></div><AssistedApplyConnectionCard /><DeleteAccountSection accountEmail={account.email || ""} confirmation={deleteConfirmation} deleteState={deleteState} onConfirmationChange={setDeleteConfirmation} onDelete={handleDeleteAccount} /></div> : null}</> : null}
       </section>
-
-      {loading && !draft ? (
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 text-on-surface-variant">
-          Loading account...
-        </div>
-      ) : error && !draft ? (
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8">
-          <p className="text-error">{error}</p>
-          <button
-            className="mt-4 rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
-            onClick={() => refresh().catch(() => undefined)}
-            type="button"
-          >
-            Retry
-          </button>
-        </div>
-      ) : draft ? (
-        <div className="space-y-8">
-          <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-            <div className="flex flex-col gap-8 xl:col-span-4">
-              <ProfileCard
-                account={account}
-                hasProfilePhoto={hasProfilePhoto}
-                onPhotoRemove={handlePhotoRemove}
-                onPhotoUpload={handlePhotoUpload}
-                photoFileInputRef={photoFileInputRef}
-                photoUploadState={photoUploadState}
-                profile={profile}
-              />
-            </div>
-
-            <div className="flex flex-col gap-8 xl:col-span-8">
-              <PersonalDetailsSection
-                account={account}
-                profile={profile}
-                updateSection={updateSection}
-              />
-              <BillingSection
-                billingPortalState={billingPortalState}
-                currentPlanId={currentPlanId}
-                currentPlanName={currentPlanName}
-                hasBillingPortalAccess={hasBillingPortalAccess}
-                onManageBilling={handleManageBilling}
-                onRefreshUsage={() => refreshUsage().catch(() => undefined)}
-                scrapeopsPolicy={scrapeopsPolicy}
-                subscriptionDetails={subscriptionDetails}
-                usageError={usageError}
-                usageLoading={usageLoading}
-                usageQuotas={usageQuotas}
-              />
-              <AssistedApplyConnectionCard />
-
-              <div className="sticky bottom-8 self-end rounded-xl border border-outline-variant/20 bg-surface-container-lowest/80 p-4 shadow-soft backdrop-blur-[20px]">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <span className="mr-auto text-sm text-on-surface-variant sm:pl-2">
-                    {saveState.error
-                      ? saveState.error
-                      : saveState.message || (isDirty ? "You have unsaved changes" : "Everything is saved")}
-                  </span>
-                  <button
-                    className="rounded px-5 py-2.5 text-sm font-medium text-on-surface-variant transition-colors hover:text-on-surface active:scale-[0.98]"
-                    onClick={handleDiscard}
-                    type="button"
-                  >
-                    Discard Changes
-                  </button>
-                  <button
-                    className="flex items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-primary to-primary-container px-6 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:saturate-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={!isDirty}
-                    onClick={handleSave}
-                    type="button"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">save</span>
-                    Save Account
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DeleteAccountSection
-            accountEmail={account.email || ""}
-            confirmation={deleteConfirmation}
-            deleteState={deleteState}
-            onConfirmationChange={setDeleteConfirmation}
-            onDelete={handleDeleteAccount}
-          />
-        </div>
-      ) : null}
     </div>
-  );
+  </dialog>;
 }
