@@ -62,7 +62,8 @@ fi
 systemd-run --wait --pipe --collect --unit="runr-external-migrate-$short" \
     -p User=runr -p Group=runr -p SupplementaryGroups=runr-database -p WorkingDirectory="$release" \
     -p EnvironmentFile=/etc/runr/customer-candidate-20261010/api.env \
-    -E LD_LIBRARY_PATH=/usr/local/lib/runr/sqlite-3.54.0 -E RUNR_MIGRATION_HEAD=079_external_jobs \
+    -p UnsetEnvironment=RUNR_MIGRATION_HEAD \
+    -E LD_LIBRARY_PATH=/usr/local/lib/runr/sqlite-3.54.0 \
     "$python_bin" -m backend.database.migrate --database /var/lib/runr/customer-candidate-db/backend.sqlite3 \
     > "$evidence/migrations.log" 2>&1
 cp /etc/nginx/sites-available/runr-public "$evidence/nginx-before.conf"
