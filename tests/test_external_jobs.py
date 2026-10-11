@@ -22,18 +22,22 @@ class ExternalJobsTests(unittest.TestCase):
         <div class="article__content__view__field__label">Company</div>
         <div class="article__content__view__field__value">Siemens AG</div></div>
         <div class="article__content__view__field"><div class="article__content__view__field__label">Location(s)</div>
-        <div class="article__content__view__field__value">Erlangen, Germany</div></div></article>
+        <div class="article__content__view__field__value">Erlangen, Germany</div></div>
+        <div class="article__content__view__field"><div class="article__content__view__field__label">Job type</div>
+        <div class="article__content__view__field__value">Full-time</div></div></article>
         <article class="article--details">''' + DESCRIPTION + '</article>'
         fields, _ = parse_job_page(html, URL)
         self.assertEqual(fields['title'], 'Advanced Digital Engineer')
         self.assertEqual(fields['company'], 'Siemens AG')
         self.assertEqual(fields['location'], 'Erlangen, Germany')
+        self.assertEqual(fields['employment_type'], 'full_time')
         self.assertEqual(fields['description'], DESCRIPTION)
 
     def test_ai_preview_fills_fields_without_persisting_before_confirmation(self):
         app = self._backend()
         fields = {'url': URL, 'title': 'Software Engineer', 'company': 'Example', 'location': 'Berlin', 'description': DESCRIPTION}
-        generated = {'employment_type': {'value': 'full_time', 'evidence': 'full-time'},
+        fields['source_metadata'] = {'job type': 'Full-time', 'experience level': 'Mid-level Professional', 'work mode': 'Office/Site only'}
+        generated = {'employment_type': {'value': 'full_time', 'evidence': 'job type: Full-time'},
                      'experience_level': {'value': 'mid', 'evidence': 'mid-level'},
                      'work_arrangement': {'value': 'onsite', 'evidence': 'on-site'},
                      'company': {'value': 'Invented', 'evidence': 'Example'}}
