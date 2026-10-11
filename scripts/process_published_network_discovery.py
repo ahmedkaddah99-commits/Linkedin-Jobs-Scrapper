@@ -32,6 +32,29 @@ def _proxy_url() -> str:
     explicit = (os.getenv("WEBSHARE_PROXY_URL") or os.getenv("WEBSHARE_PROXY") or "").strip()
     if explicit:
         return explicit
+    api_key = (os.getenv("WEBSHARE_API_KEY") or "").strip()
+    if api_key:
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            response = session.get(
+                "https://proxy.webshare.io/api/v2/proxy/list/",
+                params={"mode": "direct", "page": 1, "page_size": 100},
+                headers={"Authorization": f"Token {api_key}"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            for proxy in response.json().get("results", []):
+                if not proxy.get("valid", True):
+                    continue
+                host, port = proxy.get("proxy_address"), proxy.get("port")
+                username, password = proxy.get("username"), proxy.get("password")
+                if host and port and username and password:
+                    return f"http://{quote(str(username), safe='')}:{quote(str(password), safe='')}@{host}:{port}"
+        except (requests.RequestException, ValueError, TypeError):
+            pass
+        finally:
+            session.close()
     username = (os.getenv("WEBSHARE_PROXY_USERNAME") or "").strip()
     password = (os.getenv("WEBSHARE_PROXY_PASSWORD") or "").strip()
     if not username or not password:
