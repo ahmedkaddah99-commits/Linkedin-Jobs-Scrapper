@@ -4243,6 +4243,32 @@ MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
 ))
 
 
+def _apply_external_jobs(connection):
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS external_jobs (
+            job_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            row_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, source_url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_external_jobs_owner ON external_jobs(user_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS external_job_import_attempts (
+            user_id TEXT NOT NULL,
+            day TEXT NOT NULL,
+            attempts INTEGER NOT NULL,
+            PRIMARY KEY(user_id, day)
+        );
+    """)
+
+
+MIGRATIONS = (*MIGRATIONS, Migration.from_callable(
+    '079_external_jobs', 'Account-owned URL imports using the shared Jobs reader.', _apply_external_jobs,
+))
+
+
 def current_migration_head() -> str:
     """Return the registry head used by release compatibility checks."""
 

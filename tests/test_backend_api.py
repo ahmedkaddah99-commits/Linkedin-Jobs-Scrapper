@@ -2549,96 +2549,28 @@ class BackendApiTests(unittest.TestCase):
             )
         )
 
-    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
-    def test_api_supports_quick_apply_runs_without_creating_a_workspace(self):
-        status, payload = self._request(
-            "POST",
-            "/quick-apply/runs",
-            {
-                "workspace_id": "api_workspace",
-                "execution_mode": "sync",
-                "manual_urls": [
-                    "https://company.example/jobs/1",
-                    "https://company.example/jobs/1",
-                    "https://company.example/jobs/2",
-                ],
-            },
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(payload["accepted_url_count"], 2)
-        self.assertEqual(payload["invalid_entries"], [])
-        self.assertEqual(payload["run"]["workspace_id"], "api_workspace")
-        self.assertEqual(payload["run"]["metadata"]["run_kind"], "quick_apply")
-        self.assertEqual(payload["run"]["status"], "completed")
-        resolved_settings = payload["run"]["run_plan"]["resolved_run_settings"]
-        self.assertEqual(resolved_settings["stage4_retries"], 1)
-        self.assertEqual(resolved_settings["stage4_retry_sleep"], 0)
-        self.assertEqual(resolved_settings["stage4_sleep_seconds"], 0)
-        self.assertEqual(resolved_settings["stage4_ats_max_attempts"], 1)
+    def test_quick_apply_endpoint_is_retired(self):
+        status, _ = self._request("POST", "/quick-apply/runs", {"manual_urls": ["https://example.com/jobs/1"]})
+        self.assertEqual(status, 404)
 
-        status, jobs_payload = self._request("GET", f"/runs/{payload['run']['id']}/jobs")
+    def test_external_job_import_and_shared_detail_routes(self):
+        description = "Responsibilities: Build customer software and maintain reliable services. Requirements: Python and three years of engineering experience. Full-time position based in Berlin."
+        with patch("backend.application.external_jobs.openrouter_generate", side_effect=RuntimeError("unavailable")):
+            status, result = self._request("POST", "/personalized-jobs/import", {
+                "url": "https://example.com/jobs/engineer", "manual": True,
+                "title": "Software Engineer", "company": "Example", "description": description,
+            })
         self.assertEqual(status, 200)
-        self.assertIn("generated_jobs", jobs_payload["job_sets"])
-
-    def test_quick_apply_creates_internal_workspace_when_workspace_id_is_omitted(self):
-        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
-            status, payload = self._request(
-                "POST",
-                "/quick-apply/runs",
-                {
-                    "execution_mode": "sync",
-                    "manual_urls": ["https://company.example/jobs/no-workspace"],
-                },
-            )
-        self.assertEqual(status, 201)
-        self.assertEqual(payload["accepted_url_count"], 1)
-        self.assertEqual(payload["run"]["metadata"]["run_kind"], "quick_apply")
-
-        workspace = self.app.get_workspace(payload["run"]["workspace_id"])
-        self.assertEqual(workspace.workspace_type, "internal")
-        self.assertTrue(workspace.metadata["internal"])
-
-    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
-    def test_quick_apply_accepts_cv_generation_and_preview_settings(self):
-        workspace_cv_asset = self._upload_workspace_cv(
-            filename="quick-apply-resume.txt",
-            file_bytes=b"Quick Apply CV Snapshot\nFocused application baseline.",
-        )
-
-        status, payload = self._request(
-            "POST",
-            "/quick-apply/runs",
-            {
-                "workspace_id": "api_workspace",
-                "execution_mode": "planned",
-                "manual_urls": ["https://company.example/jobs/quick-settings"],
-                "settings": {
-                    "workspace_cv_asset_id": workspace_cv_asset["asset_id"],
-                    "cv_generation_mode": "light_customization",
-                    "personalization_scope": "baseline_plus_selected_assets",
-                    "cv_template": "compact",
-                    "cv_color_scheme": "forest",
-                    "cv_font": "Aptos",
-                    "include_photo": False,
-                },
-            },
-        )
-
-        self.assertEqual(status, 201)
-        resolved_settings = payload["run"]["run_plan"]["resolved_run_settings"]
-        self.assertEqual(resolved_settings["workspace_cv_asset_id"], workspace_cv_asset["asset_id"])
-        self.assertEqual(resolved_settings["workspace_cv_text"], "Quick Apply CV Snapshot\nFocused application baseline.")
-        self.assertEqual(resolved_settings["cv_generation_mode"], "light_customization")
-        self.assertEqual(resolved_settings["personalization_scope"], "baseline_plus_selected_assets")
-        self.assertEqual(resolved_settings["cv_template"], "compact")
-        self.assertEqual(resolved_settings["cv_color_scheme"], "forest")
-        self.assertEqual(resolved_settings["cv_font"], "Aptos")
-        self.assertFalse(resolved_settings["include_photo"])
-        self.assertEqual(resolved_settings["manual_urls_inline"], ["https://company.example/jobs/quick-settings"])
-        self.assertEqual(resolved_settings["stage4_retries"], 1)
-        self.assertEqual(resolved_settings["stage4_retry_sleep"], 0)
-        self.assertEqual(resolved_settings["stage4_sleep_seconds"], 0)
-        self.assertEqual(resolved_settings["stage4_ats_max_attempts"], 1)
+        job_id = result["job"]["canonical_job_id"]
+        status, detail = self._request("GET", f"/personalized-jobs/{job_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["original_posting"]["description_text"], description)
+        status, listing = self._request("GET", "/personalized-jobs/external")
+        self.assertEqual(status, 200)
+        self.assertEqual(listing["jobs"][0]["canonical_job_id"], job_id)
+        status, saved = self._request("POST", f"/personalized-jobs/{job_id}/save", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["state"], "saved")
 
     def test_workspace_builder_source_validation_returns_runtime_hints(self):
         status, payload = self._request(

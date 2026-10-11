@@ -2,6 +2,17 @@
 
 # Schema and migrations
 
+## Account-owned external postings (2026-10-11)
+
+Migration `079_external_jobs` adds private posting snapshots unique by
+`(user_id, source_url)` and a daily import-attempt ledger. Snapshots use private
+IDs and preserve catalog enrichment when the supplied URL is already published.
+They survive catalog retirement and never modify publication membership.
+Every read and action resolves the account-owned snapshot; indexed pagination
+orders by `updated_at, job_id`. The shared job reader and document worker consume
+the existing row/projection contract. See the
+[application service contract](../05-subsystems/personalized-jobs-and-customer-app-services.md).
+
 This is the primary doc of the 03-data doc group (schema, Turso/libSQL connection, object storage). The WS-5 subsystem primary is [domain-model.md](../01-architecture/domain-model.md), which owns the repository/config/domain slices. LIVE PRODUCTION = UNKNOWN: no database was queried, and nothing here says which migrations are applied anywhere.
 
 ## 1. Purpose and capabilities

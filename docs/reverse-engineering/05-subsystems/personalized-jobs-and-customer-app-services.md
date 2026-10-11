@@ -2,6 +2,29 @@
 
 # Personalized jobs and customer application services (WS-4, primary)
 
+## External jobs (2026-10-11)
+
+`POST /personalized-jobs/import` accepts one public job URL. New postings are
+scraped within a 15-second, 2 MB HTML bound, validated, and passed through the
+same Nemo classification and grounded description functions as the catalog.
+Imports are account-owned snapshots in migration `079_external_jobs`; importing
+a published URL preserves its existing enrichment without another provider call.
+`GET /personalized-jobs/external` returns 25 postings per page with `next_cursor`.
+Imported IDs resolve through the existing job detail, disposition, reporting,
+resume review and document worker paths. They never enter the public catalog.
+
+Fetch failures return `manual_required`, a short message and bounded extracted
+fields. Manual submissions require a job title, at least 100 description
+characters and job-content signals. Limits are URL 2,048; title/company 200;
+location 300; description 50,000. Network/model attempts are limited to 20 per
+account per UTC day. Model failure preserves employer text and offers Retry;
+generated descriptions do not replace the original. Public URL validation and
+redirect/DNS checks reuse the official-site fetcher. Quick Apply's page, API
+endpoint, internal workspace creation and workflow builder are retired.
+
+Coverage: `tests/test_external_jobs.py`, the external import and retired endpoint
+checks in `tests/test_backend_api.py`, and `frontend/e2e/external-jobs.spec.ts`.
+
 ## Published network discovery and contact email (2026-10-11)
 
 Migration `078_published_network_discovery` stores one public-web discovery

@@ -28,7 +28,6 @@ const JobWorkspacePage = lazy(() => import("./pages/JobWorkspacePage"));
 const PricingPage = lazy(() => import("./pages/PricingPage"));
 const ReferralsPage = lazy(() => import("./pages/ReferralsPage"));
 const LinkedInConnectionsGuidePage = lazy(() => import("./pages/LinkedInConnectionsGuidePage"));
-const QuickApplyPage = lazy(() => import("./pages/QuickApplyPage"));
 const RunDetailPage = lazy(() => import("./pages/RunDetailPage"));
 const RunsPage = lazy(() => import("./pages/RunsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
@@ -220,7 +219,7 @@ function AuthenticatedApp() {
     <AppShell muteSidebar={!hasSession}>
       <UpgradeModalHost />
       {hasSession ? (
-        <RouteErrorBoundary key={/^\/jobs(?:\/[^/]+)?$/.test(location.pathname) && location.pathname !== "/jobs/hidden" ? "/jobs" : location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
+        <RouteErrorBoundary key={/^\/external-jobs(?:\/[^/]+)?$/.test(location.pathname) ? "/external-jobs" : /^\/jobs(?:\/[^/]+)?$/.test(location.pathname) && location.pathname !== "/jobs/hidden" ? "/jobs" : location.pathname === "/profile" ? location.pathname : `${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<Navigate replace to="/jobs" />} />
@@ -232,7 +231,7 @@ function AuthenticatedApp() {
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/dashboard" element={<Navigate replace to="/jobs" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
-              <Route path="/quick-apply" element={<QuickApplyPage />} />
+              <Route path="/external-jobs/:jobId?" element={<PersonalizedJobsPage external />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<RunDetailPage />} />
               <Route path="/job-workspaces/:runId/:jobId" element={<JobWorkspacePage />} />

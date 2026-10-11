@@ -155,7 +155,6 @@ from backend.domain.tracker import (
     review_is_actionable_tracker_item,
     review_placed_in_tracker_at,
 )
-from backend.orchestration.workspace_builder import _slugify, build_quick_apply_workflow_template
 from backend.profiles.cv_profile_extraction import (
     extract_cv_profile_fallback,
     normalize_profile_payload,
@@ -2723,82 +2722,6 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
             overrides.setdefault("generated_memory_cards", memory_cards)
 
     return overrides
-
-
-def _build_quick_apply_run_input_overrides(application, user, workspace, payload: dict) -> dict:
-    requested_settings = dict(payload.get("settings") or {})
-    requested_overrides = {
-        **requested_settings,
-        **dict(payload.get("run_input_overrides") or {}),
-    }
-    workspace_settings = {
-        **dict(getattr(workspace, "settings", {}) or {}),
-        **requested_overrides,
-    }
-    overrides = _build_run_input_overrides(
-        user,
-        {
-            "run_mode": payload.get("run_mode"),
-            "run_input_overrides": requested_overrides,
-        },
-        workspace_settings=workspace_settings,
-    )
-    overrides.setdefault("stage4_retries", 1)
-    overrides.setdefault("stage4_retry_sleep", 0)
-    overrides.setdefault("stage4_sleep_seconds", 0)
-    overrides.setdefault("stage4_ats_max_attempts", 1)
-
-    asset_id = str(overrides.get("workspace_cv_asset_id") or "").strip()
-    if asset_id:
-        runtime_settings, _workspace_cv_asset = _resolve_workspace_cv_binding(application, user, asset_id)
-        overrides.update(runtime_settings)
-    return overrides
-
-
-def _quick_apply_workspace_id(user) -> str:
-    user_id = _slugify(str(getattr(user, "user_id", "") or "user")) or "user"
-    return f"quick_apply_{user_id}"
-
-
-def _ensure_quick_apply_workspace(application, user):
-    workspace_id = _quick_apply_workspace_id(user)
-    try:
-        return application.get_workspace(workspace_id)
-    except KeyError:
-        pass
-
-    workflow = build_quick_apply_workflow_template()
-    application.upsert_workflow_template(workflow)
-    return application.upsert_workspace(
-        WorkspaceDefinition(
-            id=workspace_id,
-            name="Quick Apply Workspace",
-            workflow_template_id=workflow.id,
-            owner_user_id=user.user_id,
-            description="Internal workspace used for quick applications.",
-            workspace_type="internal",
-            settings={
-                "automation_flow": "tailored_documents",
-                "config_loader": "tailored_documents",
-                "manual_sources_are_preapproved": True,
-            },
-            feature_flags={"enable_manual_urls": True, "tailored_document_generation": True},
-            profiles=[
-                ProfileRef(
-                    id=f"{workspace_id}_profile",
-                    label="Primary Job Seeker Profile",
-                    settings={"automation_flow": "tailored_documents"},
-                )
-            ],
-            sources=[JobSource(id="source_exact_job_links", connector_id="curated_job_urls")],
-            metadata={
-                "automation_flow": "tailored_documents",
-                "builder_mode": "quick_apply",
-                "internal": True,
-                "created_by": "system",
-            },
-        )
-    )
 
 
 def _referral_contacts_from_user(user) -> list[ReferralContactRecord]:

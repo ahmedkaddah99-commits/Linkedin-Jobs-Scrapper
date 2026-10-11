@@ -5,6 +5,7 @@ test("posting navigation retains the filtered paginated list without another fee
   const job = (id: string) => ({ canonical_job_id: id, company: "Acme", title: `Analyst ${id}`, user_state: "none", description_intelligence: { state: "available", prompt_version: "runr_description_nemo_v3" }, runr_summary: { overview: "Analyze business processes." } });
   await page.route("**/v1/**", (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/saved-search")) return route.fulfill({ json: { filters: { role: ["Data Analyst"] } } });
     if (url.pathname.endsWith("/personalized-jobs")) {
       feeds.push(url.search);
       const second = url.searchParams.has("cursor");
@@ -15,11 +16,6 @@ test("posting navigation retains the filtered paginated list without another fee
     return route.fulfill({ json: {} });
   });
   await page.goto("/jobs");
-  await page.getByRole("button", { name: "Choose Job Function", exact: true }).click();
-  const input = page.getByRole("textbox", { name: "Other job functions", exact: true });
-  await input.fill("Business Analyst");
-  await input.press("Enter");
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(page.locator(".jobs-list-card")).toHaveCount(2);
   expect(feeds).toHaveLength(2);
   await page.getByRole("button", { name: /Analyst first/ }).first().click();

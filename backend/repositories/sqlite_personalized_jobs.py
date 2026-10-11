@@ -1840,6 +1840,50 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             cache.pop(oldest_key, None)
         cache[cache_key] = dict(capabilities)
 
+    def get_external_job_row(self, user_id: str, job_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? AND job_id=?",
+                                     (str(user_id), str(job_id))).fetchone()
+        return _decode(row["row_json"], {}) if row else None
+
+    def list_external_job_rows(self, user_id: str, *, offset: int = 0, limit: int = 25) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? ORDER BY updated_at DESC,job_id DESC LIMIT ? OFFSET ?",
+                                      (str(user_id), limit, offset)).fetchall()
+            total = connection.execute("SELECT COUNT(*) AS n FROM external_jobs WHERE user_id=?", (str(user_id),)).fetchone()['n']
+        return {'rows': [_decode(row["row_json"], {}) for row in rows], 'total': total,
+                'next_cursor': str(offset + limit) if offset + limit < total else None}
+
+    def find_job_by_url(self, user_id: str, source_url: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            own = connection.execute("SELECT row_json FROM external_jobs WHERE user_id=? AND source_url=?",
+                                     (str(user_id), str(source_url))).fetchone()
+            if own:
+                return _decode(own["row_json"], {})
+            row = connection.execute(self._published_jobs_sql() + " AND (j.canonical_url=? OR v.apply_url=?) LIMIT 1",
+                                     (str(self._head_publication_id(connection) or ""), source_url, source_url)).fetchone()
+        return _row_payload(row) if row else None
+
+    def save_external_job_row(self, user_id: str, source_url: str, row: Mapping[str, Any]) -> dict[str, Any]:
+        now = utc_now_iso()
+        def write(connection):
+            connection.execute("""INSERT INTO external_jobs VALUES (?,?,?,?,?,?)
+                ON CONFLICT(user_id,source_url) DO UPDATE SET row_json=excluded.row_json,updated_at=excluded.updated_at""",
+                (row["canonical_job_id"], str(user_id), source_url, _json(row), now, now))
+        self._run_transaction(write)
+        return self.find_job_by_url(user_id, source_url)
+
+    def reserve_external_job_import(self, user_id: str) -> None:
+        day = utc_now_iso()[:10]
+        def write(connection):
+            row = connection.execute("SELECT attempts FROM external_job_import_attempts WHERE user_id=? AND day=?",
+                                     (str(user_id), day)).fetchone()
+            if row and row["attempts"] >= 20:
+                raise ValueError("Daily URL import limit reached. Try again tomorrow.")
+            connection.execute("INSERT INTO external_job_import_attempts VALUES (?,?,1) "
+                               "ON CONFLICT(user_id,day) DO UPDATE SET attempts=attempts+1", (str(user_id), day))
+        self._run_transaction(write)
+
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(

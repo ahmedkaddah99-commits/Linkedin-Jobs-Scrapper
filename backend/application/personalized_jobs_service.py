@@ -902,6 +902,32 @@ class PersonalizedJobsService:
     def store(self):
         return self.repositories.personalized_jobs_store
 
+    def _job_row(self, user_id: str, posting_id: str):
+        if self.store is None:
+            return None
+        if str(posting_id).startswith('import_'):
+            return self.store.get_external_job_row(user_id, posting_id)
+        return self.store.get_published_job_row(posting_id)
+
+    def import_job(self, user_id: str, payload: Mapping[str, Any], *, plan_id: str = DEFAULT_PLAN_ID):
+        from backend.application.external_jobs import import_job
+        return import_job(self, user_id, payload, plan_id=plan_id)
+
+    def external_jobs(self, user_id: str, *, plan_id: str = DEFAULT_PLAN_ID, cursor: str = ''):
+        self._assert_catalog_access(user_id)
+        try:
+            offset = int(cursor or 0)
+        except (TypeError, ValueError) as error:
+            raise ValueError('Invalid external jobs cursor.') from error
+        if offset < 0 or offset > 1000000:
+            raise ValueError('Invalid external jobs cursor.')
+        page = self.store.list_external_job_rows(user_id, offset=offset)
+        rows = page['rows']
+        dispositions = self.store.list_dispositions_for_jobs(user_id, [row['canonical_job_id'] for row in rows])
+        jobs = [_job_projection(row, dispositions.get(row['canonical_job_id']), {'state': 'available'},
+                                row.get('external_description'), {}, self._company_profile(row)) for row in rows]
+        return {'jobs': jobs, 'total': page['total'], 'next_cursor': page['next_cursor'], 'data_mode': 'real'}
+
     def _assert_catalog_access(self, user_id: str) -> None:
         if not catalog_user_access(getattr(self.repositories, "config_store", None), user_id):
             raise PermissionError("jobs_catalog_rollout_not_available")
@@ -974,6 +1000,9 @@ class PersonalizedJobsService:
         shared_entries: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         original = build_preserved_original_posting(row)
+        if row.get('external_job'):
+            description = row.get('external_description') or {}
+            return {**description, 'state': description.get('state') or 'available', 'original_posting': original}
         key = build_intelligence_cache_key(
             row,
             intelligence_kind="description",
@@ -1007,7 +1036,7 @@ class PersonalizedJobsService:
         """
         if self.store is None:
             return {"state": "unavailable", "cache_ids": []}
-        row = self.store.get_published_job_row(posting_id)
+        row = self._job_row(user_id, posting_id)
         if row is None:
             raise KeyError("job_not_found")
         keys: list[dict[str, str]] = [
@@ -1053,6 +1082,11 @@ class PersonalizedJobsService:
         evaluation_record: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         snapshot = self._saved_matching_profile(user_id)
+        if row.get('external_job'):
+            from backend.application.profile_job_matching import build_job_facts
+            facts = build_job_facts({**row, 'summary_json': (row.get('external_description') or {}).get('summary'),
+                                    'filters_json': row.get('filter_json')})
+            return evaluate_profile_match(facts, snapshot)
         facts = self.store.list_profile_job_facts([row.get("current_version_id")]) if self.store is not None else {}
         return evaluate_profile_match(facts.get(_text(row.get("current_version_id"))), snapshot)
 
@@ -1106,7 +1140,7 @@ class PersonalizedJobsService:
                 **fields,
             }
 
-        row = self.store.get_published_job_row(canonical_job_id)
+        row = self._job_row(user_id, canonical_job_id)
         if row is None:
             return response(finish(state="failed", payload={}, error="job_version_not_found"))
 
@@ -1221,7 +1255,7 @@ class PersonalizedJobsService:
         if _text(mode).casefold() in {"rewrite", "generate", "tailored"}:
             if normalize_plan_id(plan_id) == DEFAULT_PLAN_ID:
                 raise PermissionError("runr_pro_required_for_rewriting")
-            row = self.store.get_published_job_row(posting_id) if self.store is not None else None
+            row = self._job_row(user_id, posting_id)
             if row is None:
                 raise KeyError("job_not_found")
             preferences = self.get_preferences(user_id)
@@ -1502,7 +1536,7 @@ class PersonalizedJobsService:
         self._assert_catalog_access(user_id)
         if self.store is None:
             return None
-        row = self.store.get_published_job_row(posting_id)
+        row = self._job_row(user_id, posting_id)
         if row is None:
             return None
         # These independent, read-only projections use separate repository
@@ -1540,6 +1574,8 @@ class PersonalizedJobsService:
             applicant_intelligence,
             {"state": "pending", "score": None},
         )
+        result['external_job'] = bool(row.get('external_job'))
+        result['enrichment_state'] = row.get('enrichment_state')
         result["network_discovery"] = self.store.get_published_network_discovery(
             _text(row.get("current_version_id")), _text(row.get("content_hash"))
         )
@@ -1762,7 +1798,7 @@ class PersonalizedJobsService:
         })
 
     def set_state(self, user_id: str, posting_id: str, state: str, *, reason_code: str = "") -> dict[str, Any]:
-        if self.store is None or self.store.get_published_job_row(posting_id) is None:
+        if self._job_row(user_id, posting_id) is None:
             raise KeyError("job_not_found")
         state = _norm(state).replace(" ", "_")
         if state not in {"saved", "hidden", "none", "applied"}:
@@ -1774,7 +1810,7 @@ class PersonalizedJobsService:
         return disposition
 
     def report(self, user_id: str, posting_id: str, *, reason_code: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        if self.store is None or self.store.get_published_job_row(posting_id) is None:
+        if self._job_row(user_id, posting_id) is None:
             raise KeyError("job_not_found")
         return self.store.record_event(user_id, event_name="incorrect_filter_reported", canonical_job_id=posting_id, reason_code=_text(reason_code) or "unspecified", payload=payload)
 

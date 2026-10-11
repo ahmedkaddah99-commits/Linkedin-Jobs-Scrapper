@@ -32,7 +32,6 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix('GET', ('workers',), _handle_get, auth_required=True, name='workspace.workers')
     registry.prefix('POST', ('career-url-discovery',), _handle_post, auth_required=True, name='workspace.career_url_discovery')
     registry.prefix('POST', ('workspaces',), _handle_post, auth_required=True, name='workspace.workspaces.post')
-    registry.prefix('POST', ('quick-apply',), _handle_post, auth_required=True, name='workspace.quick_apply')
     registry.prefix('POST', ('workspace-builder',), _handle_post, auth_required=True, name='workspace.builder.post')
     registry.prefix('POST', ('workflow-templates',), _handle_post, auth_required=True, name='workspace.templates.post')
     registry.prefix('POST', ('runs',), _handle_post, auth_required=True, name='workspace.runs.post')
@@ -396,76 +395,6 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             existing_workspace.owner_user_id if existing_workspace else user.user_id
                         )
                         self._send_json(application.upsert_workspace(payload).to_dict(), status=HTTPStatus.CREATED)
-                        return
-
-    if segments == ["quick-apply", "runs"]:
-                        user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
-                        context = self._auth_context()
-                        workspace_id = str(payload.get("workspace_id") or "").strip()
-                        if workspace_id:
-                            if not application.user_can_access_workspace(user, workspace_id):
-                                raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
-                            workspace = application.get_workspace(workspace_id)
-                        else:
-                            workspace = _ensure_quick_apply_workspace(application, user)
-                            workspace_id = workspace.id
-                        run_input_overrides = _build_quick_apply_run_input_overrides(
-                            application,
-                            user,
-                            workspace,
-                            payload,
-                        )
-                        check_and_increment_quota(
-                            application,
-                            user.user_id,
-                            "runs_per_month",
-                            context.plan_id,
-                            route="/quick-apply/runs",
-                            quota_overrides=context.quota_overrides,
-                        )
-                        execution_mode = str(payload.get("execution_mode") or "sync").strip().lower()
-                        max_attempts = max(1, int(payload.get("max_attempts") or 1))
-                        manual_urls = payload.get("manual_urls") or payload.get("urls") or []
-                        if execution_mode == "queued":
-                            run, invalid_entries = application.start_quick_apply_run(
-                                workspace_id,
-                                manual_urls=manual_urls,
-                                run_input_overrides=run_input_overrides,
-                                execute=False,
-                                enqueue=True,
-                                requested_by=f"api:{user.user_id}",
-                                max_attempts=max_attempts,
-                            )
-                        elif execution_mode == "planned":
-                            run, invalid_entries = application.start_quick_apply_run(
-                                workspace_id,
-                                manual_urls=manual_urls,
-                                run_input_overrides=run_input_overrides,
-                                execute=False,
-                                enqueue=False,
-                                requested_by=f"api:{user.user_id}",
-                                max_attempts=max_attempts,
-                            )
-                        elif execution_mode == "sync":
-                            run, invalid_entries = application.start_quick_apply_run(
-                                workspace_id,
-                                manual_urls=manual_urls,
-                                run_input_overrides=run_input_overrides,
-                                execute=True,
-                                enqueue=False,
-                                requested_by=f"api:{user.user_id}",
-                                max_attempts=max_attempts,
-                            )
-                        else:
-                            raise ValueError("execution_mode must be one of: queued, planned, sync")
-                        self._send_json(
-                            {
-                                "run": run.to_dict(),
-                                "accepted_url_count": int(run.metadata.get("accepted_url_count") or 0),
-                                "invalid_entries": invalid_entries,
-                            },
-                            status=HTTPStatus.CREATED,
-                        )
                         return
 
     if segments == ["workspace-builder", "workspaces"]:

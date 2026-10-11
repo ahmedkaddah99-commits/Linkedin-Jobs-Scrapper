@@ -2,6 +2,22 @@
 
 # Customer web frontend (WS-8)
 
+## Shared external job reader (2026-10-11)
+
+`/external-jobs/:jobId?` renders the same `PersonalizedJobsPage` and
+`JobsWorkspace` as recommended Jobs. Only acquisition and the list endpoint
+differ: a single URL form imports/enriches a posting, then opens the shared
+reader with its existing preparation, CV review, save, report and apply actions.
+Future reader changes therefore apply to both sections. Failed scraping opens
+editable prefilled fields with matching backend character limits. Unavailable
+AI enrichment retains source text and offers an explicit Retry. Private imports
+are reopened through the normal Jobs detail endpoint and paginated list.
+
+Quick Apply's component, navigation and route are removed. External jobs is
+available in the top navigation and legacy workspace menu. Desktop/mobile
+Playwright coverage checks URL import, the shared reader, original employer link
+and manual fallback; frontend unit tests, ESLint and production build also apply.
+
 ## Reference filter interactions (2026-10-08)
 
 `QuickJobFilter.jsx` gives Location, Job Function, Job Type, Experience Level,

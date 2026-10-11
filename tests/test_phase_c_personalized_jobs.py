@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from backend.bootstrap import create_backend
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
-from backend.domain.models import utc_now_iso
+from backend.domain.models import UserRecord, utc_now_iso
 
 
 def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None:
@@ -17,7 +17,7 @@ def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None
     def write(connection):
         for company_id, name in (("company-a", "Acme Labs"), ("company-b", "Beta Systems")):
             connection.execute(
-                "INSERT INTO canonical_companies VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO canonical_companies (company_id,canonical_name,entity_kind,provenance_url,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (company_id, name, "employer", f"https://{company_id}.example", now, now),
             )
         jobs = (
@@ -49,7 +49,7 @@ def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None
                 (job_id, company_id, f"url:{job_id}", title, location, apply_url, "active", now, now, now, 0, version_id, now, now, f"signature:{job_id}"),
             )
             connection.execute(
-                "INSERT INTO job_posting_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO job_posting_versions (version_id,canonical_job_id,version_number,content_hash,title,description,location,apply_url,source_observation_id,payload_json,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (version_id, job_id, 1, f"hash-{job_id}", title, payload["description"], location, apply_url, f"observation-{job_id}", json.dumps(payload), now),
             )
         connection.execute(
@@ -62,7 +62,7 @@ def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None
             ("publication-c", "cycle-c", "valid", "[]", now, valid_until, ""),
         )
         connection.executemany(
-            "INSERT INTO acquisition_publication_jobs VALUES (?, ?)",
+            "INSERT INTO acquisition_publication_jobs (publication_id,canonical_job_id) VALUES (?, ?)",
             [("publication-c", "job-a"), ("publication-c", "job-b")],
         )
         connection.execute(
@@ -120,7 +120,10 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
                 "TURSO_AUTH_TOKEN": " ",
             }
         )
-        return create_backend(Path(temporary_directory.name), storage_backend="sqlite", test_mode=True)
+        app = create_backend(Path(temporary_directory.name), storage_backend="sqlite", test_mode=True)
+        for user_id in ('user-a', 'user-b'):
+            app.repositories.auth_repository.upsert_user(UserRecord(user_id=user_id, email=f'{user_id}@example.com'))
+        return app
 
     def test_named_filter_sets_are_isolated_and_preserve_multiselect_filters(self):
         app = self._backend()
