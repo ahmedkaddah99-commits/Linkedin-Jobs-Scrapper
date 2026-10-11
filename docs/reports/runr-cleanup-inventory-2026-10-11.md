@@ -42,6 +42,27 @@ The temporary password-protected HTTPS transfer routes expire after 24 hours.
 The lower-priority historical R2 object migration and Google Drive backup
 replacement remain outstanding; operational recovery backups have not been removed.
 
+### Device backup migration
+
+The owner selected this device instead of Google Drive. A Windows scheduled task,
+`Runr device backup mirror`, runs daily at 03:30, catches up when available, and
+stores copies under `C:\Users\ahmed\Runr-Historical-Archives\backups`.
+`deploy/sync-device-backups.ps1` obtains short-lived signed URLs through the VPS;
+R2 credentials stay on the VPS. Downloads resume using bounded ranges and verify
+full SHA-256 before promoting each file. A process lock prevents overlapping
+copies. The local generation policy follows the seven verified remote generations
+per producer; prior verified files are retired only after seven replacements
+are completely copied. Historical catalog archives are preserved indefinitely.
+
+The initial inventory contains 69 objects totaling 89.55 GiB across acquisition,
+customer-database and historical catalog backup prefixes. The initial copy is
+still running; there is no verified full-set migration receipt yet. This task
+does **not** disable production backup uploads or delete R2 objects. Completion
+is recorded in `backups/latest-verified.json`; unattended task output is in
+`backups/latest-run.log`. The device must be available for off-host copies to
+advance. Retiring R2 requires successful local copies and a verified replacement
+for future backup creation, not merely registration of this task.
+
 Read-only inventory requested by the owner. No VPS files, services, timers,
 retention settings or repository artifacts were deleted or changed during this
 inspection. This report and its evidence files are the only additions.
