@@ -15,6 +15,10 @@ AI enrichment retains source text and offers an explicit Retry. Private imports
 are reopened through the normal Jobs detail endpoint and paginated list.
 
 Quick Apply's component, navigation and route are removed. External jobs is
+blocked for links already added to this account or present in the published
+catalog. A small modal popup explains either reason; no review drawer opens.
+Confirmation also handles a duplicate created while the drawer was open.
+External jobs is
 available in the top navigation and legacy workspace menu. Desktop/mobile
 Playwright coverage checks URL import, the shared reader, original employer link
 and manual fallback; frontend unit tests, ESLint and production build also apply.

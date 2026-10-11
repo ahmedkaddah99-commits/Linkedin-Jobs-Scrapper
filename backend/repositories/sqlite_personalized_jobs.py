@@ -1864,13 +1864,16 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                                      (str(self._head_publication_id(connection) or ""), source_url, source_url)).fetchone()
         return _row_payload(row) if row else None
 
-    def save_external_job_row(self, user_id: str, source_url: str, row: Mapping[str, Any]) -> dict[str, Any]:
+    def save_external_job_row(self, user_id: str, source_url: str, row: Mapping[str, Any], *, new_only: bool = False) -> dict[str, Any] | None:
         now = utc_now_iso()
         def write(connection):
-            connection.execute("""INSERT INTO external_jobs VALUES (?,?,?,?,?,?)
-                ON CONFLICT(user_id,source_url) DO UPDATE SET row_json=excluded.row_json,updated_at=excluded.updated_at""",
+            conflict = 'DO NOTHING' if new_only else 'DO UPDATE SET row_json=excluded.row_json,updated_at=excluded.updated_at'
+            cursor = connection.execute("""INSERT INTO external_jobs VALUES (?,?,?,?,?,?)
+                ON CONFLICT(user_id,source_url) """ + conflict,
                 (row["canonical_job_id"], str(user_id), source_url, _json(row), now, now))
-        self._run_transaction(write)
+            return cursor.rowcount > 0
+        if not self._run_transaction(write):
+            return None
         return self.find_job_by_url(user_id, source_url)
 
     def reserve_external_job_import(self, user_id: str, *, preview: bool = False) -> None:

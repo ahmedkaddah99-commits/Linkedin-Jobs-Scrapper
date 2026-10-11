@@ -55,7 +55,8 @@ class ExternalJobsTests(unittest.TestCase):
         saved = app.import_personalized_job('user-a', {**preview['fields'], 'manual': True})
         self.assertEqual(saved['job']['title'], 'Software Engineer')
         corrected = app.import_personalized_job('user-a', {**preview['fields'], 'title': 'Python Engineer', 'manual': True})
-        self.assertEqual(corrected['job']['title'], 'Python Engineer')
+        self.assertEqual(corrected['state'], 'duplicate')
+        self.assertEqual(app.get_personalized_job_detail('user-a', saved['job']['canonical_job_id'])['title'], 'Software Engineer')
         self.assertEqual(app.list_external_jobs('user-a')['total'], 1)
 
     def test_preview_fetch_failure_preserves_simple_manual_message(self):
@@ -107,7 +108,7 @@ class ExternalJobsTests(unittest.TestCase):
         with patch('backend.application.external_jobs.fetch_job_page', return_value='html'), \
              patch('backend.application.external_jobs.parse_job_page', return_value=(fields, False)), \
              self.assertRaises(ValueError):
-            app.import_personalized_job('user-a', {**fields, 'description': 'Chocolate cake ingredients. ' * 10, 'manual': True})
+            app.import_personalized_job('user-a', {**fields, 'url': URL + '/other', 'description': 'Chocolate cake ingredients. ' * 10, 'manual': True})
 
     def test_fetch_accepts_standard_http_header_capitalization(self):
         from backend.application.external_jobs import fetch_job_page
@@ -163,7 +164,7 @@ class ExternalJobsTests(unittest.TestCase):
                         'company': 'Example', 'description': DESCRIPTION, **fields,
                     })
 
-    def test_existing_catalog_url_opens_existing_job(self):
+    def test_existing_catalog_url_is_rejected_before_preview_or_confirmation(self):
         app = self._backend()
         now = utc_now_iso()
         def seed(connection):
@@ -181,13 +182,12 @@ class ExternalJobsTests(unittest.TestCase):
             connection.execute("INSERT INTO acquisition_publication_jobs (publication_id,canonical_job_id) VALUES ('publication-a','job-a')")
             connection.execute("INSERT INTO acquisition_publication_head VALUES (1,'publication-a',?)", (now,))
         app.repositories.acquisition_store._run_transaction(seed)
-        result = app.import_personalized_job('user-a', {'url': 'https://boards.greenhouse.io/acme/jobs/a'})
-        self.assertEqual(result['job']['title'], 'Engineer')
-        job_id = result['job']['canonical_job_id']
-        self.assertTrue(job_id.startswith('import_'))
-        self.assertEqual(app.list_external_jobs('user-a')['jobs'][0]['canonical_job_id'], job_id)
-        app.repositories.acquisition_store._run_transaction(lambda c: c.execute("DELETE FROM acquisition_publication_jobs WHERE canonical_job_id='job-a'"))
-        self.assertEqual(app.get_personalized_job_detail('user-a', job_id)['title'], 'Engineer')
+        with patch('backend.application.external_jobs.fetch_job_page', side_effect=AssertionError('duplicate fetch')):
+            for flags in ({}, {'preview': True}, {'manual': True}, {'retry_enrichment': True}):
+                result = app.import_personalized_job('user-a', {'url': 'https://boards.greenhouse.io/acme/jobs/a', **flags})
+                self.assertEqual(result['reason'], 'already_published')
+                self.assertEqual(result['message'], 'This job is already available in Runr Jobs.')
+        self.assertEqual(app.list_external_jobs('user-a')['total'], 0)
 
     def test_external_jobs_paginate_without_losing_older_imports(self):
         app = self._backend()
@@ -266,11 +266,29 @@ class ExternalJobsTests(unittest.TestCase):
         self.assertEqual(result['job']['description_intelligence']['model'], 'mistralai/mistral-nemo')
         self.assertEqual(result['job']['employment_type'], 'full_time')
 
-    def test_repeat_import_reuses_owned_job_without_fetching(self):
+    def test_repeat_import_is_rejected_without_fetching(self):
         app = self._backend()
         first = app.import_personalized_job('user-a', {'url': URL, 'manual': True,
             'title': 'Software Engineer', 'company': 'Example', 'description': DESCRIPTION})
         with patch('backend.application.external_jobs.fetch_job_page', side_effect=AssertionError('duplicate fetch')):
-            second = app.import_personalized_job('user-a', {'url': URL})
-        self.assertEqual(first['job']['canonical_job_id'], second['job']['canonical_job_id'])
+            for flags in ({}, {'preview': True}, {'manual': True}, {'manual': True, 'retry_enrichment': True}):
+                second = app.import_personalized_job('user-a', {'url': URL, **flags})
+                self.assertEqual(second['reason'], 'already_added')
+                self.assertEqual(second['message'], 'You already added this job to External jobs.')
         self.assertEqual(app.list_external_jobs('user-a')['total'], 1)
+
+    def test_atomic_new_import_does_not_overwrite_a_racing_import(self):
+        from backend.application.external_jobs import build_row
+        app = self._backend()
+        store = app.repositories.personalized_jobs_store
+        row = build_row('user-a', URL, {'title': 'Engineer', 'company': 'Example', 'location': '', 'description': DESCRIPTION})
+        self.assertIsNotNone(store.save_external_job_row('user-a', URL, row, new_only=True))
+        self.assertIsNone(store.save_external_job_row('user-a', URL, {**row, 'title': 'Changed'}, new_only=True))
+        self.assertEqual(store.find_job_by_url('user-a', URL)['title'], 'Engineer')
+
+    def test_explicit_enrichment_retry_still_works_for_owned_import(self):
+        app = self._backend()
+        first = app.import_personalized_job('user-a', {'url': URL, 'manual': True,
+            'title': 'Software Engineer', 'company': 'Example', 'description': DESCRIPTION})
+        retried = app.import_personalized_job('user-a', {'url': URL, 'retry_enrichment': True})
+        self.assertEqual(retried['job']['canonical_job_id'], first['job']['canonical_job_id'])
