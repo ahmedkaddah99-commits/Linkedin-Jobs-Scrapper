@@ -2118,6 +2118,9 @@ class StateStore:
             self.connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_company_scans_run_company ON company_scans(run_id, linkedin_company_id)"
             )
+            self.connection.execute(
+                'CREATE INDEX IF NOT EXISTS idx_job_company_observations_run ON job_company_observations(run_id)'
+            )
             self._backfill_observation_scan_ids()
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:

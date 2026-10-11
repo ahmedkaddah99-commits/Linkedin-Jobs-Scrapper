@@ -89,7 +89,7 @@ def main():
     parser.add_argument('--state-root',type=Path,default=Path('/srv/runr/state/active'))
     parser.add_argument('--lock-root',type=Path,default=Path('/srv/runr/state/locks'))
     parser.add_argument('--apply',action='store_true')
-    parser.add_argument('--batch-size',type=int,default=10)
+    parser.add_argument('--batch-size',type=int,default=500)
     parser.add_argument('--max-seconds',type=int,default=30)
     parser.add_argument('--receipt',type=Path)
     args = parser.parse_args()
@@ -102,7 +102,7 @@ def main():
     from scripts.build_producer_retention_index import build
     for source in ('linkedin','employer'):
         build(args.state_root/source/('master_'+source+'_jobs_state.db'),source,
-              seconds=min(15,args.max_seconds/4),batch_size=args.batch_size)
+              seconds=min(15,args.max_seconds/4),batch_size=min(args.batch_size,100))
     result = [maintain(args.state_root/source/('master_'+source+'_jobs_state.db'),source,
                       apply=args.apply,batch_size=args.batch_size,max_seconds=args.max_seconds) for source in ('linkedin','employer')]
     rendered = json.dumps(result)

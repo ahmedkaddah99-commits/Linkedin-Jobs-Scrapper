@@ -90,11 +90,12 @@ def main():
         return
     started, processed, written = time.monotonic(), 0, 0
     # Superseded or unpublished versions cannot block current queue work.
-    execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
-        SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 100) q
+    removed=execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
+        SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 1000) q
         LEFT JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id
-        WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 100)""")
+        WHERE j.canonical_job_id IS NULL OR j.current_version_id!=q.version_id OR NOT ({PUBLISHED}) LIMIT 1000)
+        RETURNING version_id""")
     while processed < args.max_jobs and time.monotonic() - started < args.runtime_seconds:
         rows = execute(f"""SELECT j.canonical_job_id,j.title,v.version_id,v.content_hash,v.description,
             json_object('industry',COALESCE(json_extract(v.payload_json,'$.industry'),json_extract(v.payload_json,'$.company_industry'))) AS payload_json,
@@ -106,6 +107,7 @@ def main():
         written += write_batch(rows)
         processed += len(rows)
     print(json.dumps({'feature_version': FEATURE_VERSION, 'processed': processed, 'written': written,
+                      'obsolete_queue_items_removed':len(removed),
                       'seconds': round(time.monotonic() - started, 3), 'provider_calls': 0}))
 
 

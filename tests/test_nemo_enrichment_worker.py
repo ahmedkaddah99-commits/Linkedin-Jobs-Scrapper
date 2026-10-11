@@ -37,6 +37,38 @@ def test_uncertain_stage_spend_is_not_replayed(tmp_path):
  client.db.close()
 
 class NemoWorkerPersistenceTests(unittest.TestCase):
+ def test_native_rule_fallback_is_queued_for_english_translation(self):
+  import tempfile
+  app=self.classified();store=app.repositories.personalized_jobs_store
+  with tempfile.TemporaryDirectory() as directory, store._connect() as c:
+   row=c.execute('SELECT version_id,canonical_job_id,content_hash FROM job_enrichment_queue LIMIT 1').fetchone()
+   german='Sie entwickeln moderne Anwendungen und arbeiten gemeinsam mit unserem erfahrenen Team an neuen technischen Lösungen.'
+   summary=json.dumps({'responsibilities':[{'text':german}],'output_language':'de'})
+   c.execute('INSERT INTO job_description_intelligence VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+             (row['version_id'],row['canonical_job_id'],row['content_hash'],summary,'{}','{}','runr_rules','rules','runr_description_v1','now','now','now'))
+   c.execute("UPDATE job_enrichment_queue SET state='completed' WHERE version_id=?",(row['version_id'],))
+   def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
+   client=worker.NemoClient(Path(directory)/'ledger.db',10)
+   with patch.object(worker,'execute',sql):
+    self.assertEqual(worker.requeue_repairable(client,10),1)
+    token,rows=worker.claim(10,maintain=False)
+    translated=next(value for value in rows if value['current_version_id']==row['version_id'])
+    self.assertFalse(translated['description_ready'])
+    self.assertFalse(worker.complete_if_ready(translated,token))
+   client.db.close()
+
+ def test_legacy_invalid_output_without_cached_response_is_repairable(self):
+  import tempfile
+  app=self.classified();store=app.repositories.personalized_jobs_store
+  with tempfile.TemporaryDirectory() as directory, store._connect() as c:
+   c.execute("UPDATE job_enrichment_queue SET state='review_required',error_code='filter_validation_failed'")
+   def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
+   client=worker.NemoClient(Path(directory)/'ledger.db',10)
+   with patch.object(worker,'execute',sql):
+    self.assertEqual(worker.requeue_repairable(client,10),2)
+   self.assertEqual(client.db.execute('SELECT COUNT(*) FROM calls').fetchone()[0],0)
+   client.db.close()
+
  def test_empty_maintenance_does_not_issue_remote_writes(self):
   queries=[]
   def sql(query,args=()):
