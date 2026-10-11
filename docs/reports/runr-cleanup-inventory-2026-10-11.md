@@ -20,8 +20,18 @@ generations, and journald is capped at 1 GiB. The historical architecture note
 was replaced by a recovery pointer; stale subsystem baseline claims received
 current corrections. Product services were not replaced by the cleanup deployment.
 
-Final archive verification, reclaimed space and transfer teardown receipts will
-be appended after the downloads finish.
+### Verified release cleanup
+
+At 02:56 Europe/Berlin, 36 selected historical releases were removed after full
+local SHA-256 verification, archive readability, source comparison and renewed
+reference/open-file checks. The archive is
+`C:\Users\ahmed\Runr-Historical-Archives\2026-10-11\releases.tar.gz`
+(947,118,748 bytes), SHA-256
+`5d1e0b103259c92c2e2e6e151e93b4ae114dbc60200cfbc505b470dda6e7832e`.
+Exact paths and members are preserved beside it in `releases.paths.txt` and
+`releases.members.txt`; `releases.completed.txt` contains the VPS deletion
+receipt. Available space after this batch was 67,418,390,528 bytes (62.79 GiB).
+The data archive and temporary transfer teardown remain unfinished.
 
 The resumable completion controller is `deploy/complete-vps-history.ps1`. It
 checks full local SHA-256 and archive readability, then requests source comparison
