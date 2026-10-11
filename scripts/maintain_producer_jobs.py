@@ -53,13 +53,16 @@ def maintain(path, source, *, apply=False, batch_size=500, max_seconds=60, now=N
                 if apply:
                     with db: db.execute('INSERT OR REPLACE INTO runr_job_retention_progress VALUES(1,0)')
                 break
-            selected = []
-            for rowid, identity, raw in rows:
-                payload = json.loads(raw)
-                reason = exclusion_reason(payload,now=current)
-                if not reason and profession_override(payload.get('job_title') or payload.get('title'), '') == ('blue',[]):
-                    reason = 'blue_collar_rules'
-                if reason: selected.append((identity,reason,current.isoformat()))
+            if has_index:
+                selected = [(identity, 'retention_30_days', current.isoformat()) for rowid, identity, raw in rows]
+            else:
+                selected = []
+                for rowid, identity, raw in rows:
+                    payload = json.loads(raw)
+                    reason = exclusion_reason(payload,now=current)
+                    if not reason and profession_override(payload.get('job_title') or payload.get('title'), '') == ('blue',[]):
+                        reason = 'blue_collar_rules'
+                    if reason: selected.append((identity,reason,current.isoformat()))
             result['scanned'] += len(rows)
             result['candidates'] += len(selected)
             cursor = rows[-1][0]
