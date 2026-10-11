@@ -791,7 +791,8 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
 
   return <div className={external ? "jobs-experience jobs-experience--external" : "jobs-experience"}>
     {external ? <><section className="jobs-search-heading"><div><h1>External jobs</h1><p>Add a job posting link to view and prepare it with Runr.</p></div><Link className="jobs-text-link" to="/jobs">Recommended jobs</Link></section>{!routeJobId ? <ExternalJobImport connected={isConnected} request={request} onImported={job => { setFeedAttempt(value => value + 1); selectJob(toPersonalizedJobView(job)); }} /> : null}</> : <>
-    <section aria-label="Company and title search" className="jobs-search-heading"><div><h1>Find your next opportunity</h1><p>Explore a company or find roles that fit you.</p></div><CompanySearch connected={isConnected} onClear={() => {
+    <section className="jobs-search-bar" aria-label="Job search filters">
+    <CompanySearch connected={isConnected} onClear={() => {
       filtersTouchedRef.current = true;
       setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
     }} onQuery={(value) => {
@@ -800,8 +801,7 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     }} onSelect={(company) => {
       filtersTouchedRef.current = true;
       setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
-    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} /></section>
-    <section className="jobs-search-bar" aria-label="Job search filters">
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />
       <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}

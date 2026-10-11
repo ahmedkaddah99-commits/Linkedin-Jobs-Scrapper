@@ -3076,7 +3076,7 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .jobs-search-heading { align-items: center; display: flex; flex: none; gap: 1.5rem; justify-content: space-between; padding: 1.2rem 2rem .7rem; }
 .jobs-search-heading h1 { font-size: 1.3rem; font-weight: 700; margin: 0; }
 .jobs-search-heading p { color: var(--jobs-muted); font-size: .85rem; margin: .35rem 0 0; }
-.jobs-company-search { position: relative; width: min(27rem, 48%); z-index: 15; }
+.jobs-company-search { flex: 1 0 16rem; margin-left: auto; max-width: 27rem; order: 1; position: relative; z-index: 15; }
 .jobs-company-search__input { align-items: center; background: #fff; border: 1px solid var(--jobs-line); border-radius: 2rem; display: flex; gap: .65rem; min-height: 3rem; padding: .4rem .8rem; }
 .jobs-company-search__input:focus-within { border-color: #10a6c2; box-shadow: 0 0 0 3px #10a6c214; }
 .jobs-company-search__input > span { color: #6d8999; font-size: 1.3rem; }
@@ -3130,7 +3130,7 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
   .jobs-search-heading { align-items: stretch; flex-direction: column; gap: .7rem; padding: .8rem 1rem; }
   .jobs-search-heading h1 { font-size: 1.05rem; }
   .jobs-search-heading > div > p { display: none; }
-  .jobs-company-search { width: 100%; }
+  .jobs-company-search { flex-basis: 100%; margin-left: 0; max-width: none; order: -1; width: 100%; }
   .jobs-search-bar .jobs-search-link[aria-label="Saved filters"] { display: inline-flex; }
 }
 /* Profile matching: browse cards first, open one job on selection. */
