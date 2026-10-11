@@ -3,6 +3,7 @@
 set -euo pipefail
 commit="${1:?full release commit required}"
 archive="${2:?git archive path required}"
+resume="${3:-}"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid release commit' >&2; exit 1; }
 [[ "$EUID" == 0 ]] || { echo 'Run through sudo' >&2; exit 1; }
 short="${commit:0:8}"
@@ -10,12 +11,19 @@ release="/srv/runr/releases/external-jobs-$short"
 evidence="/srv/runr/ops/external-jobs-$short"
 python_bin=/opt/runr/.venv/bin/python
 [[ "$($python_bin --version)" == 'Python 3.12.7' ]] || exit 1
+current_dist=$(awk '/^[[:space:]]*root / {gsub(/;/,"",$2); print $2; exit}' /etc/nginx/sites-available/runr-public)
+[[ "$current_dist" != "$release/frontend/dist" ]] || { echo 'Release is already serving production' >&2; exit 1; }
+if [[ "$resume" == --resume ]]; then
+    "$python_bin" - "$release" "$commit" <<'PY'
+import json,pathlib,sys
+assert json.loads(pathlib.Path(sys.argv[1], 'frontend/dist/runr-release.json').read_text())['commit'] == sys.argv[2]
+PY
+else
 [[ ! -e "$release" ]] || { echo 'Release directory already exists' >&2; exit 1; }
 mkdir -p "$release" "$evidence"
 tar -xzf "$archive" -C "$release"
 ln -s /opt/runr/.venv "$release/.venv"
 chmod +x "$release/deploy/start.sh"
-current_dist=$(awk '/^[[:space:]]*root / {gsub(/;/,"",$2); print $2; exit}' /etc/nginx/sites-available/runr-public)
 publishable_key=$($python_bin - "$current_dist" <<'PY'
 import pathlib,re,sys
 for path in pathlib.Path(sys.argv[1], 'assets').glob('*.js'):
@@ -34,9 +42,23 @@ sudo -u runr npm --prefix "$release/frontend" ci --cache /var/lib/runr/npm-cache
     VITE_PERSONALIZED_JOBS_DATA_MODE=real VITE_REPLACE_LEGACY_JOBS_NAV=1 VITE_E2E_AUTH=0 VITE_E2E_ADMIN=0 \
     RUNR_RELEASE_COMMIT="$commit" RUNR_RELEASE_BRANCH=release/external-jobs-2026-10-11 \
     npm run build) > "$evidence/frontend-build.log" 2>&1
-# Existing service makes and verifies a consistent off-host customer snapshot.
-systemctl start runr-customer-backup.service
-[[ "$(systemctl show runr-customer-backup.service -p Result --value)" == success ]]
+fi
+# Reuse a recent verified backup; make a fresh one if the last is unsuitable.
+verify_backup() {
+    "$python_bin" - "$evidence/backup-used.json" <<'PY'
+import json,pathlib,sys,time
+receipt=json.loads(pathlib.Path('/var/lib/runr/customer-backups/latest.json').read_text())
+assert 0 <= time.time()-receipt['completed_at'] < 24*60*60, 'A recent backup is required'
+assert receipt['integrity_check']=='ok' and receipt['foreign_key_violations']==0
+assert receipt['gzip_restore_hash_verified'] and receipt['full_offhost_readback_verified']
+pathlib.Path(sys.argv[1]).write_text(json.dumps(receipt,indent=2))
+PY
+}
+if ! verify_backup; then
+    systemctl start runr-customer-backup.service
+    [[ "$(systemctl show runr-customer-backup.service -p Result --value)" == success ]]
+    verify_backup
+fi
 systemd-run --wait --pipe --collect --unit="runr-external-migrate-$short" \
     -p User=runr -p Group=runr -p SupplementaryGroups=runr-database -p WorkingDirectory="$release" \
     -p EnvironmentFile=/etc/runr/customer-candidate-20261010/api.env \
