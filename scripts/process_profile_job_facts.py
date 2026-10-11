@@ -25,7 +25,7 @@ JOINS = """FROM canonical_jobs j
     LEFT JOIN job_description_intelligence d ON d.version_id=v.version_id AND d.content_hash=v.content_hash
     LEFT JOIN job_filter_intelligence f ON f.version_id=v.version_id AND f.content_hash=v.content_hash
     LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id"""
-PUBLISHED = "EXISTS (SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id JOIN acquisition_publications pub ON pub.publication_id=h.publication_id WHERE h.head_id=1 AND pj.canonical_job_id=j.canonical_job_id AND pub.status='valid')"
+PUBLISHED = "EXISTS (SELECT 1 FROM acquisition_publication_jobs pj WHERE pj.publication_id=(SELECT h.publication_id FROM acquisition_publication_head h JOIN acquisition_publications pub USING(publication_id) WHERE h.head_id=1 AND pub.status='valid') AND pj.canonical_job_id=j.canonical_job_id)"
 QUEUED_JOINS = JOINS.replace("FROM canonical_jobs j\n    JOIN job_posting_versions v ON v.version_id=j.current_version_id",
     "FROM profile_job_fact_queue q CROSS JOIN job_posting_versions v ON v.version_id=q.version_id CROSS JOIN canonical_jobs j ON j.canonical_job_id=v.canonical_job_id AND j.current_version_id=v.version_id")
 

@@ -233,10 +233,12 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         lease_token=?,lease_expires_at=?,updated_at=? WHERE version_id IN (
         SELECT q.version_id FROM job_enrichment_queue q
         WHERE q.state='pending' AND q.next_attempt_at<=?
-        AND EXISTS(SELECT 1 FROM canonical_jobs j JOIN acquisition_publication_jobs pj USING(canonical_job_id)
-            JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id
+        AND EXISTS(SELECT 1 FROM canonical_jobs j
             WHERE j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
             AND j.lifecycle_state<>'expired')
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
+            WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
+            AND pj.canonical_job_id=q.canonical_job_id)
         ORDER BY q.next_attempt_at,q.version_id LIMIT ?)
         AND state='pending' RETURNING version_id""", (token, lease, timestamp, timestamp, limit))
     if not rows:
@@ -413,8 +415,9 @@ def requeue_repairable(generate, limit):
         WHERE q.state='review_required' AND q.error_code IN
             ('filter_validation_failed','description_output_not_english','description_has_no_supported_facts')
         AND j.lifecycle_state<>'expired'
-        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h USING(publication_id)
-            WHERE pj.canonical_job_id=j.canonical_job_id)
+        AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
+            WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
+            AND pj.canonical_job_id=j.canonical_job_id)
         ORDER BY q.updated_at LIMIT ?''', (limit,))
     selected=[]
     with generate.lock:

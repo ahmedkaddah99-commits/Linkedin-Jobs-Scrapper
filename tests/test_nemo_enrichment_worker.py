@@ -58,6 +58,9 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
      plan=[dict(r) for r in c.execute('EXPLAIN QUERY PLAN '+query,args).fetchall()]
      outer=[r['detail'] for r in plan if 'SEARCH job_enrichment_queue ' in r['detail']]
      self.assertTrue(any('version_id=?' in detail for detail in outer),plan)
+     membership=[r['detail'] for r in plan if ' pj ' in r['detail']]
+     self.assertTrue(any('publication_id=? AND canonical_job_id=?' in detail for detail in membership),plan)
+     self.assertFalse(any('SCAN pj' in detail for detail in membership),plan)
     return [dict(r) for r in c.execute(query,args).fetchall()]
    with patch.object(worker,'execute',sql):
     self.assertEqual(len(worker.claim(1,maintain=False)[1]),1)
