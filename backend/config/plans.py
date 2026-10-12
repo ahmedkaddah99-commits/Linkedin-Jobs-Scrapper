@@ -138,6 +138,17 @@ def get_plan(plan_id: str | None) -> dict[str, Any]:
     return _with_runtime_plan_values(normalized_plan_id, PLANS[normalized_plan_id])
 
 
+def public_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Customer catalog contains plan terms, never provider configuration."""
+    result = {key: value for key, value in plan.items() if key != "creem_product_id"}
+    if "offers" in result:
+        result["offers"] = [
+            {key: value for key, value in offer.items() if key not in {"creem_product_id", "env_var"}}
+            for offer in result["offers"]
+        ]
+    return result
+
+
 def get_quota(plan_id: str, quota_type: str) -> int:
     plan = PLANS.get(normalize_plan_id(plan_id), PLANS[DEFAULT_PLAN_ID])
     return int(plan["quotas"].get(str(quota_type or "").strip(), 0))

@@ -285,6 +285,7 @@ subsystems:
         - npm --prefix frontend exec -- playwright test e2e/external-jobs.spec.ts
     key_invariants:
       - Settings open in a modal over the customer workspace; subscription actions use real billing endpoints, while automatic emails and provider controls remain disabled and labelled Coming soon.
+      - Settings omit legacy profile/extension cards and support links; Coming soon has a pale yellow box, and billing responses do not expose provider configuration.
       - No restoring admin routes/pages (retired).
       - The Profile page has no profile preview or print action.
       - Opening a posting retains the jobs feed and uses its embedded company profile without fetching employer jobs.

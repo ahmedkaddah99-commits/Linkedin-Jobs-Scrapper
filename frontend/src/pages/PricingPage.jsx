@@ -1,23 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
-import { getApiErrorMessage } from "../lib/api";
+import { billingMessage } from "../lib/billingPresentation";
 import SubscriptionComparison from "../components/SubscriptionComparison";
 import "../settings.css";
-
-const quotaLabels = {
-  runs_per_month: "Runs / month",
-  applications_per_month: "Applications / month",
-  cv_exports_per_month: "CV exports / month",
-  referral_drafts_per_month: "Referral drafts / month",
-  runner_credits_per_month: "Runner credits / month",
-  workspaces: "Workspaces",
-};
-
-function formatUsageLimit(limit) {
-  return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
-}
 
 function formatDateTime(value) {
   const normalizedValue = String(value || "").trim();
@@ -36,16 +23,6 @@ function normalizeBillingPlanId(value) {
   return ["launch", "momentum", "scale", "pro", "business", "runr_pro"].includes(normalized)
     ? "runr_pro"
     : "free";
-}
-
-function buildFeatureRows(plans) {
-  const keys = Object.keys(
-    plans.reduce((accumulator, plan) => ({ ...accumulator, ...(plan.quotas || {}) }), {}),
-  );
-  return keys.map((quotaType) => ({
-    quotaType,
-    label: quotaLabels[quotaType] || quotaType,
-  }));
 }
 
 export default function PricingPage() {
@@ -102,18 +79,6 @@ export default function PricingPage() {
     : hasSignedCheckoutReturn
       ? "confirming"
       : "sync pending";
-  const usageQuotas = subscriptionPayload?.usage?.quotas || {};
-  const usageSummaryRows = [
-    "runner_credits_per_month",
-    "runs_per_month",
-    "applications_per_month",
-    "workspaces",
-  ].map((quotaType) => ({
-    quotaType,
-    label: quotaLabels[quotaType] || quotaType,
-    quota: usageQuotas[quotaType] || { used: 0, limit: 0 },
-  }));
-  const featureRows = buildFeatureRows(plans);
 
   useEffect(() => {
     if (!showCheckoutSuccess) {
@@ -138,7 +103,7 @@ export default function PricingPage() {
         } catch (requestError) {
           if (!cancelled) {
             setCheckoutConfirmationError(
-              getApiErrorMessage(requestError, "Runr could not confirm the checkout return yet."),
+              billingMessage(requestError, "Runr could not confirm the checkout return yet."),
             );
             setCheckoutConfirmationState("awaiting_webhook");
           }
@@ -192,7 +157,7 @@ export default function PricingPage() {
       setActionState({
         loadingPlanId: "",
         managing: false,
-        error: getApiErrorMessage(requestError, "Unable to start checkout."),
+        error: billingMessage(requestError, "Unable to start checkout."),
       });
     }
   }
@@ -209,7 +174,7 @@ export default function PricingPage() {
       setActionState({
         loadingPlanId: "",
         managing: false,
-        error: getApiErrorMessage(requestError, "Unable to open the billing portal."),
+        error: billingMessage(requestError, "Unable to open the billing portal."),
       });
     }
   }
@@ -222,10 +187,10 @@ export default function PricingPage() {
   }
 
   const isLoading = plansLoading || subscriptionLoading;
-  const combinedError = actionState.error || plansError || subscriptionError;
+  const combinedError = actionState.error || (plansError || subscriptionError ? billingMessage(plansError || subscriptionError) : "");
 
   return (
-    <div className="space-y-8">
+    <div className="runr-pricing-page">
       <section className="runr-pricing-heading">
         <p className="text-xs font-bold uppercase tracking-[0.28em] text-primary">Pricing</p>
         <div className="mt-4 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -234,13 +199,7 @@ export default function PricingPage() {
               Get more from your job search with Runr Pro
             </h1>
           </div>
-          <Link
-            className="inline-flex items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-            to="/settings"
-          >
-            <span className="material-symbols-outlined text-[18px]">monitoring</span>
-            Account usage
-          </Link>
+
         </div>
       </section>
 
@@ -312,41 +271,13 @@ export default function PricingPage() {
               </p>
             </div>
           </div>
-          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
-            {usageSummaryRows.map(({ quotaType, label, quota }) => (
-              <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4" key={quotaType}>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">{label}</p>
-                <p className="mt-2 font-semibold text-on-surface">
-                  {checkoutSynced ? `${Number(quota.used || 0)} / ${formatUsageLimit(quota.limit)}` : "Sync pending"}
-                </p>
-              </div>
-            ))}
-          </div>
+
         </section>
       ) : null}
 
-      <section className="rounded-[1.5rem] border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-on-surface">Promo code</p>
-            <p className="mt-1 text-sm text-on-surface-variant">
-              If you have a code, add it here and it will be prefilled in checkout.
-            </p>
-          </div>
-          <div className="w-full md:max-w-sm">
-            <input
-              className="w-full rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-3 font-mono uppercase text-on-surface outline-none transition-colors focus:border-primary/40"
-              onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
-              placeholder="SUMMER10"
-              type="text"
-              value={promoCode}
-            />
-          </div>
-        </div>
-      </section>
+      {isLoading ? <p role="status">Loading plans…</p> : plans.length ? <SubscriptionComparison plans={plans} currentPlanId={currentPlanId} actionState={actionState} onUpgrade={handleUpgrade} onManage={handleManageSubscription} /> : null}
 
-      {isLoading ? <p role="status">Loading plans…</p> : plans.length ? <SubscriptionComparison plans={plans} currentPlanId={currentPlanId} featureRows={featureRows} actionState={actionState} onUpgrade={handleUpgrade} onManage={handleManageSubscription} /> : null}
-
+      <details className="runr-pricing-promo"><summary>Have a promo code?</summary><label>Promo code<input value={promoCode} onChange={event => setPromoCode(event.target.value.toUpperCase())} /></label></details>
       <div className="flex justify-end">
         <button
           className="rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"

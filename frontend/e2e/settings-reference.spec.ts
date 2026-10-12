@@ -20,6 +20,7 @@ test("reference settings preserve Jobs and expose subscription and coming-soon e
   await expect(dialog).toBeVisible();
   await expect(page).toHaveURL(/\/jobs$/);
   await expect(dialog.getByText("Runr Free", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Contact Support")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Refresh Status" }).click();
   await expect.poll(() => reads).toBe(2);
   await page.screenshot({ path: `test-results/settings-subscriptions-${test.info().project.name}.png` });
@@ -31,8 +32,14 @@ test("reference settings preserve Jobs and expose subscription and coming-soon e
   for (const select of await dialog.getByRole("combobox").all()) await expect(select).toBeDisabled();
   await page.screenshot({ path: `test-results/settings-alerts-${test.info().project.name}.png` });
   expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
+  const badge = dialog.locator(".runr-settings-alert .runr-coming-soon").first();
+  expect(await badge.evaluate(el => getComputedStyle(el).backgroundColor)).toBe("rgb(255, 245, 204)");
   await dialog.getByRole("button", { name: /Email Providers/ }).click();
   await expect(dialog.getByRole("button", { name: "Connect email provider" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Login & Security" }).click();
+  await expect(dialog.getByRole("button", { name: "Manage security" })).toBeVisible();
+  await expect(dialog.getByText("Personal Details", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText("Assisted Apply browser connection")).toHaveCount(0);
   expect(writes).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
@@ -59,7 +66,7 @@ test("subscription comparison uses real offers and checkout payload", async ({ p
     if (path.endsWith("/billing/subscription")) return route.fulfill({ json: { plan_id: "free", plan: { display_name: "Runr Free" } } });
     if (path.endsWith("/billing/checkout")) {
       checkout = route.request().postDataJSON();
-      return route.fulfill({ status: 503, json: { error: { message: "Checkout temporarily unavailable" } } });
+      return route.fulfill({ status: 503, json: { error: { message: "Creem product_id is not configured: PRIVATE" } } });
     }
     return route.fulfill({ json: {} });
   });
@@ -71,7 +78,8 @@ test("subscription comparison uses real offers and checkout payload", async ({ p
   await expect(comparison.getByText("Your Current Plan")).toBeVisible();
   await comparison.locator("article").filter({ has: page.getByRole("heading", { name: "Quarterly" }) }).getByRole("button", { name: "Upgrade Now" }).click();
   await expect.poll(() => checkout).toMatchObject({ plan_id: "runr_pro", offer_id: "three_months", source_page: "/pricing" });
-  await expect(page.getByText("Checkout temporarily unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Unable to start checkout.", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Creem|PRIVATE|Workspaces|Runner credits|Runs \/ month/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: `test-results/settings-pricing-${test.info().project.name}.png`, fullPage: true });
 });

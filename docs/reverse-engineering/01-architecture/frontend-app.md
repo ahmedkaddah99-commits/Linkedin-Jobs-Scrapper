@@ -4,6 +4,15 @@
 
 ## Settings reference popup (2026-10-12)
 
+Owner correction: Login & Security now uses compact account/security rows and
+Clerk's real account-management UI. The legacy profile card, account editor,
+photo-upload UI and extension settings card are removed from this popup. Support
+links are removed. Coming soon uses pale yellow bordered boxes. Pricing presents
+Monthly/Quarterly/Weekly offers and Free together, with a shared-feature panel;
+legacy runs, workspace and runner-credit quotas are omitted. Provider/configuration
+errors are replaced by customer retry messages, and public plan responses omit
+product IDs and environment-variable names. Signed payment confirmation remains.
+
 The customer navigation opens settings in a native modal over the current page.
 The October 12 owner video guides its compact left menu, subscription card,
 refresh/support panel, and separate instant/digest alert sections. Runr plan names

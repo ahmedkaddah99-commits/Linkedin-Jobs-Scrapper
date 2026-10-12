@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSession } from "../context/SessionContext";
-import { getApiErrorMessage } from "../lib/api";
+import { billingMessage } from "../lib/billingPresentation";
 import { logEvent } from "../lib/analytics";
 
 const quotaLabels = {
@@ -68,7 +68,7 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
       });
       window.location.assign(payload.checkout_url);
     } catch (requestError) {
-      setError(getApiErrorMessage(requestError, "Unable to start checkout."));
+      setError(billingMessage(requestError, "Unable to start checkout."));
       setLoading(false);
     }
   }

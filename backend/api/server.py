@@ -96,6 +96,7 @@ from backend.config.plans import (
     has_runr_pro_access,
     list_plans,
     normalize_plan_id,
+    public_plan,
 )
 from backend.domain.phase0_contracts import (
     PERSONALIZATION_SCOPE_BASELINE,
@@ -7919,7 +7920,7 @@ def _subscription_response_payload(
         normalized_plan_id = DEFAULT_PLAN_ID
     return {
         "plan_id": normalized_plan_id,
-        "plan": get_plan(normalized_plan_id),
+        "plan": public_plan(get_plan(normalized_plan_id)),
         "subscription": {
             "subscription_id": str(subscription_record.get("subscription_id") or ""),
             "status": str(

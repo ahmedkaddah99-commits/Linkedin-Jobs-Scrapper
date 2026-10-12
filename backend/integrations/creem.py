@@ -101,12 +101,11 @@ def _creem_request(method: str, path: str, *, payload: Mapping[str, Any] | None 
         error_body = exc.read().decode("utf-8", errors="replace")
         if exc.code == 403 and "browser_signature_banned" in error_body:
             raise RuntimeError(
-                "Creem blocked the server-side API request. Check the Creem API key/mode and contact Creem if "
-                "the block persists for the Render backend."
+                "Payments are temporarily unavailable. Please try again later."
             ) from exc
-        raise RuntimeError(f"Creem API request failed ({exc.code}): {error_body}") from exc
+        raise RuntimeError("Payments are temporarily unavailable. Please try again later.") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Unable to reach Creem API: {exc}") from exc
+        raise RuntimeError("Payments are temporarily unavailable. Please try again later.") from exc
     return json.loads(response_body or "{}")
 
 
@@ -351,7 +350,7 @@ def get_customer_portal_url(
         else:
             normalized_customer_id = str(customer or "").strip()
     if not normalized_customer_id:
-        raise ValueError("No Creem customer id is available for this user.")
+        raise ValueError("There is no paid subscription to manage for this account.")
 
     response = _creem_request("POST", "/customers/billing", payload={"customer_id": normalized_customer_id})
     portal = _as_dict(response.get("data")) or response

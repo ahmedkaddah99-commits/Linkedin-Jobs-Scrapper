@@ -2,6 +2,25 @@
 
 # Billing and Creem (WS-6 secondary)
 
+## Settings correction and live billing audit (2026-10-12)
+
+Public plan catalogs and subscription plan terms strip provider product IDs and
+environment-variable names. Customer billing failures omit provider response
+bodies and configuration instructions. Backend private plan resolution remains
+unchanged; no entitlement or webhook bypass is introduced.
+
+Read-only serving-process inspection found a test-mode payment key and webhook
+secret, but no canonical Runr Pro product mapping. Provider catalog reads succeeded
+and returned only legacy Launch/Momentum/Scale products. The owner approved
+configuring the three canonical offers in test mode. Product creation returned
+403 because the key lacks the required scope; no new product or payment was
+created. Dashboard browser access was denied by an admin policy verification
+failure. Product-write capability or owner-created products are required before
+checkout creation can be proved. Do not map mismatched legacy products to new
+durations/prices. UI and error handling can be released independently.
+The owner subsequently deferred provider configuration; it remains outside this
+release. No payment key, product mapping or provider catalog was changed.
+
 This doc covers the Creem slice of WS-6. The primary doc, [../01-architecture/security-and-auth.md](../01-architecture/security-and-auth.md), covers identity, webhook routing posture, env handling and the agent context packet. HTTP plumbing belongs to WS-1 ([../01-architecture/backend-api.md](../01-architecture/backend-api.md)). Quota enforcement and Pro feature gating inside customer services belong to WS-4 ([personalized-jobs-and-customer-app-services.md](personalized-jobs-and-customer-app-services.md)). Tables belong to WS-5 ([../03-data/schema-and-migrations.md](../03-data/schema-and-migrations.md)).
 
 Env var **names** only. No API keys, webhook secrets, product ID values, Render IDs or hosts appear here.

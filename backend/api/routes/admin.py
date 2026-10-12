@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from backend.application.production_rollout import phase_i_config
+from backend.config.plans import public_plan
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
 
@@ -40,7 +41,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
     query = context.query
     if segments == ["billing", "plans"]:
-                        self._send_json({"plans": list_plans()})
+                        self._send_json({"plans": [public_plan(plan) for plan in list_plans()]})
                         return
 
     if segments == ["auth", "me"]:
@@ -266,7 +267,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         config_store = getattr(getattr(application, "repositories", None), "config_store", None)
                         checkout_gate = phase_i_config(config_store, "checkout_gate_enabled", False)
                         if str(checkout_gate).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
-                            raise PermissionError("Runr Pro checkout is not enabled for this rollout stage.")
+                            raise PermissionError("Payments are temporarily unavailable. Please try again later.")
                         source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
                         promo_code = str(payload.get("promo_code") or payload.get("promoCode") or "").strip().upper()
                         if promo_code:
@@ -288,7 +289,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             raise ValueError(f"Unknown Runr Pro offer '{offer_id}'.")
                         product_id = str(offer.get("creem_product_id") or "").strip()
                         if not product_id:
-                            raise ValueError(f"Creem product id is not configured for Runr Pro offer '{offer_id}'.")
+                            raise ValueError("Payments are temporarily unavailable. Please try again later.")
                         checkout_url = get_creem_checkout_url(
                             context.user.user_id,
                             product_id,
