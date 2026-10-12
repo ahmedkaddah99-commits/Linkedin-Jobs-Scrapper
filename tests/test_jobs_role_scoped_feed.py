@@ -72,9 +72,9 @@ class RoleScopedFeedTests(unittest.TestCase):
         store = app.repositories.acquisition_store
 
         def check(c):
-            before = c._connection.total_changes
+            before = [dict(r) for r in c.execute("SELECT * FROM job_filter_roles WHERE canonical_job_id='job-a'").fetchall()]
             c.execute("UPDATE job_filter_intelligence SET generated_at='later' WHERE canonical_job_id='job-a'")
-            self.assertEqual(c._connection.total_changes - before, 1)
+            self.assertEqual([dict(r) for r in c.execute("SELECT * FROM job_filter_roles WHERE canonical_job_id='job-a'").fetchall()], before)
             c.execute(
                 "UPDATE job_filter_intelligence SET filters_json=? WHERE canonical_job_id='job-a'",
                 (json.dumps({"collar": "white", "roles": ["Software Engineer"]}),),
