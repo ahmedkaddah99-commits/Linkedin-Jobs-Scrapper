@@ -30,6 +30,7 @@ def inventory(operation, ledger):
     for source, name, table in ((SOURCE_LINKEDIN, "linkedin", "job_company_observations"),
                                  (SOURCE_EMPLOYER, "employer", "jobs")):
         companies = _manifest_companies(manifest, source, pilot_only=False, crosswalk=mapping)
+        selected_ids = set(companies)
         orgs = {org: cid for cid, company in companies.items() for org in company.get("linkedin_company_ids", ())}
         with sqlite3.connect((operation / (name + ".db")).as_uri() + "?mode=ro", uri=True) as con:
             con.row_factory = sqlite3.Row
@@ -37,7 +38,7 @@ def inventory(operation, ledger):
             for row in con.execute(f"SELECT rowid,* FROM {table}"):
                 payload = _row_payload(row)
                 groups, _ = _source_group_from_rows([row], source=source,
-                    canonical_by_source_company=orgs, selected_ids=set(companies), crosswalk=mapping)
+                    canonical_by_source_company=orgs, selected_ids=selected_ids, crosswalk=mapping)
                 target, external, status, reason = "", "", "pending", "not_yet_reconciled"
                 if not groups:
                     if payload.get("lifecycle_status") == "inactive":

@@ -120,6 +120,11 @@ def capture(args, deadline):
 
 def run(args):
     args.operation.mkdir(parents=True, exist_ok=True)
+    from backend.database.connection import database_target_key
+    if database_target_key(args.data_dir / "backend.sqlite3") != "sqlite:" + str(args.catalog):
+        raise ValueError("Delivery database binding differs from the audited catalog")
+    checkpoints(args.catalog)  # Verify permissions before taking expensive snapshots.
+    write_json(args.operation / "status.json", {"status": "waiting_for_capture_locks", "checked_at": utc_now()})
     deadline = time.monotonic() + args.max_seconds
     with lock(args.operation / "operation.lock", deadline), lock(args.locks / "publisher.lock", deadline):
         state = capture(args, deadline)
