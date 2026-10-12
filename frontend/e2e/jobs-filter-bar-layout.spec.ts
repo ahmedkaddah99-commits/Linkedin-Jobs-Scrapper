@@ -17,6 +17,13 @@ test("reference toolbar keeps readable filters and separate navigation search", 
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(page.locator("#jobs-nav-search").getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
+    const header = await page.locator(".jobs-top-nav").evaluate((node) => {
+      const search = node.querySelector("#jobs-nav-search").getBoundingClientRect();
+      const links = [...node.querySelectorAll(".jobs-top-nav__links a")].filter((link) => getComputedStyle(link).display !== "none").map((link) => link.getBoundingClientRect());
+      return { overlaps: links.some((link) => search.left < link.right && search.right > link.left && search.top < link.bottom && search.bottom > link.top), right: search.right, viewport: innerWidth };
+    });
+    expect(header.overlaps).toBe(false);
+    expect(header.right).toBeLessThanOrEqual(header.viewport);
     for (const name of ["Location", "Job Function", "Job Type", "Experience Level", "Work Model", "Date Posted", "Industry", "Years of Experience"]) {
       await expect(bar.getByRole("button", { name: new RegExp(name) })).toBeVisible();
     }

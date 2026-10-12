@@ -16,3 +16,4 @@ control overflow, navigation search and working drawer. Existing reference-filte
 checks cover shared criteria and numeric bounds. Deployment uses the committed
 frontend plus docs/legal and backend/domain build inputs, production configuration,
 immutable release metadata, nginx rollback and public asset verification.
+Header placement correction: navigation links retain their intrinsic width, so search cannot cover Documents or Connection. The header wraps safely; at 1500px and below search gets its own full-width header row. Browser checks explicitly reject search/link overlap across desktop and mobile viewport sizes.
