@@ -82,4 +82,5 @@ test("subscription comparison uses real offers and checkout payload", async ({ p
   await expect(page.getByText(/Creem|PRIVATE|Workspaces|Runner credits|Runs \/ month/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: `test-results/settings-pricing-${test.info().project.name}.png`, fullPage: true });
+  await page.unrouteAll({ behavior: "wait" });
 });
