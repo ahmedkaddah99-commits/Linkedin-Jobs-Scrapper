@@ -64,11 +64,10 @@ def test_separate_experience_requirements_keep_all_levels_and_quotes():
  assert result['experience_level']==['entry','mid']
  assert result['experience_requirements']==requirements
 
-def test_untranslated_output_is_not_accepted_as_english_description():
- import pytest
- german='Sie entwickeln moderne Anwendungen und arbeiten gemeinsam mit unserem erfahrenen Team an neuen technischen Lösungen.'
- with pytest.raises(ValueError,match='description_output_not_english'):
-  enrich_version(row(description=german,filters_ready=True),lambda _: {'items':[{'section':'responsibilities','text':german,'source_ids':['p1'],'source_quote':german}],'header_candidates':{}})
+def test_original_german_is_accepted_without_translation():
+ german='Sie entwickeln moderne Anwendungen und arbeiten gemeinsam mit unserem erfahrenen Team an neuen technischen L?sungen.'
+ result=enrich_version(row(description=german,filters_ready=True),lambda _: {'items':[{'section':'responsibilities','text':german,'source_ids':['p1'],'source_quote':german}],'header_candidates':{}})
+ assert result['description']['summary']['responsibilities'][0]['text']==german
 
 def test_invalid_separate_experience_evidence_does_not_create_levels():
  from backend.application.catalog_job_filters import validate_classification
@@ -78,7 +77,7 @@ def test_invalid_separate_experience_evidence_does_not_create_levels():
  assert result['experience_level']==[]
 
 
-def test_bounded_repairs_preserve_original_evidence_and_translate_summary():
+def test_bounded_repairs_preserve_original_language():
  calls=[]
  german='Sie entwickeln moderne Anwendungen und arbeiten gemeinsam mit unserem erfahrenen Team an neuen technischen Lösungen.'
  def generate(prompt):
@@ -86,16 +85,20 @@ def test_bounded_repairs_preserve_original_evidence_and_translate_summary():
           'items':[{'section':'responsibilities','text':german,'source_ids':['p1'],'source_quote':german}],'header_candidates':{}}
  def stage(name,prompt):
   calls.append(name)
-  if name=='classification_v1':
-   return {'collar':'white','roles':['Data Analyst'],'evidence':'Data Analyst'}
+  if name=='classification_v2':
+   from backend.application.catalog_job_filters import ROLES
+   return {'collar':'white','role_ids':[ROLES.index('Data Analyst')],'evidence':'Data Analyst'}
+  if name.startswith('description_english_v1_'):
+   return {'items':[{'id':0,'text':'Develop modern applications and collaborate with the experienced team on new technical solutions.'}]}
   return {'items':[{'section':'responsibilities','text':'Develop modern applications and collaborate with the experienced team on new technical solutions.',
                     'source_ids':['p1'],'source_quote':german}],'header_candidates':{}}
  generate.for_stage=stage
  result=enrich_version(row(description=german),generate)
- assert calls==['classification_v1','description_v1']
+ assert calls[0]=='classification_v2'
+ assert calls==['classification_v2']
  assert result['filters']['roles']==['Data Analyst']
  fact=result['description']['summary']['responsibilities'][0]
- assert fact['text'].startswith('Develop modern')
+ assert fact['text']==german
  assert fact['source_quote']==german
 
 
@@ -108,6 +111,12 @@ def test_description_failure_retains_valid_classification():
  with pytest.raises(EnrichmentStageError) as error:
   enrich_version(row(),generate)
  assert error.value.partial['filters']['roles']==['Data Analyst']
+
+
+def test_original_quote_preserves_numbers_despite_bad_model_paraphrase():
+ german='Sie haben mindestens 3 Jahre Erfahrung mit der Entwicklung moderner Anwendungen und technischen Systeme.'
+ result=enrich_version(row(description=german,filters_ready=True),lambda _: {'items':[{'section':'required_qualifications','text':'You need 5 years experience.','source_ids':['p1'],'source_quote':german}],'header_candidates':{}})
+ assert result['description']['summary']['required_qualifications'][0]['text']==german
 
 
 def test_contiguous_quote_across_passages_is_reanchored_without_inventing_evidence():

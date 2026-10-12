@@ -320,6 +320,14 @@ def test_compact_valid_card_is_not_misclassified_as_suspicious_empty() -> None:
     assert parse_search_page(body).cards[0].linkedin_job_id == "77"
 
 
+def test_public_search_footer_does_not_hide_jobs_or_explicit_zero():
+    body=(FIXTURES/'linkedin_job_search_valid.html').read_text(encoding='utf-8')
+    assert parse_search_page(body+'<footer>Sign in to LinkedIn</footer>').cards
+    empty='<main>We couldn’t find a match for jobs in Germany</main><footer>Sign in to LinkedIn</footer>'
+    assert parse_search_page(empty).is_no_results
+    assert not parse_search_page('<main>Verify you are human</main>').is_usable
+
+
 def test_detail_parser_extracts_detail_fields_and_apply_metadata() -> None:
     detail = parse_job_detail("1234567890", (FIXTURES / "linkedin_job_detail.html").read_text())
 
@@ -1994,6 +2002,23 @@ def test_suspicious_empty_pages_remain_partial_for_empty_first_and_after_nonempt
         state.connection.execute("SELECT COUNT(*) FROM search_pages WHERE status='SUSPICIOUS_EMPTY'").fetchone()[0] >= 1
     )
     state.close()
+
+
+def test_public_search_confirms_empty_guest_fragment(tmp_path: Path) -> None:
+    source=tmp_path/'companies.csv'
+    write_source_csv(source,[{'canonical_CompanyID':'C-001','company_name':'Acme','linkedin_company_url':'https://www.linkedin.com/company/acme','linkedin_slug':'acme','linkedin_company_id':'22'}])
+    pagination=tmp_path/'pagination.json';write_pagination_report(pagination)
+    class ConfirmationTransport(SearchBodyTransport):
+        def get(self,url,*,kind):
+            if '/jobs/search/' in url:
+                self.urls.append((url,kind))
+                return ResponseEnvelope(200,"<main>We couldn't find a match for jobs in Germany</main><footer>Sign in to LinkedIn</footer>",'proxy-2',0.01)
+            return super().get(url,kind=kind)
+    transport=ConfirmationTransport({'0':'<!DOCTYPE html>\n<!---->'})
+    metrics=CatalogRunner(RunnerConfig(input_csv=source,output_dir=tmp_path/'out',pagination_report=pagination,mode='smoke',max_companies=1),transport=transport).run()
+    assert metrics['companies_zero_confirmed']==1
+    assert metrics['companies_partial']==0
+    assert any('/jobs/search/' in url and 'f_C=22' in url and 'geoId=' in url for url,kind in transport.urls)
 
 
 def test_partial_suspicious_rescan_does_not_close_existing_jobs_or_refresh_success_time(tmp_path: Path) -> None:

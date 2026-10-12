@@ -315,7 +315,9 @@ def _sqlite_schema(path: Path, role: str, *, integrity: bool = True) -> dict[str
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         )
         supported = [sorted(table_set) for table_set in config.get("supported_table_sets", (config["required_tables"],))]
-        if tables not in supported:
+        retention_tables = {'runr_retired_jobs', 'runr_job_retention_progress', 'runr_retention_index'}
+        base_tables = sorted(set(tables) - retention_tables)
+        if base_tables not in supported:
             raise CheckpointError(
                 f"{role} state schema mismatch: expected one of {supported}, got {tables}"
             )

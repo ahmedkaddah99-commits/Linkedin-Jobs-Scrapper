@@ -32,6 +32,19 @@ from scripts.master_linkedin_jobs_catalog import StateStore
 ZERO_SHA256 = "0" * 64
 
 
+def test_retention_tables_are_preserved_and_unknown_tables_rejected(tmp_path):
+    from scripts.acquisition_state_backup import _sqlite_schema
+    source=tmp_path/'state.db'
+    state=EmployerState(source)
+    state.close()
+    with sqlite3.connect(source) as c:
+        for name in ('runr_retired_jobs','runr_job_retention_progress','runr_retention_index'):
+            c.execute('CREATE TABLE '+name+'(id TEXT)')
+    assert 'runr_retention_index' in _sqlite_schema(source,'employer')['tables']
+    with sqlite3.connect(source) as c:c.execute('CREATE TABLE runr_unknown(id TEXT)')
+    with pytest.raises(CheckpointError,match='schema mismatch'):_sqlite_schema(source,'employer')
+
+
 def _checkpoint_kwargs(source: Path, root: Path, *, role: str = "employer") -> dict[str, object]:
     return {
         "role": role,

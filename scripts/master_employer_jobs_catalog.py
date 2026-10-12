@@ -233,7 +233,7 @@ def select_due_company_window(
 def select_automatic_employer_work(
     state: "EmployerState", companies: list["EmployerCompany"], *, limit: int, now: str
 ) -> tuple[list["EmployerCompany"], str]:
-    """Finish initial direct scans before spending browser capacity."""
+    """Reserve every fourth round for deferred rendering, even during discovery."""
 
     def window(candidates: list[EmployerCompany]) -> list[EmployerCompany]:
         if limit <= 0 or len(candidates) <= limit:
@@ -244,7 +244,7 @@ def select_automatic_employer_work(
         return [candidates[(start + offset) % len(candidates)] for offset in range(limit)]
 
     unseen = [company for company in companies if not state.company_status(company)]
-    if unseen:
+    if unseen and state.get_cursor() % 4 != 3:
         return window(unseen), "easy"
     due = state.due_company_keys(
         [company.canonical_company_id or company.website_url for company in companies], now
@@ -283,8 +283,10 @@ def select_automatic_employer_work(
             browser.append(company)
         else:
             direct.append(company)
-    if direct and browser and state.get_cursor() % 2:
+    if browser and (state.get_cursor() % 4 == 3 or (not unseen and direct and state.get_cursor() % 2)):
         return window(browser), "browser"
+    if unseen:
+        return window(unseen), "easy"
     if direct:
         return window(direct), "easy"
     if browser:

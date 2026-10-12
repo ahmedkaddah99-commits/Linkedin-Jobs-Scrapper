@@ -159,6 +159,21 @@ def test_automatic_queue_retries_incomplete_easy_scan_before_browser(tmp_path: P
         state.close()
 
 
+def test_automatic_queue_browser_not_starved_by_unseen_companies(tmp_path: Path) -> None:
+    from scripts.master_employer_jobs_catalog import select_automatic_employer_work
+    state=EmployerState(tmp_path/'state.db')
+    try:
+        browser=_company_with_id('browser','Browser')
+        unseen=_company_with_id('unseen','Unseen')
+        state.connection.execute('INSERT INTO companies(company_key,payload_json,status,error,updated_at) VALUES(?,?,?,?,?)',
+            ('browser',json.dumps({'coverage':{'method_attempts':[{'method':'browser_rendered_collection','status':'deferred'}]}}),'partial','','2026-01-01T00:00:00Z'))
+        state.connection.commit()
+        state.set_cursor(3)
+        work,phase=select_automatic_employer_work(state,[browser,unseen],limit=10,now='2026-01-02T00:00:00Z')
+        assert phase=='browser' and work==[browser]
+    finally:state.close()
+
+
 def test_automatic_queue_rechecks_productive_browser_site_with_browser(tmp_path: Path) -> None:
     from scripts.master_employer_jobs_catalog import select_automatic_employer_work
 

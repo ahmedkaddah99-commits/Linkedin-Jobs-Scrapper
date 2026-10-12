@@ -1111,7 +1111,8 @@ class WebshareTransport:
                         elapsed = time.monotonic() - started
                         last = ResponseEnvelope(response.status_code, response.text, proxy.identifier, elapsed)
                         should_retry = (
-                            response.status_code == 429 or response.status_code >= 500 or _blocked_body(response.text)
+                            response.status_code == 429 or response.status_code >= 500
+                            or (_blocked_body(response.text) and not parse_search_page(response.text).is_usable)
                         )
                     except requests.RequestException:
                         elapsed = time.monotonic() - started
@@ -1178,12 +1179,10 @@ def parse_search_page(body: str) -> SearchPageResult:
 
     raw_body = str(body or "")
     lowered = raw_body.lower()
-    if _blocked_body(raw_body):
-        return SearchPageResult(blocked_reason="login_or_challenge", body_class="blocked")
     soup = BeautifulSoup(raw_body, "html.parser")
     visible_text = _clean(soup.get_text(" ", strip=True)).lower()
     if soup.select_one(".jobs-search-no-results, .jobs-search__no-results") or re.search(
-        r"\bno jobs found\b", visible_text
+        r"\bno jobs found\b|we couldn['’]t find a match", visible_text
     ):
         return SearchPageResult(is_usable=True, is_no_results=True, body_class="no_results")
 
@@ -1193,6 +1192,8 @@ def parse_search_page(body: str) -> SearchPageResult:
         if id(item) not in known_nodes and item.select_one("div.base-search-card, div.base-card, [data-entity-urn]"):
             card_nodes.append(item)
     if not card_nodes:
+        if _blocked_body(raw_body):
+            return SearchPageResult(blocked_reason="login_or_challenge", body_class="blocked")
         return SearchPageResult(blocked_reason="unexpected_or_empty_body", body_class="unusable")
     cards: list[SearchCard] = []
     malformed: list[str] = []
@@ -3919,6 +3920,39 @@ class CatalogRunner:
                     continue
                 url = build_search_url(group.linkedin_company_id, start=page_start)
                 response = self._get(url, kind="search")
+                if response.status_code == 200 and is_suspicious_empty_body(response.text):
+                    # Guest fragments do not distinguish empty results from a
+                    # soft failure. The public search page can explicitly
+                    # confirm zero results or supply real cards under the same
+                    # immutable company/country query. Never infer zero from
+                    # the tiny fragment alone.
+                    public_url = build_search_url(group.linkedin_company_id,start=0).replace('/jobs-guest/jobs/api/seeMoreJobPostings/search', '/jobs/search/')
+                    confirmation = self._get(public_url, kind="search")
+                    if confirmation.status_code == 200 and parse_search_page(confirmation.text).is_usable:
+                        parsed_confirmation = parse_search_page(confirmation.text)
+                        if parsed_confirmation.is_no_results and not candidate_cards:
+                            context.no_results = candidate_cards == 0
+                            context.search_status = 'COMPLETE_ZERO_CONFIRMED' if context.no_results else 'COMPLETE'
+                            self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start,
+                                status='COMPLETE',job_ids=(),detail={'no_results':True,'confirmation':'public_search_page'})
+                            break
+                        elif page_start == 0:
+                            public_soup = BeautifulSoup(confirmation.text, 'html.parser')
+                            cards_html=''.join(str(n) for n in public_soup.select('li') if n.select_one('div.base-search-card, div.base-card, [data-entity-urn]'))
+                            confirmation = ResponseEnvelope(200, '<ul>'+cards_html+'</ul>', confirmation.proxy_id, confirmation.elapsed_seconds)
+                            response = confirmation
+                        elif candidate_cards:
+                            public_soup=BeautifulSoup(confirmation.text,'html.parser')
+                            count_node=public_soup.select_one('.results-context-header__job-count')
+                            count_text=count_node.get_text(strip=True).replace(',','') if count_node else ''
+                            observed=set(context.card_by_job_id)
+                            if (count_text.isdigit() and 0<int(count_text)<=len(observed)
+                                and parsed_confirmation.cards
+                                and all(card.linkedin_job_id in observed for card in parsed_confirmation.cards)):
+                                context.search_status='COMPLETE'
+                                self.store.record_search_page(run_id,scan_id,group.linkedin_company_id,page_start,
+                                    status='COMPLETE',job_ids=(),detail={'terminal':'public_result_count','total':int(count_text)})
+                                break
                 classification = classify_http_response(response.status_code, response.text, response.error)
                 if response.error == "request_budget_exhausted":
                     context.search_status = "BUDGET_EXHAUSTED"

@@ -9,6 +9,11 @@ from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 from scripts.master_employer_jobs_catalog import _is_accepted_job_page
 
 
+def test_advice_article_is_not_a_vacancy_even_with_description():
+    assert generic_employer_non_job_reason({'title':'Bewerbungstrends 2026: Darauf musst du achten',
+        'description':'Practical advice for applicants. '*20,'location':'Germany'})=='career_advice_article'
+
+
 def test_embedded_navigation_objects_are_not_jobs() -> None:
     html = '<script type="application/json" id="__NEXT_DATA__">' + json.dumps({
         "props": {"pageProps": {

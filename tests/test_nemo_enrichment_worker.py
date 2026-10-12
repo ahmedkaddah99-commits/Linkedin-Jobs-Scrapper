@@ -36,6 +36,24 @@ def test_uncertain_stage_spend_is_not_replayed(tmp_path):
   client.for_stage('v','h','description_v1','prompt')
  client.db.close()
 
+
+def test_uncertain_initial_request_has_one_durable_budgeted_recovery(tmp_path):
+ import pytest
+ class Client(worker.NemoClient):
+  calls=0
+  def __call__(self,prompt):
+   self.calls+=1
+   if self.calls==1:raise TimeoutError('uncertain original request')
+   return {'items':[]}
+ client=Client(tmp_path/'ledger.db',10)
+ with pytest.raises(TimeoutError):client.for_version('v','h','prompt')
+ assert client.for_version('v','h','prompt')=={'items':[]}
+ assert client.for_version('v','h','prompt')=={'items':[]}
+ assert client.calls==2
+ assert client.db.execute('SELECT state FROM version_requests').fetchone()[0]=='attempted'
+ assert client.db.execute('SELECT stage,state FROM stage_requests').fetchone()==('request_recovery_v1','received')
+ client.db.close()
+
 class NemoWorkerPersistenceTests(unittest.TestCase):
  def test_english_overview_only_rule_fallback_requires_enrichment(self):
   import tempfile
@@ -74,7 +92,7 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
     self.assertEqual(receipt['completed'],2)
     self.assertTrue(receipt['shutdown_drained'])
 
- def test_native_rule_fallback_is_queued_for_english_translation(self):
+ def test_native_rule_facts_remain_completed(self):
   import tempfile
   app=self.classified();store=app.repositories.personalized_jobs_store
   with tempfile.TemporaryDirectory() as directory, store._connect() as c:
@@ -87,11 +105,8 @@ class NemoWorkerPersistenceTests(unittest.TestCase):
    def sql(query,args=()):return [dict(r) for r in c.execute(query,args).fetchall()]
    client=worker.NemoClient(Path(directory)/'ledger.db',10)
    with patch.object(worker,'execute',sql):
-    self.assertEqual(worker.requeue_repairable(client,10),1)
-    token,rows=worker.claim(10,maintain=False)
-    translated=next(value for value in rows if value['current_version_id']==row['version_id'])
-    self.assertFalse(translated['description_ready'])
-    self.assertFalse(worker.complete_if_ready(translated,token))
+    self.assertEqual(worker.requeue_repairable(client,10),0)
+    self.assertEqual(c.execute('SELECT state FROM job_enrichment_queue WHERE version_id=?',(row['version_id'],)).fetchone()[0],'completed')
    client.db.close()
 
  def test_legacy_invalid_output_without_cached_response_is_repairable(self):

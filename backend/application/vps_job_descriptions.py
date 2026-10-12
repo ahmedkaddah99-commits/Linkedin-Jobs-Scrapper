@@ -302,7 +302,7 @@ def build_pilot_description(
         from backend.application.description_translation import english_passages
         prompt_passages = english_passages(passages, generate=row.get('_translation_generate'))
     prompt = (
-        "Read this ONE employer job posting. Write the extracted facts in English. "
+        "Read this ONE employer job posting. Preserve its original language in extracted facts. "
         "When original_text is provided, text is the English translation; extract from text but quote original_text for source_quote. "
         "Keep source IDs tied to the original passages, including German source text. "
         "Return one JSON object only with keys items and header_candidates. "
@@ -338,7 +338,7 @@ def build_pilot_description(
                   "insert ellipses or combine separated excerpts. " + prompt)
         prompt = prompt.replace("Posting: ",
             "Every item and every non-null header candidate MUST include source_quote: an exact nonempty quotation "
-            "from its cited original passage. Translate only the stated meaning. A source ID alone is insufficient evidence. "
+            "from its cited original passage. Preserve original wording. A source ID alone is insufficient evidence. "
             "Do not derive duties or requirements from the title, company name or knowledge of an occupation. "
             "If the text only names the employer or contains no actual job facts, return items=[] and null headers. Posting: ")
     response = generate(prompt)
@@ -368,6 +368,7 @@ def build_pilot_description(
         fact = {"text": wording.strip(), "source_ids": ids}
         if require_source_quotes:
             fact["source_quote"] = quote.strip()
+            fact["text"] = quote.strip()
         summary[section].append(fact)
     candidates = response.get("header_candidates")
     if not isinstance(candidates, Mapping):
@@ -422,6 +423,10 @@ def build_pilot_description(
         "model": str(response.get("_runr_model") or NEMO_MODEL),
         "prompt_version": GROUNDED_PROMPT_VERSION if require_source_quotes else PILOT_PROMPT_VERSION,
     }
+    if require_source_quotes:
+        result = supplement_explicit_sections(result)
+        result['summary']['description_language_policy'] = 'source_original_v1'
+        return result
     if row.get('_translate_before_nemo'):
         # Apply English-only experience validation and section boundaries to the
         # translation, retaining the original passage IDs and original text.

@@ -117,6 +117,8 @@ def generic_employer_non_job_reason(record: Mapping[str, object]) -> str:
     title = _text(record.get("job_title") or record.get("title")).casefold().replace("\u00ad", "")
     if is_navigation_title(record):
         return "generic_navigation_title"
+    if re.search(r'\b(?:bewerbungstipps|bewerbungstrends|karrieretipps|career tips|job search tips)\b', title):
+        return 'career_advice_article'
     description = _text(record.get("description_text") or record.get("description"))
     location = _text(record.get("location_raw") or record.get("location"))
     apply_url = _text(record.get("apply_url_canonical") or record.get("application_url") or record.get("apply_url"))

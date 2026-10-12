@@ -79,6 +79,12 @@ Path('/etc/systemd/system/runr-job-lifecycle.timer').write_text('[Unit]\nDescrip
 Path('/etc/systemd/system/runr-producer-retention.service').write_text('[Unit]\nDescription=Runr source job payload retention\n[Service]\nType=oneshot\nUser=runr-acquisition\nGroup=runr-acquisition\nUMask=0007\nWorkingDirectory='+str(release)+'\nEnvironmentFile='+str(env_path)+'\nExecStart=/opt/runr/.venv/bin/python scripts/maintain_producer_jobs.py --apply --state-root /srv/runr/state/active --lock-root /srv/runr/state/locks --max-seconds 120 --receipt /srv/runr/exports/receipts/producer-retention-latest.json\nSuccessExitStatus=75\nTimeoutStartSec=300\nMemoryMax=1G\nCPUQuota=100%\n')
 Path('/etc/systemd/system/runr-producer-retention.timer').write_text('[Unit]\nDescription=Runr source payload retention schedule\n[Timer]\nOnBootSec=3min\nOnUnitInactiveSec=1h\n[Install]\nWantedBy=timers.target\n')
 subprocess.run(['systemctl','daemon-reload'], check=True)
+backup_dropin=Path('/etc/systemd/system/runr-acquisition-backup.service.d/zzzzzz-acquisition-lifecycle.conf')
+backup_dropin.parent.mkdir(parents=True,exist_ok=True)
+backup_dropin.write_text('[Service]\nWorkingDirectory='+str(release)+'\nEnvironmentFile='+str(env_path)+'\n'
+    'Environment=RUNR_LINKEDIN_STATE_DB=/srv/runr/state/active/linkedin/master_linkedin_jobs_state.db\n'
+    'Environment=RUNR_EMPLOYER_STATE_DB=/srv/runr/state/active/employer/master_employer_jobs_state.db\n')
+subprocess.run(['systemctl','daemon-reload'], check=True)
 print(json.dumps({'installed':str(release),'commit':commit,'evidence':str(evidence),'timers_resumed':False,'storage':'r2'}))
 
 

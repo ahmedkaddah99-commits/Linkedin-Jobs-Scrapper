@@ -47,9 +47,7 @@ DESCRIPTION_ACCEPTABLE_SQL = """d.prompt_version IN ('runr_description_v1','runr
             OR COALESCE(json_array_length(d.summary_json,'$.preferred_qualifications'),0)>0
             OR COALESCE(json_array_length(d.summary_json,'$.benefits'),0)>0
             OR COALESCE(json_array_length(d.summary_json,'$.application_details'),0)>0
-            OR (d.provider NOT IN ('rules','runr_rules')
-                AND LENGTH(TRIM(COALESCE(json_extract(d.summary_json,'$.overview'),'')))>0))
-        AND COALESCE(json_extract(d.summary_json,'$.output_language'),'en') IN ('en','und')
+)
         ELSE 0 END"""
 
 
@@ -122,9 +120,16 @@ class NemoClient:
             if prior:
                 if prior[0] == 'received':
                     return json.loads(prior[1])
-                raise ValueError('provider_request_already_attempted')
-            self.db.execute("INSERT INTO version_requests VALUES(?,?,'attempted',NULL)", (version_id, content_hash))
-            self.db.commit()
+                # Preserve the original reservation; one separately recorded
+                # recovery request remains budgeted even if the first timed out.
+                uncertain = True
+            else:
+                uncertain = False
+            if not uncertain:
+                self.db.execute("INSERT INTO version_requests VALUES(?,?,'attempted',NULL)", (version_id, content_hash))
+                self.db.commit()
+        if uncertain:
+            return self.for_stage(version_id, content_hash, 'request_recovery_v1', prompt)
         try:
             result = self(prompt)
         except RuntimeError as error:
@@ -252,7 +257,7 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
         q.attempts,v.content_hash,v.description,v.payload_json AS version_payload_json,v.location AS version_location,v.apply_url,
         CASE WHEN f.content_hash=v.content_hash AND json_valid(f.filters_json) THEN json_extract(f.filters_json,'$.collar') END AS saved_collar,
         CASE WHEN f.content_hash=v.content_hash AND """ + FILTER_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS filters_ready,
-        CASE WHEN q.error_code='english_description_repair' THEN 0
+        CASE WHEN q.error_code IN ('english_description_repair','description_evidence_repair') THEN 0
         WHEN d.content_hash=v.content_hash AND """ + DESCRIPTION_ACCEPTABLE_SQL + """ THEN 1 ELSE 0 END AS description_ready
         ,d.provider AS description_provider,d.summary_json AS existing_summary_json
         FROM job_enrichment_queue q JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id
@@ -267,19 +272,11 @@ def claim(limit: int, *, maintain: bool = True) -> tuple[str, list[dict]]:
     return token, candidates
 
 
-def english_summary(raw):
-    from backend.application.description_translation import source_language
-    summary=json.loads(raw or '{}')
-    text=' '.join([str(summary.get('overview') or '')] + [item['text']
-        for items in summary.values() if isinstance(items,list)
-        for item in items if isinstance(item,dict) and isinstance(item.get('text'),str)])
-    return bool(text.strip()) and source_language(text)=='en'
-
-
 def usable_rule_summary(raw):
     summary = json.loads(raw or '{}')
-    return any(isinstance(summary.get(section), list) and summary[section]
-               for section in SECTIONS) and english_summary(raw)
+    return any(isinstance(summary.get(section), list) and any(
+        isinstance(item, dict) and isinstance(item.get('text'), str) and item['text'].strip()
+        for item in summary[section]) for section in SECTIONS)
 
 
 def save_stage(row: dict, token: str, output: dict) -> None:
@@ -440,7 +437,8 @@ def requeue_repairable(generate, limit):
         JOIN job_posting_versions v ON v.version_id=q.version_id
         LEFT JOIN job_filter_intelligence f ON f.version_id=q.version_id
         WHERE q.state='review_required' AND q.error_code IN
-            ('filter_validation_failed','filter_response_identity_mismatch','description_output_not_english','description_has_no_supported_facts')
+            ('filter_validation_failed','filter_response_identity_mismatch','description_output_not_english','description_has_no_supported_facts',
+             'provider_request_already_attempted','ValueError','JSONDecodeError','EnrichmentStageError')
         AND j.lifecycle_state<>'expired'
         AND EXISTS(SELECT 1 FROM acquisition_publication_jobs pj
             WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
@@ -451,9 +449,10 @@ def requeue_repairable(generate, limit):
         for row in rows:
             key=(row['version_id'],row['content_hash'])
             prior=generate.db.execute('SELECT state FROM version_requests WHERE version_id=? AND content_hash=?',key).fetchone()
-            stage='classification_v1' if row['error_code'] in ('filter_validation_failed','filter_response_identity_mismatch') else 'description_v1'
+            stage=('request_recovery_v1' if row['error_code'] in ('provider_request_already_attempted','ValueError','JSONDecodeError')
+                   else 'classification_v2' if row['error_code'] in ('filter_validation_failed','filter_response_identity_mismatch') else 'description_original_v1')
             repaired=generate.db.execute('SELECT state,response_json FROM stage_requests WHERE version_id=? AND content_hash=? AND stage=?', (*key,stage)).fetchone()
-            if (not prior or prior[0]=='received') and not repaired:
+            if not repaired and (not prior or prior[0]=='received' or stage=='request_recovery_v1'):
                 selected.append(row['version_id'])
             elif (repaired and repaired[0]=='received' and repaired[1]
                   and row['error_code']=='description_has_no_supported_facts' and row['filters_ready']):
@@ -462,7 +461,7 @@ def requeue_repairable(generate, limit):
                 from backend.application.vps_job_descriptions import build_pilot_description
                 try:
                     description=build_pilot_description(row,lambda _: json.loads(repaired[1]),require_source_quotes=True)
-                    if english_summary(json.dumps(description['summary'])):
+                    if usable_rule_summary(json.dumps(description['summary'])):
                         selected.append(row['version_id'])
                 except (ValueError,TypeError,KeyError):
                     pass
@@ -470,7 +469,7 @@ def requeue_repairable(generate, limit):
         execute("UPDATE job_enrichment_queue SET state='pending',next_attempt_at='',updated_at=? "
                 "WHERE state='review_required' AND version_id IN (SELECT value FROM json_each(?))",
                 (now(),json.dumps(selected)))
-    # Native-language rule output is a fallback, not a completed translation.
+    # Revisit empty rule output; language alone is never an error.
     native = execute('''SELECT q.version_id,q.content_hash,d.summary_json FROM job_enrichment_queue q
         JOIN canonical_jobs j ON j.canonical_job_id=q.canonical_job_id AND j.current_version_id=q.version_id
         JOIN job_description_intelligence d ON d.version_id=q.version_id AND d.content_hash=q.content_hash
@@ -480,11 +479,11 @@ def requeue_repairable(generate, limit):
             WHERE pj.publication_id=(SELECT publication_id FROM acquisition_publication_head WHERE head_id=1)
             AND pj.canonical_job_id=j.canonical_job_id)
         LIMIT ?''', (limit,))
-    needs_translation=[row['version_id'] for row in native if not usable_rule_summary(row['summary_json'])]
-    if needs_translation:
-        execute("UPDATE job_enrichment_queue SET state='pending',error_code='english_description_repair',next_attempt_at='' "
-                "WHERE state='completed' AND version_id IN (SELECT value FROM json_each(?))", (json.dumps(needs_translation),))
-    return len(selected)+len(needs_translation)
+    needs_facts=[row['version_id'] for row in native if not usable_rule_summary(row['summary_json'])]
+    if needs_facts:
+        execute("UPDATE job_enrichment_queue SET state='pending',error_code='description_evidence_repair',next_attempt_at='' "
+                "WHERE state='completed' AND version_id IN (SELECT value FROM json_each(?))", (json.dumps(needs_facts),))
+    return len(selected)+len(needs_facts)
 
 
 def main() -> int:
