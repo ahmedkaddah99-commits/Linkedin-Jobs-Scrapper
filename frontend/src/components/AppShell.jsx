@@ -167,6 +167,7 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
           return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}</NavLink>;
         })}
       </nav>
+      <div id="jobs-nav-search" />
       <div className="jobs-top-nav__utilities">
         <button aria-label="Open Runr workspace menu" onClick={onOpenWorkspaceMenu} title="Dashboard, workspaces, runs and tools" type="button"><span className="material-symbols-outlined">apps</span></button>
         <button aria-label="Announcements" type="button"><span className="material-symbols-outlined">campaign</span></button>

@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-test("jobs toolbar stays in one desktop row with usable filters and search", async ({ page }, info) => {
+test("reference toolbar keeps readable filters and separate navigation search", async ({ page }, info) => {
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/saved-search")) return route.fulfill({ json: { filters: { role: ["Data Analyst"] } } });
@@ -16,7 +16,7 @@ test("jobs toolbar stays in one desktop row with usable filters and search", asy
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await expect(bar.getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
+    await expect(page.locator("#jobs-nav-search").getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
     for (const name of ["Location", "Job Function", "Job Type", "Experience Level", "Work Model", "Date Posted", "Industry", "Years of Experience"]) {
       await expect(bar.getByRole("button", { name: new RegExp(name) })).toBeVisible();
     }
@@ -26,8 +26,10 @@ test("jobs toolbar stays in one desktop row with usable filters and search", asy
         const children = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.getBoundingClientRect());
         return { height: bounds.height, centers: children.map((rect) => rect.y + rect.height / 2), right: Math.max(...children.map((rect) => rect.right)), viewport: innerWidth };
       });
-      expect(geometry.height).toBeLessThan(60);
-      expect(Math.max(...geometry.centers) - Math.min(...geometry.centers)).toBeLessThan(2);
+      expect(geometry.height).toBeLessThan(160);
+      await expect(bar.locator(".jobs-quick-filter")).toHaveCount(8);
+      const size = await bar.locator(".jobs-filter-pill").first().evaluate((node) => getComputedStyle(node).fontSize);
+      expect(parseFloat(size)).toBeGreaterThanOrEqual(14);
       expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
     }
   }

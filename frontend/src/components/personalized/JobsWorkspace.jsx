@@ -1,6 +1,7 @@
 import CvCustomization from "../cvCustomization/CvCustomization.jsx";
 import { CvTools, QualificationTags } from "../cvCustomization/CvTools.jsx";
 import QuickJobFilter from "./QuickJobFilter";
+import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
@@ -303,6 +304,8 @@ function useIsMobile() {
 }
 
 export default function JobsWorkspace({ initialJobId = "", external = false }) {
+  const [searchHost, setSearchHost] = useState(null);
+  useEffect(() => { setSearchHost(document.getElementById("jobs-nav-search")); }, []);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -787,8 +790,7 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
 
   return <div className={external ? "jobs-experience jobs-experience--external" : "jobs-experience"}>
     {external ? <><section className="jobs-search-heading"><div><h1>External jobs</h1><p>Add a job posting link to view and prepare it with Runr.</p></div><Link className="jobs-text-link" to="/jobs">Recommended jobs</Link></section>{!routeJobId ? <ExternalJobImport connected={isConnected} request={request} onImported={job => { setFeedAttempt(value => value + 1); selectJob(toPersonalizedJobView(job)); }} /> : null}</> : <>
-    <section className="jobs-search-bar" aria-label="Job search filters">
-    <CompanySearch connected={isConnected} onClear={() => {
+    {searchHost ? createPortal(<CompanySearch connected={isConnected} onClear={() => {
       filtersTouchedRef.current = true;
       setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
     }} onQuery={(value) => {
@@ -797,7 +799,8 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     }} onSelect={(company) => {
       filtersTouchedRef.current = true;
       setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
-    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />, searchHost) : null}
+    <section className="jobs-search-bar" aria-label="Job search filters">
       <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
       {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}
