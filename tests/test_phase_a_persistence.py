@@ -233,6 +233,25 @@ class PhaseAPersistenceTests(unittest.TestCase):
             self.assertEqual((actual["actual_requests"], actual["actual_credits"]), (1, 0))
             self.assertEqual(publication_scope_rows, 0)
 
+            # A quality repair can replace the head while the source cycle is
+            # incomplete. Its old snapshot must not prevent future batches.
+            with store._connect() as connection:
+                connection.execute(
+                    "INSERT INTO acquisition_publications (publication_id,cycle_id,status,snapshot_json,published_at) "
+                    "VALUES ('repair-head','repair-cycle','valid','[]','2026-01-01')"
+                )
+                connection.execute("UPDATE acquisition_publication_head SET publication_id='repair-head' WHERE head_id=1")
+                connection.commit()
+            resumed = store.publish_valid_snapshot(
+                cycle_id=cycle_id, valid_target_ids=[target['target_id']], batch_key='resume-batch'
+            )
+            self.assertNotEqual(resumed, publication_id)
+            self.assertNotEqual(resumed, 'repair-head')
+            replayed = store.publish_valid_snapshot(
+                cycle_id=cycle_id, valid_target_ids=[target['target_id']], batch_key='resume-batch'
+            )
+            self.assertEqual(resumed, replayed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,8 @@ subsystems:
       - scripts/run_manifested_linkedin.py
       - scripts/run_manifested_employer.py
       - scripts/publish_producer_states.py
+      - scripts/run_producer_catchup.py
+      - scripts/audit_producer_catchup.py
       - scripts/build_master_jobs_catalog.py
       - scripts/reduce_catalog_storage.py
       - scripts/maintain_catalog_storage.py

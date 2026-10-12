@@ -277,3 +277,10 @@ unreferenced jobs. Immutable DELETE guards are restored inside each purge
 transaction. Historical publication snapshots and append-only audit identifiers
 remain as audit history; current discovery contains no selected employer jobs.
 Evidence: `data/audit/blue_employer_cleanup_2026-10-09/`.
+
+## Frozen catch-up (2026-10-13)
+
+The bounded reusable-snapshot runner and per-row outcome ledger are documented in
+[the catch-up report](../../reports/reusable-producer-catchup-2026-10-13.md).
+Capture-time checkpoint fencing preserves later source updates. Normal quality
+gates, source locks and the single publication writer remain enforced.

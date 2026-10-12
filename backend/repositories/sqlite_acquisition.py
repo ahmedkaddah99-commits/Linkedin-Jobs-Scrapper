@@ -4083,9 +4083,25 @@ class SqliteAcquisitionStore(_SqliteStore):
         if batch_key:
             with self._connect() as connection:
                 head = connection.execute(
-                    "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+                    "SELECT h.publication_id, p.cycle_id FROM acquisition_publication_head h "
+                    "JOIN acquisition_publications p ON p.publication_id=h.publication_id WHERE h.head_id=1"
                 ).fetchone()
                 previous_head_id = str(head["publication_id"] or "") if head else ""
+                # A recovery/quality publication can supersede this cycle's
+                # snapshot. Resume from the current head in a new generation;
+                # never revive the old snapshot or overwrite recovery decisions.
+                if head:
+                    head_cycle = str(head["cycle_id"] or "")
+                    resume_prefix = cycle_id + ":resume:"
+                    if head_cycle.startswith(resume_prefix):
+                        publication_cycle_id = head_cycle
+                    elif head_cycle != cycle_id:
+                        prior_cycle = connection.execute(
+                            "SELECT publication_id FROM acquisition_publications WHERE cycle_id=?",
+                            (cycle_id,),
+                        ).fetchone()
+                        if prior_cycle:
+                            publication_cycle_id = resume_prefix + previous_head_id
                 if previous_head_id:
                     previous = connection.execute(
                         "SELECT snapshot_json FROM acquisition_publications WHERE publication_id=?",

@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ from backend.application.company_identity_canonicalization import (
     resolve_company_id as resolve_company_identity,
 )
 from backend.acquisition.job_publication_completeness import validate_job_for_publication
-from backend.acquisition.publication import DEFAULT_PUBLICATION_POLICY_VERSION
+from backend.acquisition.publication import DEFAULT_PUBLICATION_POLICY_VERSION, StalePublicationHeadError
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
 
@@ -1523,6 +1524,7 @@ def run_delivery(
     controls: BackfillControls | None = None,
     publication_policy: str | None = None,
     rollback_policy: str | None = None,
+    snapshot_captured_at: str | None = None,
 ) -> dict[str, object]:
     """Incrementally publish source changes without replaying whole catalogs."""
 
@@ -1588,6 +1590,15 @@ def run_delivery(
     linkedin_checkpoint = store.publisher_checkpoint(SOURCE_LINKEDIN) if store is not None else dict(empty_checkpoint)
     employer_checkpoint = store.publisher_checkpoint(SOURCE_EMPLOYER) if store is not None else dict(empty_checkpoint)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if snapshot_captured_at:
+        captured = datetime.fromisoformat(snapshot_captured_at.replace("Z", "+00:00"))
+        if captured.tzinfo is None or captured > datetime.now(timezone.utc):
+            raise ValueError("Snapshot boundary must be a past timezone-aware timestamp")
+        now = captured.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for checkpoint in (linkedin_checkpoint, employer_checkpoint):
+            watermark = _text(checkpoint.get("source_watermark"))
+            if watermark and datetime.fromisoformat(watermark.replace("Z", "+00:00")) > captured:
+                raise ValueError("Publisher checkpoint is newer than the frozen source snapshot")
     batch_size = controls.batch_size
     telemetry = _publisher_telemetry(
         {SOURCE_LINKEDIN: linkedin_checkpoint, SOURCE_EMPLOYER: employer_checkpoint}, now
@@ -1687,6 +1698,13 @@ def run_delivery(
             eligibility=eligibility,
         )
     if not linkedin_changed and not employer_changed:
+        # An empty final bootstrap window is still durable scan progress.
+        # Without this, an exact multiple of the row cap never finishes.
+        for previous, checkpoint in ((linkedin_checkpoint, next_linkedin_checkpoint),
+                                     (employer_checkpoint, next_employer_checkpoint)):
+            store.save_publisher_checkpoint(checkpoint,
+                cycle_id=_text(previous.get("last_cycle_id")),
+                publication_id=_text(previous.get("last_publication_id")))
         return _with_receipt(
             {
                 "status": "no_changes",
@@ -1841,15 +1859,23 @@ def run_delivery(
             batch_key = hashlib.sha256("|".join(batch).encode("utf-8")).hexdigest()[:24]
             started = monotonic()
             _timing_event("publication_batch_start", companies=len(batch))
-            publication_id = store.publish_valid_snapshot(
-                cycle_id=cycle_id,
-                valid_target_ids=batch,
-                origin="scheduled",
-                created_by="producer_bridge",
-                scheduled_run_id=cycle_id,
-                policy_version=policy_version,
-                batch_key=batch_key,
-            )
+            publication_id = None
+            for attempt in range(3):
+                try:
+                    publication_id = store.publish_valid_snapshot(
+                        cycle_id=cycle_id,
+                        valid_target_ids=batch,
+                        origin="scheduled",
+                        created_by="producer_bridge",
+                        scheduled_run_id=cycle_id,
+                        policy_version=policy_version,
+                        batch_key=batch_key,
+                    )
+                    break
+                except StalePublicationHeadError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(1.0 + attempt)
             if publication_id:
                 last_publication_id = publication_id
             _timing_event("publication_batch", duration_seconds=monotonic() - started,
@@ -2343,6 +2369,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--employer-state", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--source-version", default=os.getenv("RUNR_SOURCE_VERSION", ""))
+    parser.add_argument("--snapshot-captured-at", help="Upper checkpoint boundary for a reusable source snapshot")
     parser.add_argument("--company-ids", nargs="*")
     parser.add_argument(
         "--skip-status-only",
@@ -2407,6 +2434,7 @@ def main(argv: list[str] | None = None) -> int:
         controls=controls,
         publication_policy=args.publication_policy_version,
         rollback_policy=args.rollback_policy_version,
+        snapshot_captured_at=args.snapshot_captured_at,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0
