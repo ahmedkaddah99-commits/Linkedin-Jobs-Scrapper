@@ -1,3 +1,18 @@
+export const CONNECTION_STRENGTHS = ["Know well", "Know", "Met", "LinkedIn only"];
+
+export function normalizedConnectionStrength(value) {
+  const strength = String(value || "").trim();
+  return ({ Close: "Know well", Strong: "Know well", Familiar: "Know", Acquaintance: "Met" })[strength]
+    || (CONNECTION_STRENGTHS.includes(strength) ? strength : "");
+}
+
+function shortRole(value, name = "") {
+  let role = String(value || "").replace(/Connected on\b.*$/iu, "").replace(/Message$/u, "").trim();
+  if (name && role.startsWith(name)) role = role.slice(name.length).trim();
+  role = role.split(/\s*[|\u2022]\s*/u).find(Boolean) || "";
+  return role.length > 70 ? `${role.slice(0, 67).trimEnd()}…` : role;
+}
+
 export function connectionDetails(contact) {
   const row = contact.metadata?.import_source_row || {};
   const companies = contact.companies || [];
@@ -28,16 +43,20 @@ export function connectionDetails(contact) {
   return {
     name,
     headline,
-    jobTitle: companies.map((entry) => entry.role_title).filter(Boolean).join(" · ") || occupation?.[1] || headline,
-    company: companies.map((entry) => entry.company_name || entry.company).filter(Boolean).join(" · ") || contact.company || occupation?.[2] || "",
-    strength: contact.metadata?.connection_strength || (["Close", "Strong", "Familiar", "Acquaintance"].includes(contact.relationship_note) ? contact.relationship_note : ""),
-    notes: contact.metadata?.notes ?? (contact.source_kind === "manual" && !["Close", "Strong", "Familiar", "Acquaintance"].includes(contact.relationship_note) ? contact.relationship_note : ""),
+    jobTitle: shortRole(companies.map((entry) => entry.role_title).find(Boolean) || occupation?.[1] || headline, name),
+    company: companies.map((entry) => entry.company_name || entry.company).find(Boolean) || contact.company || occupation?.[2] || "",
+    strength: normalizedConnectionStrength(contact.metadata?.connection_strength || contact.relationship_note),
+    notes: contact.metadata?.notes ?? (contact.source_kind === "manual" && !normalizedConnectionStrength(contact.relationship_note) ? contact.relationship_note : ""),
   };
 }
 
 export function filterConnections(contacts, filters) {
   return contacts.filter((contact) => {
     const details = connectionDetails(contact);
+    if (filters.query) {
+      const haystack = [details.name, details.jobTitle, details.company].join(" ").toLocaleLowerCase();
+      return haystack.includes(filters.query.trim().toLocaleLowerCase());
+    }
     return Object.entries(filters).every(([field, value]) => !value || String(details[field] || "").toLocaleLowerCase().includes(value.trim().toLocaleLowerCase()));
   });
 }

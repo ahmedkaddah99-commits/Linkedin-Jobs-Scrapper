@@ -2781,9 +2781,27 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .connection-detail--company { grid-column: 3; }
 .connection-detail--strength { grid-column: 4; color: var(--referral-accent); font-weight: 600; }
 .connection-mobile-label { display: none; }
+.connections-workspace .referral-list { border: 0; background: transparent; box-shadow: none; }
+.connections-workspace .referral-list__header { border: 0; padding: 0 0 0.8rem; }
+.connections-workspace .referral-list__copy { margin: 0.2rem 0 0; }
+.connections-workspace .connection-filters { display: block; padding: 0 0 1rem; }
+.connections-workspace .connection-filters input { width: 100%; max-width: 26rem; background: #fff; }
+.connections-workspace .referral-list__body { display: grid; gap: 0.65rem; min-height: 0; }
+.connections-workspace .referral-contact { border: 1px solid var(--referral-line); border-radius: 0.85rem; background: #fff; padding: 0.85rem 1rem; }
+.connections-workspace .referral-contact:last-child { border-bottom: 1px solid var(--referral-line); }
+.connections-workspace .referral-contact__top { align-items: center; }
+.connections-workspace .referral-contact__identity { align-items: center; display: grid; flex: 1; gap: 0.2rem 1rem; grid-template-columns: minmax(11rem, 1fr) minmax(11rem, 1.3fr) minmax(10rem, 0.8fr) auto; }
+.connections-workspace .referral-contact__name { grid-column: 1; }
+.connections-workspace .connection-detail--role { grid-column: 2; color: var(--referral-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-strength { grid-column: 3; }
+.connection-strength span { display: block; color: var(--referral-muted); font-size: 0.62rem; margin-bottom: 0.2rem; }
+.connection-strength select { background: var(--referral-soft); border: 1px solid var(--referral-line); border-radius: 0.5rem; color: var(--referral-ink); font: inherit; font-size: 0.72rem; min-height: 2.1rem; padding: 0.35rem 0.55rem; width: 100%; }
+.connections-workspace .referral-contact__link { grid-column: 4; margin: 0; white-space: nowrap; }
+.connections-workspace .referral-contact__actions { justify-content: end; width: auto; }
+.connections-workspace .referral-contact__actions .referral-button { min-height: 2.1rem; padding: 0.35rem 0.55rem; }
 .connections-workspace .referral-contact__link, .connections-workspace .referral-contact__date, .connections-workspace .referral-contact__note, .connections-workspace .referral-outreach { grid-column: 1 / -1; margin-top: 0; }
 .connections-workspace .referral-contact__note:empty { display: none; }
-.connections-workspace .referral-contact__actions { width: 6.5rem; flex-shrink: 0; }
+.connections-workspace .referral-contact__actions { width: auto; flex-shrink: 0; }
 @media (max-width: 1100px) {
   .referral-workspace--editing { grid-template-columns: minmax(0, 1fr); }
 }
@@ -2793,6 +2811,18 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
   .connections-workspace .referral-contact__identity { grid-template-columns: 1fr; }
   .connections-workspace .referral-contact__identity > * { grid-column: 1; }
   .connection-mobile-label { display: block; font-size: 0.65rem; color: var(--referral-muted); }
+}
+@media (max-width: 950px) {
+  .connections-workspace .referral-contact__identity { grid-template-columns: minmax(0, 1fr) minmax(9rem, 0.7fr); }
+  .connections-workspace .referral-contact__name, .connections-workspace .connection-detail--role { grid-column: 1; }
+  .connections-workspace .connection-strength { grid-column: 2; grid-row: 1 / 3; }
+  .connections-workspace .referral-contact__link { grid-column: 1; }
+}
+@media (max-width: 600px) {
+  .connections-workspace .referral-contact__top { align-items: stretch; flex-direction: column; }
+  .connections-workspace .referral-contact__identity { grid-template-columns: 1fr; }
+  .connections-workspace .referral-contact__identity > * { grid-column: 1; grid-row: auto; }
+  .connections-workspace .referral-contact__actions { justify-content: flex-start; }
 }
 .referral-panel,
 .referral-list,
@@ -2898,6 +2928,7 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .referral-load-more .referral-button { width: 100%; }
 
 html.dark .referrals-page { --referral-ink: #eef2ff; --referral-muted: #a8b2ca; --referral-line: rgba(156, 176, 213, 0.22); --referral-soft: #12233d; --referral-accent: #9c9dff; --referral-accent-soft: #282a58; --referral-success: #72d5b4; --referral-warning: #f0c36a; }
+html.dark .connections-workspace .referral-contact, html.dark .connections-workspace .connection-filters input { background: #192944; }
 html.dark .referral-metric,
 html.dark .referral-surface,
 html.dark .referral-finder,

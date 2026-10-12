@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { connectionDetails, filterConnections } from "../lib/connectionDetails";
+import { CONNECTION_STRENGTHS, connectionDetails, filterConnections } from "../lib/connectionDetails";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -30,7 +30,6 @@ const REFERRAL_OUTREACH_STATUSES = [
 ];
 const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import", "linkedin_extension"]);
 const REFERRAL_SECTION_OPTIONS = [{ id: "connections", label: "Connections", description: "Your people, in one place.", icon: "group" }];
-const CONNECTION_STRENGTHS = ["Close", "Strong", "Familiar", "Acquaintance"];
 const CONTACT_RENDER_BATCH_SIZE = 50;
 let referralWorkspaceCache = null;
 let referralWorkspaceCacheRequest = null;
@@ -361,7 +360,7 @@ export default function ReferralsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
   const [formOpen, setFormOpen] = useState(false);
-  const [filters, setFilters] = useState({ name: "", jobTitle: "", company: "" });
+  const [filters, setFilters] = useState({ query: "" });
   const requestedSection = searchParams.get("section");
   const [activeSection, setActiveSection] = useState("connections");
   const [visibleContactLimit, setVisibleContactLimit] = useState(CONTACT_RENDER_BATCH_SIZE);
@@ -564,7 +563,7 @@ export default function ReferralsPage() {
           company: form.company_name.trim(),
           companies,
           linkedin_url: form.linkedin_url,
-          relationship_note: form.relationship_note || editingContact?.relationship_note || "",
+          relationship_note: form.relationship_note,
           can_refer: Boolean(editingContact?.can_refer || form.can_refer),
           ...sourcePayload,
           metadata: { ...(sourcePayload.metadata || {}), connection_strength: form.relationship_note, notes: form.notes, headline: form.job_title },
@@ -601,6 +600,27 @@ export default function ReferralsPage() {
         error: saveError.message || "Unable to save referral contact.",
         busyId: "",
       });
+    }
+  }
+
+  async function saveConnectionStrength(contact, strength) {
+    setActionState({ message: "", error: "", busyId: contact.contact_id });
+    try {
+      const savedContact = await request(`/referrals/${encodeURIComponent(contact.contact_id)}`, {
+        method: "PUT",
+        body: {
+          ...contact,
+          relationship_note: strength,
+          metadata: { ...(contact.metadata || {}), connection_strength: strength },
+        },
+      });
+      updateReferralData((current) => ({
+        ...current,
+        contacts: current.contacts.map((item) => item.contact_id === contact.contact_id ? savedContact : item),
+      }));
+      setActionState({ message: "Connection updated.", error: "", busyId: "" });
+    } catch (saveError) {
+      setActionState({ message: "", error: saveError.message || "Could not save connection.", busyId: "" });
     }
   }
 
@@ -947,13 +967,13 @@ export default function ReferralsPage() {
                   <textarea className="referral-input" rows={3} placeholder="How you met, shared interests, or a reminder to follow up" value={form.notes} onChange={(event) => updateForm({ notes: event.target.value })} />
                 </ReferralFormField>
 
-                <ReferralFormField label="Connection strength">
+                <ReferralFormField label="How well do you know them?">
                   <select
                     className="referral-input"
                     onChange={(event) => updateForm({ relationship_note: event.target.value })}
                     value={form.relationship_note}
                   >
-                    <option value="">Choose strength</option>
+                    <option value="">Choose one</option>
                     {CONNECTION_STRENGTHS.map((strength) => <option key={strength} value={strength}>{strength}</option>)}
                   </select>
                 </ReferralFormField>
@@ -1094,18 +1114,12 @@ export default function ReferralsPage() {
           <div className="referral-list__header">
             <div>
                 <h2 className="referral-list__title">All connections</h2>
-                <p className="referral-list__copy">{visibleContacts.length} connections · Find people by name, job title or company.</p>
               </div>
             </div>
 
           <div className="connection-filters">
-            {[['name', 'Name'], ['jobTitle', 'Job title'], ['company', 'Company']].map(([field, label]) => (
-              <ReferralFormField key={field} label={label}>
-                <input className="referral-input" type="search" placeholder={`Filter by ${label.toLowerCase()}`} value={filters[field]} onChange={(event) => setFilters((current) => ({ ...current, [field]: event.target.value }))} />
-              </ReferralFormField>
-            ))}
+            <input aria-label="Search connections" className="referral-input" type="search" placeholder="Search name, role or company" value={filters.query} onChange={(event) => setFilters({ query: event.target.value })} />
           </div>
-          <div className="connection-columns" aria-hidden="true"><span>Name</span><span>Job title</span><span>Company</span><span>Connection strength</span></div>
           <div className="referral-list__body">
             {loading ? (
               <div className="referral-empty">Loading contacts...</div>
@@ -1130,9 +1144,15 @@ export default function ReferralsPage() {
                           ) : null}
                         </div>
 
-                        <div className="connection-detail connection-detail--title"><span className="connection-mobile-label">Job title</span>{details.jobTitle || "—"}</div>
-                        <div className="connection-detail connection-detail--company"><span className="connection-mobile-label">Company</span>{details.company || "—"}</div>
-                        <div className="connection-detail connection-detail--strength"><span className="connection-mobile-label">Connection strength</span>{details.strength || "Not set"}</div>
+                        <div className="connection-detail connection-detail--role" title={details.jobTitle || ""}>{[details.jobTitle, details.company].filter(Boolean).join(" · ")}</div>
+
+                        <label className="connection-strength">
+                          <span>How well do you know them?</span>
+                          <select aria-label={`How well do you know ${details.name}?`} disabled={actionState.busyId === contact.contact_id} onChange={(event) => saveConnectionStrength(contact, event.target.value)} value={details.strength}>
+                            <option value="">Choose one</option>
+                            {CONNECTION_STRENGTHS.map((strength) => <option key={strength} value={strength}>{strength}</option>)}
+                          </select>
+                        </label>
 
                         {contact.linkedin_url ? (
                           <a
@@ -1142,121 +1162,8 @@ export default function ReferralsPage() {
                             target="_blank"
                           >
                             <span className="material-symbols-outlined text-[15px]">open_in_new</span>
-                            LinkedIn profile
+                            LinkedIn
                           </a>
-                        ) : null}
-
-                        {importedConnectedDate(contact) ? (
-                          <div className="referral-contact__date">
-                            Connected on LinkedIn: {importedConnectedDate(contact)}
-                          </div>
-                        ) : null}
-
-                        <p className="referral-contact__note">
-                          {details.notes}
-                        </p>
-
-                        {detailsLoaded ? (
-                        <div className="referral-outreach">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <h4 className="referral-outreach__title">Outreach Activity</h4>
-                              <p className="referral-outreach__copy">
-                                Stored per run, job, and contact. Update these statuses directly here.
-                              </p>
-                            </div>
-                          </div>
-                          {contactOutreach.length ? (
-                            <div>
-                              {contactOutreach.map((item) => (
-                                <div
-                                  key={`${item.run_id}-${item.job_id}-${item.contact_id}`}
-                                  className="referral-outreach__item"
-                                >
-                                  <div className="referral-outreach__item-top">
-                                    <div>
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <StatusBadge tone={outreachStatusTone(item.outreach_status)}>
-                                          {item.outreach_status}
-                                        </StatusBadge>
-                                        <span className="text-xs text-on-surface-variant">
-                                          {formatUpdatedAt(item.updated_at)}
-                                        </span>
-                                      </div>
-                                      <div className="referral-outreach__job">
-                                        {item.job_title || "Untitled job"}
-                                        {item.company ? ` at ${item.company}` : ""}
-                                      </div>
-                                      <div className="referral-outreach__meta">
-                                        <span>{item.workspace_name || "Workspace not set"}</span>
-                                        {item.run_id ? (
-                                          <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[11px] text-on-surface-variant">
-                                            {item.run_id}
-                                          </span>
-                                        ) : null}
-                                        {item.source_label ? <span>{item.source_label}</span> : null}
-                                      </div>
-                                    </div>
-                                    <div className="referral-outreach__actions">
-                                      <select
-                                        className="referral-select"
-                                        disabled={
-                                          actionState.busyId ===
-                                          `outreach:${item.run_id}:${item.job_id}:${item.contact_id}`
-                                        }
-                                        onChange={(event) =>
-                                          updateOutreachStatus(item, event.target.value)
-                                        }
-                                        value={item.outreach_status || "Not contacted"}
-                                      >
-                                        {REFERRAL_OUTREACH_STATUSES.map((status) => (
-                                          <option key={`${item.contact_id}-${status}`} value={status}>
-                                            {status}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      {item.contact_linkedin_url ? (
-                                        <a
-                                          className="referral-button referral-button--quiet"
-                                          href={item.contact_linkedin_url}
-                                          rel="noreferrer"
-                                          target="_blank"
-                                        >
-                                          Open LinkedIn
-                                        </a>
-                                      ) : null}
-                                      {item.apply_link ? (
-                                        <a
-                                          className="referral-button referral-button--quiet"
-                                          href={item.apply_link}
-                                          rel="noreferrer"
-                                          target="_blank"
-                                        >
-                                          Open Job
-                                        </a>
-                                      ) : null}
-                                      {item.run_id && item.job_id ? (
-                                        <Link
-                                          className="referral-button referral-button--quiet"
-                                          to={buildJobWorkspaceRoute({
-                                            runId: item.run_id,
-                                            jobId: item.job_id,
-                                          })}
-                                        >
-                                          Relevant People
-                                        </Link>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-4 text-sm text-on-surface-variant">
-                              No outreach tracked yet. Saved outreach statuses will appear here for this contact.
-                            </div>
-                          )}
-                        </div>
                         ) : null}
                       </div>
 
