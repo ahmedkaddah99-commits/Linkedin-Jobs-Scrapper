@@ -16,6 +16,23 @@ def snapshot(**profile):
     return profile_snapshot(SimpleNamespace(metadata={"profile": profile}))
 
 
+def test_published_fact_reconciliation_repairs_missing_work_without_resetting_revision(monkeypatch):
+    from scripts import process_profile_job_facts as worker
+    with tempfile.TemporaryDirectory() as directory:
+        app = create_backend(Path(directory), storage_backend='sqlite', test_mode=True)
+        _seed_catalog(app)
+        with app.repositories.personalized_jobs_store._connect() as connection:
+            monkeypatch.setattr(worker, 'execute', lambda sql,args=(): [dict(r) for r in connection.execute(sql,args).fetchall()])
+            connection.execute('DELETE FROM profile_job_fact_queue')
+            repaired = worker.reconcile_published(1)
+            assert len(repaired) == 1
+            version = repaired[0]['version_id']
+            connection.execute('UPDATE profile_job_fact_queue SET revision=7 WHERE version_id=?', (version,))
+            worker.reconcile_published(100)
+            assert connection.execute('SELECT revision FROM profile_job_fact_queue WHERE version_id=?', (version,)).fetchone()[0] == 7
+            assert worker.reconcile_published(100) == []
+
+
 def facts(**extra):
     return {"version": FEATURE_VERSION, "skills": [
         {"name": "SQL", "requiredness": "required", "job_evidence": "SQL required"},
