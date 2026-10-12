@@ -3085,22 +3085,22 @@ html.dark .people-workspace-page .people-step-progress .rounded-2xl { background
 .jobs-company-search__input button span { font-size: 1.1rem; }
 .jobs-company-search__hint { color: #087b90; display: block; font-size: .75rem; padding: .35rem .9rem 0; }
 @media (min-width: 801px) {
-  .jobs-search-bar { flex-wrap: nowrap; gap: .35rem; padding: .6rem 1rem; }
+  .jobs-search-bar { flex-wrap: nowrap; gap: .2rem; padding: .5rem .75rem; }
   .jobs-search-bar > .jobs-quick-filter, .jobs-search-bar > button { flex-shrink: 0; }
-  .jobs-search-bar .jobs-filter-pill { font-size: .7rem; gap: .2rem; min-height: 2.1rem; padding: 0 .5rem; }
+  .jobs-search-bar .jobs-filter-pill { font-size: .65rem; gap: .15rem; min-height: 2rem; padding: 0 .35rem; }
   .jobs-search-bar .jobs-filter-pill .material-symbols-outlined { font-size: .9rem; }
-  .jobs-search-bar .jobs-search-link { font-size: .7rem; gap: .2rem; }
+  .jobs-search-bar .jobs-search-link { font-size: .65rem; gap: .15rem; }
   .jobs-search-bar .jobs-search-link--muted { margin-left: 0; padding-left: .5rem; }
-  .jobs-company-search { flex: 1 1 12rem; min-width: 10rem; max-width: 20rem; }
+  .jobs-company-search { flex: 1 1 9rem; min-width: 8rem; max-width: 18rem; }
   .jobs-company-search__input { gap: .35rem; min-height: 2.1rem; padding: .25rem .6rem; }
   .jobs-company-search__input input { font-size: .75rem; }
   .jobs-company-search__hint { position: absolute; top: 100%; background: #fff; border-radius: .3rem; }
 }
-@media (min-width: 801px) and (max-width: 1700px) {
-  .jobs-search-bar .jobs-quick-filter:is([data-filter="industry"], [data-filter="requiredExperience"]) { display: none; }
+@media (min-width: 801px) and (max-width: 1100px) {
+  .jobs-search-bar { zoom: .6; }
 }
-@media (min-width: 801px) and (max-width: 1400px) {
-  .jobs-search-bar .jobs-quick-filter:is([data-filter="employmentType"], [data-filter="experienceLevel"], [data-filter="workArrangement"], [data-filter="datePosted"]) { display: none; }
+@media (min-width: 1101px) and (max-width: 1400px) {
+  .jobs-search-bar { zoom: .8; }
 }
 .jobs-company-search__suggestions { background: #fff; border: 1px solid var(--jobs-line); border-radius: 1rem; box-shadow: 0 12px 36px #193d5426; left: 0; max-height: 22rem; overflow: auto; position: absolute; right: 0; top: calc(100% + .4rem); }
 .jobs-company-search__label { color: #6a8390; font-size: .72rem; font-weight: 700; letter-spacing: .08em; padding: 1rem 1rem .4rem; text-transform: uppercase; }

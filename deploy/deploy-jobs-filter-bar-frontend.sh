@@ -43,7 +43,8 @@ root=pathlib.Path(sys.argv[1])
 assert json.loads((root/'runr-release.json').read_text())['commit']==sys.argv[2]
 assets='\n'.join(p.read_text() for p in (root/'assets').glob('*.js'))
 css=''.join(p.read_text() for p in (root/'assets').glob('*.css'))
-assert 'flex-wrap:nowrap' in css and 'data-filter' in css
+assert 'flex-wrap:nowrap' in css and 'zoom:.6' in css
+assert 'data-filter=industry' not in css and 'data-filter=requiredExperience' not in css
 assert 'e2e-token' not in assets, 'Test authentication must not ship'
 PY
 # Abort if another operator changed nginx while this build ran.

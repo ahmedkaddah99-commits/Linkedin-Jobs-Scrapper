@@ -17,6 +17,9 @@ test("jobs toolbar stays in one desktop row with usable filters and search", asy
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(bar.getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
+    for (const name of ["Location", "Job Function", "Job Type", "Experience Level", "Work Model", "Date Posted", "Industry", "Years of Experience"]) {
+      await expect(bar.getByRole("button", { name: new RegExp(name) })).toBeVisible();
+    }
     if (width > 800) {
       const geometry = await bar.evaluate((node) => {
         const bounds = node.getBoundingClientRect();
