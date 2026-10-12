@@ -142,6 +142,8 @@ subsystems:
       - backend/repositories/assisted_apply_preparation.py
       - backend/repositories/document_payloads.py
       - scripts/classify_published_catalog.py
+      - scripts/process_profile_job_facts.py
+      - deploy/verify-published-job-matching.py
       - backend/domain/job_function_taxonomy.json
       - backend/domain/job_filter_choices.json
       - backend/domain/job_filter_countries.json

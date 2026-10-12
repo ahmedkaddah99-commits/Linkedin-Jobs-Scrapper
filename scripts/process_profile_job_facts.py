@@ -74,6 +74,18 @@ def write_batch(rows):
     return int(results[0].get('response', {}).get('result', {}).get('affected_row_count', 0))
 
 
+def reconcile_published(limit=1000):
+    """Repair missing queue entries without resetting concurrent revisions."""
+    return execute(f"""INSERT INTO profile_job_fact_queue(version_id)
+        SELECT v.version_id {JOINS}
+        LEFT JOIN profile_job_facts m ON m.version_id=v.version_id
+        WHERE {PUBLISHED} AND (
+            m.version_id IS NULL OR m.feature_version!=? OR m.content_hash!=v.content_hash
+            OR m.input_signature!=({SIGNATURE}))
+        AND NOT EXISTS(SELECT 1 FROM profile_job_fact_queue q WHERE q.version_id=v.version_id)
+        LIMIT ? ON CONFLICT(version_id) DO NOTHING RETURNING version_id""", [FEATURE_VERSION, limit])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--max-jobs', type=int, default=4096)
@@ -89,6 +101,7 @@ def main():
         print(json.dumps(rows))
         return
     started, processed, written = time.monotonic(), 0, 0
+    repaired = reconcile_published()
     # Superseded or unpublished versions cannot block current queue work.
     removed=execute(f"""DELETE FROM profile_job_fact_queue WHERE version_id IN (
         SELECT q.version_id FROM (SELECT version_id FROM profile_job_fact_queue ORDER BY version_id LIMIT 1000) q
@@ -107,6 +120,7 @@ def main():
         written += write_batch(rows)
         processed += len(rows)
     print(json.dumps({'feature_version': FEATURE_VERSION, 'processed': processed, 'written': written,
+                      'missing_queue_items_repaired':len(repaired),
                       'obsolete_queue_items_removed':len(removed),
                       'seconds': round(time.monotonic() - started, 3), 'provider_calls': 0}))
 

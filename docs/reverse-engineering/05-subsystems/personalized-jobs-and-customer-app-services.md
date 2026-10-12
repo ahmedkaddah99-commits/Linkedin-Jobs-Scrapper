@@ -499,6 +499,15 @@ Migration `072_enrichment_field_pass` adds a durable supplemental-pass receipt a
 
 ## Profile matching release (2026-10-07)
 
+The October 12 VPS worker also reconciles up to 1,000 missing/stale published
+fact queue entries per invocation, without resetting concurrent revisions.
+Normal acquisition and enrichment remain running. The read-only operator check
+`deploy/verify-published-job-matching.py` evaluates every captured published job
+against each nonempty saved account profile using the actual serving evaluator,
+and reports aggregate coverage and unknown/partial results. It prints no profile
+contents or identities. Percentages remain specific to each saved profile;
+unknown evidence cannot become a fabricated complete score.
+
 Customer percentages now use `backend/application/profile_job_matching.py` and the saved account profile, independent of CVs and preferences. Migration 073 and `scripts/process_profile_job_facts.py` maintain shared version/hash-bound job facts on the VPS. The Jobs workspace uses cards followed by clicked detail; employer descriptions are linked externally. See [implementation report](../../../data/audit/profile_job_matching_2026-10-07/REPORT.md) for formulas, lifecycle, performance and limits.
 
 ### Job-function taxonomy completion (2026-10-07)
