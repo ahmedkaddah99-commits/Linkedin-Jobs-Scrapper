@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-test("reference toolbar keeps readable filters and separate navigation search", async ({ page }, info) => {
+test("search shares the filter actions row without adding header space", async ({ page }, info) => {
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/saved-search")) return route.fulfill({ json: { filters: { role: ["Data Analyst"] } } });
@@ -16,14 +16,17 @@ test("reference toolbar keeps readable filters and separate navigation search", 
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await expect(page.locator("#jobs-nav-search").getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
-    const header = await page.locator(".jobs-top-nav").evaluate((node) => {
-      const search = node.querySelector("#jobs-nav-search").getBoundingClientRect();
-      const links = [...node.querySelectorAll(".jobs-top-nav__links a")].filter((link) => getComputedStyle(link).display !== "none").map((link) => link.getBoundingClientRect());
-      return { overlaps: links.some((link) => search.left < link.right && search.right > link.left && search.top < link.bottom && search.bottom > link.top), right: search.right, viewport: innerWidth };
-    });
-    expect(header.overlaps).toBe(false);
-    expect(header.right).toBeLessThanOrEqual(header.viewport);
+    await expect(bar.getByRole("combobox", { name: "Search job title or company" })).toBeVisible();
+    await expect(page.locator(".jobs-top-nav .jobs-company-search")).toHaveCount(0);
+    if (width > 800) {
+      const row = await bar.locator(".jobs-search-bar__actions").evaluate((node) => {
+        const search = node.querySelector(".jobs-company-search").getBoundingClientRect();
+        const all = node.querySelector("button").getBoundingClientRect();
+        return { delta: Math.abs(search.top + search.height / 2 - all.top - all.height / 2), height: node.getBoundingClientRect().height };
+      });
+      expect(row.delta).toBeLessThan(2);
+      expect(row.height).toBeLessThan(45);
+    }
     for (const name of ["Location", "Job Function", "Job Type", "Experience Level", "Work Model", "Date Posted", "Industry", "Years of Experience"]) {
       await expect(bar.getByRole("button", { name: new RegExp(name) })).toBeVisible();
     }
@@ -40,6 +43,8 @@ test("reference toolbar keeps readable filters and separate navigation search", 
       expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
     }
   }
+  await page.setViewportSize({ width: info.project.name.startsWith("mobile") ? 390 : 1280, height: 900 });
+  await page.screenshot({ path: `test-results/search-filter-row-${info.project.name}.png` });
   await bar.getByRole("button", { name: /All Filters/ }).click();
   await expect(page.getByRole("dialog", { name: "All Filters" })).toBeVisible();
 });

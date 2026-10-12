@@ -1,7 +1,6 @@
 import CvCustomization from "../cvCustomization/CvCustomization.jsx";
 import { CvTools, QualificationTags } from "../cvCustomization/CvTools.jsx";
 import QuickJobFilter from "./QuickJobFilter";
-import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
@@ -115,8 +114,8 @@ function CatalogStateBanner({ error, feed, loading }) {
   // says results are being updated instead of implying an empty catalog.
   const state = loading && !feed ? "loading" : loading && feed ? "refreshing" : error ? "failure" : String(feed?.evaluation?.state || "unavailable");
   const labels = {
-    loading: "Loading the shared jobs catalog…",
-    refreshing: "Updating results with the latest catalog…",
+    loading: "Loading the shared jobs catalogâ€¦",
+    refreshing: "Updating results with the latest catalogâ€¦",
     stale: "The shared catalog is stale. Results remain visible with their last verification time.",
     unavailable: "The shared jobs catalog is currently unavailable.",
     failure: "The shared jobs catalog could not be loaded.",
@@ -142,7 +141,7 @@ function IntelligenceList({ empty = "Unknown", items, evidence = false }) {
 function RunrSummary({ job }) {
   const summary = job.runrSummary || {};
   return <section className="jobs-section jobs-runr-summary">
-    <div className="jobs-section__heading"><div><h3>Runr Summary</h3><p>Generated from this job-description version; employer text is preserved separately.</p></div><span className="jobs-data-badge">Generated · Free</span></div>
+    <div className="jobs-section__heading"><div><h3>Runr Summary</h3><p>Generated from this job-description version; employer text is preserved separately.</p></div><span className="jobs-data-badge">Generated Â· Free</span></div>
     <p className="jobs-summary-overview">{summary.overview || (job.descriptionIntelligence?.state === "pending" ? "Pending precompute" : "Unknown")}</p>
     <div className="jobs-summary-grid">
       <div><strong>Main responsibilities</strong><IntelligenceList items={summary.main_responsibilities} /></div>
@@ -191,9 +190,9 @@ function ReadableJob({ job, company, detailsLoaded, detailError, onPrepare, onHi
   const present = (value) => value && String(value).toLowerCase() !== "unknown" ? value : null;
     const yearsMin = extracted("experience_years_min") ?? job.requiredExperienceYears;
   const yearsMax = extracted("experience_years_max");
-  const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}–${yearsMax} years experience` : `${yearsMin}+ years experience`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years experience` : null);
+  const years = typeof yearsMin === "number" ? (typeof yearsMax === "number" ? `${yearsMin}â€“${yearsMax} years experience` : `${yearsMin}+ years experience`) : (typeof yearsMax === "number" ? `Up to ${yearsMax} years experience` : null);
   const salary = extracted("salary");
-  const salaryAmounts = salary && typeof salary === "object" ? [salary.min, salary.max].filter((value) => typeof value === "number").map((value) => new Intl.NumberFormat("en-US").format(value)).join("–") : "";
+  const salaryAmounts = salary && typeof salary === "object" ? [salary.min, salary.max].filter((value) => typeof value === "number").map((value) => new Intl.NumberFormat("en-US").format(value)).join("â€“") : "";
   const salaryText = salaryAmounts && salary?.currency && salary?.period ? `${salaryAmounts} ${salary.currency}/${salary.period}` : null;
   const arrangementLabel = (value) => ({ onsite: "On-site", on_site: "On-site", in_person: "On-site", hybrid: "Hybrid", remote: "Remote" })[String(value || "").toLowerCase()] || null;
     const seniorityLabel = (value) => ({ intern: "Intern", entry: "Entry level", mid: "Mid level", senior: "Senior", lead: "Lead", director: "Director", executive: "Executive" })[String(value || "").toLowerCase()] || null;
@@ -304,8 +303,6 @@ function useIsMobile() {
 }
 
 export default function JobsWorkspace({ initialJobId = "", external = false }) {
-  const [searchHost, setSearchHost] = useState(null);
-  useEffect(() => { setSearchHost(document.getElementById("jobs-nav-search")); }, []);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -790,7 +787,16 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
 
   return <div className={external ? "jobs-experience jobs-experience--external" : "jobs-experience"}>
     {external ? <><section className="jobs-search-heading"><div><h1>External jobs</h1><p>Add a job posting link to view and prepare it with Runr.</p></div><Link className="jobs-text-link" to="/jobs">Recommended jobs</Link></section>{!routeJobId ? <ExternalJobImport connected={isConnected} request={request} onImported={job => { setFeedAttempt(value => value + 1); selectJob(toPersonalizedJobView(job)); }} /> : null}</> : <>
-    {searchHost ? createPortal(<CompanySearch connected={isConnected} onClear={() => {
+    <section className="jobs-search-bar" aria-label="Job search filters">
+    <div className="jobs-search-bar__filters">
+      <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
+      <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
+      {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}
+    </div><div className="jobs-search-bar__actions">
+      <button className={["jobs-filter-pill", activeFilterCount ? "is-active" : ""].join(" ")} onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>tune</Icon><span>All Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
+      <button aria-expanded={showFilterSets} aria-label="Saved filters" className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>bookmark</Icon>Saved filters</button>
+      {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
+    <CompanySearch connected={isConnected} onClear={() => {
       filtersTouchedRef.current = true;
       setFilters((current) => ({ ...current, query: "", companyId: "", companyLabel: "" }));
     }} onQuery={(value) => {
@@ -799,14 +805,8 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     }} onSelect={(company) => {
       filtersTouchedRef.current = true;
       setFilters({ ...INITIAL_PERSONALIZED_JOB_FILTERS, companyId: company.company_id, companyLabel: company.name });
-    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />, searchHost) : null}
-    <section className="jobs-search-bar" aria-label="Job search filters">
-      <QuickJobFilter filters={filters} icon="location_on" label="Location" name="location" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
-      <QuickJobFilter filters={filters} icon="badge" label="Job Function" name="role" onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />
-      {[["employmentType", "Job Type", "work_outline"], ["experienceLevel", "Experience Level", "stairs"], ["workArrangement", "Work Model", "home_work"], ["datePosted", "Date Posted", "schedule"], ["industry", "Industry", "apartment"], ["requiredExperience", "Years of Experience", "timeline"]].map(([name, label, icon]) => <QuickJobFilter filters={filters} icon={icon} key={name} label={label} name={name} onApply={(next) => { filtersTouchedRef.current = true; setFilters(next); }} />)}
-      <button className={["jobs-filter-pill", activeFilterCount ? "is-active" : ""].join(" ")} onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button"><Icon>tune</Icon><span>All Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span><Icon className="jobs-filter-pill__chevron">expand_more</Icon></button>
-      <button aria-expanded={showFilterSets} aria-label="Saved filters" className="jobs-search-link" onClick={() => setShowFilterSets((value) => !value)} type="button"><Icon>bookmark</Icon>Saved filters</button>
-      {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
+    }} request={request} selected={Boolean(filters.companyId)} value={filters.companyLabel || filters.query} />
+    </div>
     </section>
     </>}
     {!external && canSearch ? <CatalogStateBanner error={feedError} feed={feed} loading={loading} /> : null}
@@ -821,7 +821,7 @@ export default function JobsWorkspace({ initialJobId = "", external = false }) {
     </AccountSetupPanel> : null}
     {routeJobId && selectedJob ? <CvTools onCustomize={() => setCvOpen(true)} onAnalyze={openImproveResume} /> : null}
     <div className={["jobs-workspace", routeJobId ? "jobs-workspace--detail-only" : "jobs-workspace--cards-only", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
-      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{canSearch ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} ${external ? "external" : "matching"} jobs` : "Matching jobs") : "Choose a Job Function"}</strong>{!external ? <label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}</div><div className="jobs-list-panel__body" ref={listBodyRef}>{!canSearch ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobs…</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>{external ? "Add your first job" : "No jobs match"}</strong><span>{external ? "Paste a job posting URL above." : "Clear a filter to see more roles."}</span>{!external ? <button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button> : null}</div>}</div></aside> : null}
+      {!routeJobId ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>{canSearch ? (Number.isInteger(feed?.total) ? `${feed.total.toLocaleString()} ${external ? "external" : "matching"} jobs` : "Matching jobs") : "Choose a Job Function"}</strong>{!external ? <label className="jobs-sort-select"><span>Sort by</span><select aria-label="Sort jobs" onChange={(event) => updateFilter("sort", event.target.value)} value={filters.sort}>{JOB_SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}</div><div className="jobs-list-panel__body" ref={listBodyRef}>{!canSearch ? <div className="jobs-empty"><Icon>work</Icon><strong>Choose a Job Function</strong><span>Select at least one Job Function to find relevant jobs.</span><button className="jobs-primary-button" onClick={() => { setFilterSection("Basic Job Criteria"); setFiltersOpen(true); }} type="button">Choose Job Function</button></div> : loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <><div aria-label="More jobs available" className="jobs-load-more-sentinel" ref={loadMoreSentinelRef} role="status">{loadingMore ? <><Icon>progress_activity</Icon>Loading more jobsâ€¦</> : null}</div><button className="jobs-load-more jobs-load-more--fallback" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loadingâ€¦" : "Load more jobs"}</button></> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>{external ? "Add your first job" : "No jobs match"}</strong><span>{external ? "Paste a job posting URL above." : "Clear a filter to see more roles."}</span>{!external ? <button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button> : null}</div>}</div></aside> : null}
       {routeJobId ? <section className="jobs-detail-panel">{detailContent}</section> : null}
 
     </div>

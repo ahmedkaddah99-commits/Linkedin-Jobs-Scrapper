@@ -43,7 +43,8 @@ root=pathlib.Path(sys.argv[1])
 assert json.loads((root/'runr-release.json').read_text())['commit']==sys.argv[2]
 assets='\n'.join(p.read_text() for p in (root/'assets').glob('*.js'))
 css=''.join(p.read_text() for p in (root/'assets').glob('*.css'))
-assert 'jobs-filter-pill__label' in css and '#jobs-nav-search' in css
+assert 'jobs-filter-pill__label' in css and 'jobs-search-bar__actions' in css
+assert '#jobs-nav-search' not in css
 assert 'zoom:.6' not in css and 'zoom:.8' not in css
 assert 'data-filter=industry' not in css and 'data-filter=requiredExperience' not in css
 assert 'e2e-token' not in assets, 'Test authentication must not ship'

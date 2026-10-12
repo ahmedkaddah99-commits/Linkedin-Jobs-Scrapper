@@ -1,19 +1,5 @@
-# Jobs filter reference correction — 2026-10-12
+# Jobs filter layout — 2026-10-12
 
-The owner supplied a Jobright screenshot superseding the earlier one-row layout.
-All eight quick filters stay visible with readable 14px type, rectangular corners,
-36–38px height, selected-value labels, ellipsis for long values and dropdown arrows.
-Leading decorative icons and toolbar zoom are removed. Active filters use mint;
-All Filters uses solid teal. The row wraps naturally like the supplied reference.
+All eight readable rectangular quick filters occupy the first filter group. The second filter row contains All Filters, Saved filters, Clear and the right-aligned title/company search. Search does not render in navigation or create a separate header row. The portal and all search-specific header sizing are removed. Mobile wraps within the same filter section.
 
-CompanySearch renders through a React portal into the shared Jobs navigation;
-it retains its existing autocomplete, selection, keyboard and query callbacks.
-Narrow viewports place search on a full-width navigation row. No filter is moved
-into All Filters. Saved filters and clear remain available.
-
-Browser checks require all eight filters, readable typography, no horizontal
-control overflow, navigation search and working drawer. Existing reference-filter
-checks cover shared criteria and numeric bounds. Deployment uses the committed
-frontend plus docs/legal and backend/domain build inputs, production configuration,
-immutable release metadata, nginx rollback and public asset verification.
-Header placement correction: navigation links retain their intrinsic width, so search cannot cover Documents or Connection. The header wraps safely; at 1500px and below search gets its own full-width header row. Browser checks explicitly reject search/link overlap across desktop and mobile viewport sizes.
+Browser checks require search and All Filters to share the same vertical center, the desktop action row to remain under 45px, all eight filters to remain visible, readable typography, no horizontal overflow and working drawer interactions. Screenshots cover 1280px and mobile. The frontend release uses the committed frontend, legal Markdown and backend/domain JSON build inputs with production auth settings and nginx rollback.
