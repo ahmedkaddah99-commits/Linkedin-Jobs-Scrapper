@@ -18,3 +18,11 @@ test("reference criteria survive a saved-search round trip and repeated query pa
   assert.ok(labels.includes("Exclude clearance"));
   assert.ok(labels.includes("Exclude title: Sales"));
 });
+
+ test("Hidden Jobs persists, labels and transmits employer provenance filtering", () => {
+  const restored = filtersFromSavedSearch({ filters: toPersonalizedJobsFilterPayload({ employerSiteOnly: true }) });
+  assert.equal(restored.employerSiteOnly, true);
+  assert.equal(new URLSearchParams(buildPersonalizedJobsQuery(restored)).get("employer_site_only"), "true");
+  assert.deepEqual(jobFilterSummary({ employerSiteOnly: true }), [{ key: "employerSiteOnly", value: true, label: "Hidden Jobs" }]);
+  assert.equal(new URLSearchParams(buildPersonalizedJobsQuery({ employerSiteOnly: false })).has("employer_site_only"), false);
+ });

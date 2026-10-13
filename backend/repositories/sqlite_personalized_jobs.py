@@ -1239,6 +1239,9 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         filters = dict(filters or {})
         predicates: list[str] = []
         params: list[Any] = []
+        # Use acquisition provenance, never an application URL or employer identity.
+        if str(filters.get("employer_site_only", "")).casefold() in {"true", "1", "yes", "on"}:
+            predicates.append("json_extract(catalog.version_payload_json, '$.source') = 'employer_site'")
         search_terms = filters.get("search_text") or []
         for term in (search_terms if isinstance(search_terms, (list, tuple, set)) else [search_terms]):
             predicates.append("(LOWER(catalog.title) LIKE ? OR LOWER(catalog.company) LIKE ?)")

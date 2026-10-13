@@ -513,3 +513,16 @@ Customer percentages now use `backend/application/profile_job_matching.py` and t
 ### Job-function taxonomy completion (2026-10-07)
 
 The shared `backend/domain/job_function_taxonomy.json` now includes the full owner-supplied function list under its category and subheading, including specialist software, consulting, finance, healthcare, engineering, sales, legal and education roles. Existing functions remain valid; repeated Customer Service input is represented once, and Consulting retains its existing category name. The frontend imports this file directly, and classification uses its exact function labels. Adding options does not reclassify previously published jobs; existing version-bound memberships remain unchanged until enrichment runs.
+
+## Hidden Jobs employer-source filter (2026-10-13)
+
+The Jobs filter bar includes a pressed-state Hidden Jobs toggle beside Years of
+Experience. It sends `employer_site_only=true`, persists in saved searches, appears
+in removable filter summaries and clears with the other criteria. The backend
+normalizes this boolean and filters current posting provenance (`source=employer_site`)
+before counts, sorting and cursor pagination. Employer ATS postings are included;
+LinkedIn-only and unknown-source records are excluded even when their apply links
+point to an employer. This does not assert absence from other job boards and is
+independent of the existing per-account dismissed/hidden-job list. No paywall or
+schema migration is added. Focused tests cover source selection, pagination and
+saved-search/query round trips.

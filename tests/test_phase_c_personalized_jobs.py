@@ -74,6 +74,18 @@ def _seed_catalog(app, *, valid_until: str = "", payload_overrides=None) -> None
 
 
 class PhaseCPersonalizedJobsTests(unittest.TestCase):
+    def test_employer_site_filter_uses_provenance_before_pagination(self):
+        app = self._backend()
+        _seed_catalog(app, payload_overrides={"job-a": {"source": "employer_site"}, "job-b": {"source": "linkedin"}})
+        for sort in ("newest", "priority"):
+            page = app.get_personalized_jobs("user-a", filters={"employer_site_only": "true", "sort": sort}, limit=1)
+            self.assertEqual(page["total"], 1)
+            self.assertEqual(page["jobs"][0]["canonical_job_id"], "job-a")
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={"employer_site_only": "false"})["total"], 2)
+        app = self._backend()
+        _seed_catalog(app)
+        self.assertEqual(app.get_personalized_jobs("user-a", filters={"employer_site_only": True})["total"], 0)
+
     def test_scraped_filter_facts_win_over_ai_defaults(self):
         app = self._backend()
         _seed_catalog(app, payload_overrides={'job-a':{'employment_type':None,'job_type':'part_time','experience_years_min':7}})

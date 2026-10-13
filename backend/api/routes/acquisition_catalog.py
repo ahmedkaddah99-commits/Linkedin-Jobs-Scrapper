@@ -275,7 +275,7 @@ def _filters_from_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
         "excluded_title", "excluded_industry", "skills_include", "skills_exclude",
         "role_type", "required_experience_min", "required_experience_max",
         "h1b_sponsorship", "exclude_security_clearance", "exclude_citizenship_required",
-        "exclude_staffing_agency", "country",
+        "exclude_staffing_agency", "employer_site_only", "country",
     }
     result: dict[str, Any] = {}
     for key in recognized:

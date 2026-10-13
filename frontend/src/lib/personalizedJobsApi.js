@@ -6,6 +6,7 @@ export const INITIAL_PERSONALIZED_JOB_FILTERS = {
   experienceLevel: "all",
   category: "",
   datePosted: "all",
+  employerSiteOnly: false,
   salaryMin: "",
   salaryMax: "",
   salaryCurrency: "",
@@ -129,6 +130,7 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     excluded_industry: filters.excludedIndustry, skills_include: filters.skillsInclude, skills_exclude: filters.skillsExclude,
     role_type: filters.roleType, required_experience_min: filters.requiredExperienceMin, required_experience_max: filters.requiredExperienceMax,
     h1b_sponsorship: filters.h1bSponsorship || "", exclude_security_clearance: filters.excludeSecurityClearance || "",
+    employer_site_only: filters.employerSiteOnly || "",
     exclude_citizenship_required: filters.excludeCitizenshipRequired || "", exclude_staffing_agency: filters.excludeStaffingAgency || "",
     simple_application: filters.simple_application,
     exclude_applied: filters.exclude_applied,
@@ -256,6 +258,7 @@ export function toPersonalizedJobsFilterPayload(filters = {}) {
     excluded_industry: filters.excludedIndustry, skills_include: filters.skillsInclude, skills_exclude: filters.skillsExclude,
     role_type: filters.roleType, required_experience_min: filters.requiredExperienceMin, required_experience_max: filters.requiredExperienceMax,
     h1b_sponsorship: filters.h1bSponsorship, exclude_security_clearance: filters.excludeSecurityClearance,
+    employer_site_only: filters.employerSiteOnly || "",
     exclude_citizenship_required: filters.excludeCitizenshipRequired, exclude_staffing_agency: filters.excludeStaffingAgency,
   };
   Object.entries(values).forEach(([key, value]) => {
@@ -501,6 +504,7 @@ export function filtersFromSavedSearch(payload = {}) {
     excludedIndustry: saved.excluded_industry || [], skillsInclude: saved.skills_include || [], skillsExclude: saved.skills_exclude || [],
     roleType: firstValue(saved.role_type), requiredExperienceMin: firstValue(saved.required_experience_min), requiredExperienceMax: firstValue(saved.required_experience_max),
     h1bSponsorship: Boolean(saved.h1b_sponsorship), excludeSecurityClearance: Boolean(saved.exclude_security_clearance),
+    employerSiteOnly: saved.employer_site_only === true,
     excludeCitizenshipRequired: Boolean(saved.exclude_citizenship_required), excludeStaffingAgency: Boolean(saved.exclude_staffing_agency),
   };
 }

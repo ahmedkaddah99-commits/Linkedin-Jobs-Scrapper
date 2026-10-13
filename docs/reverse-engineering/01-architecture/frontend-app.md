@@ -827,3 +827,16 @@ The experience slider uses whole-year increments only (step 1); fractional saved
 ## Job CV customization (2026-10-11)
 
 The selected-job reader now mounts `components/cvCustomization/` through an AI Tools rail. The drawer assesses uploaded CV editor profiles and provides an explicit anonymized working sample, section and keyword choices, direct document editing, device-local draft recovery and HTML/browser-PDF export. The unfinished live generation pipeline is not exposed as available. Saved-profile matching and baseline assets are unchanged. See [delivery and verification](../../reports/cv-customization-2026-10-11.md).
+
+## Hidden Jobs employer-source filter (2026-10-13)
+
+The Jobs filter bar includes a pressed-state Hidden Jobs toggle beside Years of
+Experience. It sends `employer_site_only=true`, persists in saved searches, appears
+in removable filter summaries and clears with the other criteria. The backend
+normalizes this boolean and filters current posting provenance (`source=employer_site`)
+before counts, sorting and cursor pagination. Employer ATS postings are included;
+LinkedIn-only and unknown-source records are excluded even when their apply links
+point to an employer. This does not assert absence from other job boards and is
+independent of the existing per-account dismissed/hidden-job list. No paywall or
+schema migration is added. Focused tests cover source selection, pagination and
+saved-search/query round trips.
