@@ -1,0 +1,18 @@
+{
+  "version": "ahmed-business-entry-level-v1",
+  "max_full_time_experience_years": 2,
+  "included_title_patterns": [
+    "\\b(business|bi)\\s*(analyst|intelligence)\\b", "\\bdata analyst\\b", "\\b(strategy|strategic)\\b",
+    "\\b(transformation|innovation|digital transformation)\\b", "\\b(product|project|program|portfolio)\\s*(management|manager|owner|analyst|coordinator|specialist)?\\b",
+    "\\b(operations|operational)\\b", "\\b(process|business process|requirements|solution)\\s*(analyst|consultant|specialist|engineer)?\\b",
+    "\\b(management|business)\\s*consult(ant|ing)\\b", "\\b(technology|it|ai|genai|erp|sap|odoo)\\s*(consultant|analyst|specialist)\\b",
+    "\\b(business development|partnerships|partner|commercial)\\b", "\\b(customer success|account)\\s*(specialist|associate|manager)\\b",
+    "\\b(pmo|change management|continuous improvement|process improvement)\\b", "\\b(supply chain|procurement|purchasing)\\s*(analyst|specialist|associate|coordinator)\\b"
+  ],
+  "excluded_title_patterns": [
+    "\\b(marketing|brand|content|social media|seo|copywriter|creative|graphic|recruit|talent acquisition|hr business partner)\\b",
+    "\\b(finance|financial|accounting|accountant|controller|audit|tax|treasury|investment|trading|banking)\\b",
+    "\\b(senior|sr\\.?|lead|principal|staff|head of|director|vice president|vp|chief|executive)\\b",
+    "\\b(3\\+|[3-9]|1[0-9])\\s*years?\\b", "\\b(internship|intern)\\b"
+  ]
+}

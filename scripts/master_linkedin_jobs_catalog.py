@@ -2121,6 +2121,9 @@ class StateStore:
             self.connection.execute(
                 'CREATE INDEX IF NOT EXISTS idx_job_company_observations_run ON job_company_observations(run_id)'
             )
+            self.connection.execute(
+                'CREATE INDEX IF NOT EXISTS idx_job_company_observations_scan ON job_company_observations(company_scan_id)'
+            )
             self._backfill_observation_scan_ids()
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -3680,6 +3683,12 @@ class CatalogRunner:
 
     def _queue_card(self, context: CompanyRunContext, card: SearchCard) -> None:
         assert self.store is not None
+        from backend.acquisition.job_role_policy import title_matches
+        if not title_matches(card.title):
+            self._persist_exclusion(context.group.linkedin_company_id, card.linkedin_job_id,
+                                    "owner_role_policy_excluded", card.__dict__)
+            self._increment("role_policy_excluded")
+            return
         decision = evaluate_ownership(
             card.company_url, context.group, self.store.verified_aliases(context.group.linkedin_company_id)
         )
