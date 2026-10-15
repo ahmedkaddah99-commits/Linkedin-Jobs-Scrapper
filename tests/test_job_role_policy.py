@@ -8,3 +8,16 @@ def test_non_target(title): assert not title_matches(title)
 def test_required_experience(text): assert exceeds_experience_limit(text)
 @pytest.mark.parametrize('text',['2 years of professional experience','2-3 years of experience','3 years of experience preferred','For over 10 years our company has served clients. No experience required.','Three years university degree. No experience required.','3 years of internship experience preferred'])
 def test_other_numbers(text): assert not exceeds_experience_limit(text)
+
+def test_title_rejection_never_enqueues_or_persists_detail():
+    from types import SimpleNamespace
+    from scripts.master_linkedin_jobs_catalog import CatalogRunner
+    events=[]
+    runner=SimpleNamespace(store=object(),_increment=events.append)
+    CatalogRunner._queue_card(runner,object(),SimpleNamespace(title='Senior Financial Analyst'))
+    assert events==['role_policy_excluded']
+
+def test_employer_rejects_before_accepting_page():
+    from scripts.master_employer_jobs_catalog import _is_accepted_job_page
+    assert not _is_accepted_job_page({'title':'Marketing Manager'},'generic')
+    assert not _is_accepted_job_page({'title':'Business Analyst','description':'At least 5 years of experience'},'generic')
