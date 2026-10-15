@@ -1,0 +1,3145 @@
+{
+  "uid": "runr-e2e-jobs",
+  "title": "Runr \u2014 Jobs E2E: acquisition \u2192 enrichment \u2192 app",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "tags": [
+    "runr",
+    "e2e",
+    "vps"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Start here: what is happening in the last 30 minutes",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 2,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Read downward: eligible companies \u2192 collection \u2192 stored jobs \u2192 deletions \u2192 import \u2192 publication \u2192 enrichment \u2192 matching \u2192 app visibility.** Counts are live measurements, not targets. Stage inventories overlap; do not add them. Published membership is separate from the app query. A flat line plus stale telemetry is unknown, not success. Logs below retain actual batch timings. New telemetry history starts at installation; no history is invented."
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Published catalog / app query / function-indexed / current matching facts",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_published_jobs),\"metric\",\"runr_e2e_published_jobs\",\"__name__\",\".*\") or label_replace((runr_e2e_customer_query_jobs),\"metric\",\"runr_e2e_customer_query_jobs\",\"__name__\",\".*\") or label_replace((runr_e2e_coverage_jobs),\"metric\",\"runr_e2e_coverage_jobs\",\"__name__\",\".*\")",
+          "legendFormat": "{{metric}} {{stage}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Net published and app-query change in selected time range",
+      "description": "Net change includes removals. It is not gross newly published jobs. Requires at least two samples.",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((delta(runr_e2e_published_jobs[$__range])),\"metric\",\"runr_e2e_published_jobs\",\"__name__\",\".*\") or label_replace((delta(runr_e2e_customer_query_jobs[$__range])),\"metric\",\"runr_e2e_customer_query_jobs\",\"__name__\",\".*\")",
+          "legendFormat": "{{metric}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Telemetry validity: 1 healthy / 0 failed",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_section_up",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Telemetry age by stage",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time()-runr_e2e_section_timestamp_seconds",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Current blockers: failed workers, lock wait and enrichment review/source failures",
+      "description": "Service failure is the most recent systemd result and may be historical for a disabled unit. Lock wait is scoped to the one-time backfill process tree. Queue counts are current published versions.",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_service_failed == 1),\"metric\",\"runr_e2e_service_failed\",\"__name__\",\".*\") or label_replace((runr_e2e_backfill_waiting_lock),\"metric\",\"runr_e2e_backfill_waiting_lock\",\"__name__\",\".*\") or label_replace((runr_e2e_enrichment_jobs{state=~\"review_required|source_missing|source_incomplete\"}),\"metric\",\"runr_e2e_enrichment_jobs\",\"__name__\",\".*\")",
+          "legendFormat": "{{component}} {{metric}} {{state}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "1. Choose eligible companies",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 9,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Manifest counts are the reviewed input snapshot, not a count of jobs. Employer exclusions apply during collection and publication."
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Manifest input, eligible source tasks and blocked entities",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_manifest_records",
+          "legendFormat": "{{measure}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "2. Find postings and fetch details",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 12,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Latest completed collector-run gauges repeat between runs. These are outcomes per run, not counters to rate(). Requests and failed details explain low yield."
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Latest LinkedIn durable run: scan and detail outcomes",
+      "description": "Latest-run company scan outcomes and detail attempts within the last 2,000 durable attempt rows. The truncation indicator identifies partial detail coverage. Includes incomplete/running runs; no completed result is invented.",
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_collection_latest",
+          "legendFormat": "{{source}} {{measure}} {{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Detail-attempt window truncated: 1 means partial coverage",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_collection_detail_window_truncated",
+          "legendFormat": "LinkedIn window truncated",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Employer company scan state and coverage across time",
+      "description": "Cumulative current company checkpoints and coverage receipts, not latest-run newly collected jobs. A historical no_jobs state does not prove a fresh complete scan.",
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_employer_scan_inventory),\"metric\",\"runr_e2e_employer_scan_inventory\",\"__name__\",\".*\") or label_replace((runr_e2e_employer_coverage_inventory),\"metric\",\"runr_e2e_employer_coverage_inventory\",\"__name__\",\".*\")",
+          "legendFormat": "{{metric}} {{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Collector failure / partial status",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_acquisition_last_run_failed),\"metric\",\"runr_acquisition_last_run_failed\",\"__name__\",\".*\") or label_replace((runr_acquisition_last_run_partial),\"metric\",\"runr_acquisition_last_run_partial\",\"__name__\",\".*\")",
+          "legendFormat": "{{source}} {{metric}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 17,
+      "type": "table",
+      "title": "Effective collector and normal publisher limits",
+      "description": "Explicit effective environment values only; absent settings are not replaced with guessed defaults. One-time backfill uses separate process overrides.",
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_configured_limit{component!=\"enrichment\"}",
+          "legendFormat": "{{component}} {{limit}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "3. Persist source jobs",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 19,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 73,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Durable producer inventory is not newly collected or publishable inventory. The age breakdown joins the retention index to existing rows; deleted index entries are excluded."
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Source jobs: stored / recent-date / expired-date / unknown-date",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_source_jobs",
+          "legendFormat": "{{source}} {{stage}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "4. Delete expired producer payloads",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 83,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 22,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 84,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Thirty-day cleanup deletes source payloads and related search/detail rows. Retirement tombstones prevent resurrection. Recent-date counts still include jobs blocked by other policies."
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Retired source identities by reason",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 87,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_retired_jobs",
+          "legendFormat": "{{source}} {{reason}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "table",
+      "title": "Latest physical cleanup batch and pass-completion evidence",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 94,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_cleanup_latest{stage=\"producer-retention\"}",
+          "legendFormat": "{{source}} {{measure}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Age of cleanup receipts",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 101,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time()-runr_e2e_cleanup_receipt_timestamp_seconds",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "5. Snapshot producer states and read the import window",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 105,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 27,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 106,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "The one-time backfill waits on shared publisher/source locks, takes consistent SQLite snapshots, then releases source locks. Bootstrap completion is explicit; rowid is not a count of jobs."
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Importer checkpoints over time",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 109,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_checkpoint_rowid",
+          "legendFormat": "{{source}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "stat",
+      "title": "Bootstrap complete and time since checkpoint advance",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 116,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_bootstrap_complete",
+          "legendFormat": "{{source}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Checkpoint age",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 120,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time()-runr_e2e_checkpoint_timestamp_seconds",
+          "legendFormat": "{{source}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "Backfill waiting for a lock",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 124,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_backfill_waiting_lock",
+          "legendFormat": "Waiting",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 32,
+      "type": "row",
+      "title": "6. Normalize, resolve company ownership and deduplicate",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 128,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 33,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 129,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Exact identities and source relationships determine merging. Batch execution timing below covers normalization and persistence; unsupported identities remain blocked, not fabricated."
+      }
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Delivery and large-company chunks per selected interval",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 132,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(runr_e2e_batch_events_total{stage=~\"delivery_batch|large_company_chunk\"}[$__rate_interval])",
+          "legendFormat": "{{stage}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 35,
+      "type": "stat",
+      "title": "Input job rows processed in the selected time range",
+      "description": "Rows in observed delivery events; retries may reprocess identities. This is not unique new published jobs. History begins when this counter was installed.",
+      "gridPos": {
+        "x": 0,
+        "y": 139,
+        "w": 24,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(runr_e2e_batch_input_rows_total{stage=~\"delivery_batch|large_company_chunk\"}[$__range])",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Mean delivery transaction duration",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 143,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(runr_e2e_batch_duration_seconds_total{stage=~\"delivery_batch|large_company_chunk\"}[$__rate_interval])/increase(runr_e2e_batch_events_total{stage=~\"delivery_batch|large_company_chunk\"}[$__rate_interval])",
+          "legendFormat": "{{stage}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 37,
+      "type": "row",
+      "title": "7. Save canonical jobs, observations and posting versions",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 150,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 38,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 151,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Catalog lifecycle inventory is separate from publication. Unchanged source content reuses posting versions. Source history and user records can remain after a job disappears from discovery."
+      }
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Canonical jobs by lifecycle",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 154,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_catalog_jobs",
+          "legendFormat": "{{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "8. Apply the publication gate",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 161,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 41,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 162,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Age, employer exclusions, blue-collar decisions, application policy, ownership, duplicates and completeness determine eligibility. Rejection reasons can overlap; totals are not unique rejected jobs."
+      }
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "Publication queue by current status",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 165,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_publication_queue_jobs",
+          "legendFormat": "{{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 43,
+      "type": "table",
+      "title": "Current rejected-job reason occurrences",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 172,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(reason)(runr_e2e_gate_reasons)",
+          "legendFormat": "{{reason}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 44,
+      "type": "row",
+      "title": "9. Commit the published catalog; expire ineligible membership",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 179,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 45,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 180,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "A successful commit advances the public head. Lifecycle expiry removes membership and marks canonical jobs expired while preserving identities, versions and customer history. This is not physical disk reclamation."
+      }
+    },
+    {
+      "id": 46,
+      "type": "timeseries",
+      "title": "Current publication membership across time",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 183,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_published_jobs",
+          "legendFormat": "Published catalog",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "type": "timeseries",
+      "title": "Publication batches per sample interval",
+      "description": "Observed finished publication calls, including no-op/replay calls. Use membership/app net change to measure count movement, not this event count.",
+      "gridPos": {
+        "x": 0,
+        "y": 190,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(runr_e2e_batch_events_total{stage=\"publication_batch\"}[$__rate_interval])",
+          "legendFormat": "Publication batches",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 48,
+      "type": "timeseries",
+      "title": "Mean publication batch duration",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 197,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(runr_e2e_batch_duration_seconds_total{stage=\"publication_batch\"}[$__rate_interval])/increase(runr_e2e_batch_events_total{stage=\"publication_batch\"}[$__rate_interval])",
+          "legendFormat": "Publication duration",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 49,
+      "type": "table",
+      "title": "Lifecycle expiry and physical deletion: latest receipt",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 204,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_cleanup_latest{stage=\"job-lifecycle\"}",
+          "legendFormat": "{{measure}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "10. Queue enrichment for current published versions",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 211,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 51,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 212,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Counts are restricted to current versions in the current head. Historical/superseded queue entries are excluded. pending/running/review states are distinct."
+      }
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Current published-job enrichment queue across time",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 215,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_enrichment_jobs",
+          "legendFormat": "{{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 53,
+      "type": "row",
+      "title": "11. Classify white/blue collar and assign job functions",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 222,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 54,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 223,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Current-version function memberships drive discovery. Blue jobs are excluded. A recent source posting without a usable function is not automatically discoverable."
+      }
+    },
+    {
+      "id": 55,
+      "type": "timeseries",
+      "title": "Current published jobs with indexed functions",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 226,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_coverage_jobs{stage=\"function_indexed\"}",
+          "legendFormat": "Indexed functions",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 56,
+      "type": "row",
+      "title": "12. Generate grounded English description",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 233,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 57,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 234,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Descriptions are supported by original-source quotations. This coverage counts matching current description records, not a guarantee every record passes current UI validation."
+      }
+    },
+    {
+      "id": 58,
+      "type": "timeseries",
+      "title": "Current-version description records in publication",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 237,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_coverage_jobs{stage=\"description_stored\"}",
+          "legendFormat": "Stored descriptions",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 59,
+      "type": "row",
+      "title": "13. Repair invalid output and fill missing fields",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 244,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 60,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 245,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Missing source text, invalid classification and unsupported descriptions remain explicit failures/review states. Daily provider budget can stop workers; it is a real resource ceiling."
+      }
+    },
+    {
+      "id": 61,
+      "type": "table",
+      "title": "Enrichment failure reasons among current published versions",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 248,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(reason)(runr_e2e_enrichment_errors)",
+          "legendFormat": "{{reason}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 62,
+      "type": "timeseries",
+      "title": "AI calls today by ledger state",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 255,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_ai_calls_today",
+          "legendFormat": "{{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 63,
+      "type": "timeseries",
+      "title": "Recorded AI cost, reserved amounts and configured daily ceiling",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 262,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_ai_recorded_cost_dollars_today),\"metric\",\"runr_e2e_ai_recorded_cost_dollars_today\",\"__name__\",\".*\") or label_replace((runr_e2e_ai_reserved_dollars_today),\"metric\",\"runr_e2e_ai_reserved_dollars_today\",\"__name__\",\".*\") or label_replace((runr_e2e_configured_limit{limit=\"daily_dollars\"}),\"metric\",\"runr_e2e_configured_limit\",\"__name__\",\".*\")",
+          "legendFormat": "{{metric}} {{state}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 64,
+      "type": "table",
+      "title": "Installed enrichment limits",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 269,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_configured_limit{component=\"enrichment\"}",
+          "legendFormat": "{{limit}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 65,
+      "type": "row",
+      "title": "14. Build version-bound profile-matching facts",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 276,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 66,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 277,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Matching-fact records must match the current posting version/hash. This is shared fact coverage; individual user match percentages depend on their profiles."
+      }
+    },
+    {
+      "id": 67,
+      "type": "timeseries",
+      "title": "Current published jobs with matching facts",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 280,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_coverage_jobs{stage=\"matching_facts\"}",
+          "legendFormat": "Matching facts",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 68,
+      "type": "row",
+      "title": "15. Return discoverable jobs to the app",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 287,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 69,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 288,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "This read-only probe uses the serving repository against the VPS database with an empty synthetic disposition and no user preferences. It is an unfiltered backend baseline, not a signed-in browser acceptance test or your personal filtered count."
+      }
+    },
+    {
+      "id": 70,
+      "type": "timeseries",
+      "title": "Published membership versus serving repository query",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 291,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_published_jobs),\"metric\",\"runr_e2e_published_jobs\",\"__name__\",\".*\") or label_replace((runr_e2e_customer_query_jobs),\"metric\",\"runr_e2e_customer_query_jobs\",\"__name__\",\".*\")",
+          "legendFormat": "{{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 71,
+      "type": "row",
+      "title": "16. Reclaim historical storage and check VPS capacity",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 298,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 72,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 299,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Hidden/expired jobs, deleted SQL rows and reclaimed filesystem bytes are different. SQLite free pages are reusable inside the file; they do not automatically shrink it. These panels measure actual database/WAL and filesystem bytes."
+      }
+    },
+    {
+      "id": 73,
+      "type": "timeseries",
+      "title": "VPS filesystem: total / used / free",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 302,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "runr_e2e_disk_bytes",
+          "legendFormat": "{{measure}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 74,
+      "type": "timeseries",
+      "title": "Database files, allocated disk, WAL and reusable pages",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 309,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_database_file_bytes),\"metric\",\"runr_e2e_database_file_bytes\",\"__name__\",\".*\") or label_replace((runr_e2e_database_allocated_bytes),\"metric\",\"runr_e2e_database_allocated_bytes\",\"__name__\",\".*\") or label_replace((runr_e2e_database_wal_bytes),\"metric\",\"runr_e2e_database_wal_bytes\",\"__name__\",\".*\") or label_replace((runr_e2e_database_reusable_bytes),\"metric\",\"runr_e2e_database_reusable_bytes\",\"__name__\",\".*\")",
+          "legendFormat": "{{store}} {{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 75,
+      "type": "row",
+      "title": "Resource constraints: which stage is limited?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 316,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 76,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 317,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Per-service memory/CPU/task limits come from effective systemd properties; enrichment limits come from its installed command. CPU usage is measured between snapshots. Missing unlimited values remain absent. Host metrics come from Alloy node_exporter."
+      }
+    },
+    {
+      "id": 77,
+      "type": "timeseries",
+      "title": "Worker memory usage / peak / enforced ceiling",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 320,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_service_memory_bytes),\"metric\",\"runr_e2e_service_memory_bytes\",\"__name__\",\".*\") or label_replace((runr_e2e_service_memory_peak_bytes),\"metric\",\"runr_e2e_service_memory_peak_bytes\",\"__name__\",\".*\") or label_replace((runr_e2e_service_memory_limit_bytes),\"metric\",\"runr_e2e_service_memory_limit_bytes\",\"__name__\",\".*\")",
+          "legendFormat": "{{component}} {{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 78,
+      "type": "timeseries",
+      "title": "Worker memory usage as percentage of its enforced limit",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 327,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100*runr_e2e_service_memory_bytes/on(component) runr_e2e_service_memory_limit_bytes",
+          "legendFormat": "{{component}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 79,
+      "type": "timeseries",
+      "title": "Worker measured CPU cores / configured core ceiling",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 334,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_service_cpu_used_cores),\"metric\",\"runr_e2e_service_cpu_used_cores\",\"__name__\",\".*\") or label_replace((runr_e2e_service_cpu_limit_cores),\"metric\",\"runr_e2e_service_cpu_limit_cores\",\"__name__\",\".*\")",
+          "legendFormat": "{{component}} {{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 80,
+      "type": "table",
+      "title": "Service presence, state, failures and exit codes",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 341,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_service_present),\"metric\",\"runr_e2e_service_present\",\"__name__\",\".*\") or label_replace((runr_e2e_service_running),\"metric\",\"runr_e2e_service_running\",\"__name__\",\".*\") or label_replace((runr_e2e_service_failed),\"metric\",\"runr_e2e_service_failed\",\"__name__\",\".*\") or label_replace((runr_e2e_service_last_exit_code),\"metric\",\"runr_e2e_service_last_exit_code\",\"__name__\",\".*\")",
+          "legendFormat": "{{component}} {{metric}}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 81,
+      "type": "timeseries",
+      "title": "Tasks and enforced task ceilings",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 348,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((runr_e2e_service_tasks),\"metric\",\"runr_e2e_service_tasks\",\"__name__\",\".*\") or label_replace((runr_e2e_service_task_limit),\"metric\",\"runr_e2e_service_task_limit\",\"__name__\",\".*\")",
+          "legendFormat": "{{component}} {{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 82,
+      "type": "timeseries",
+      "title": "Host CPU busy percentage",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 355,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100*(1-avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])))",
+          "legendFormat": "{{instance}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 83,
+      "type": "timeseries",
+      "title": "Host RAM usage percentage",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 362,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100*(1-node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes)",
+          "legendFormat": "{{instance}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 84,
+      "type": "timeseries",
+      "title": "Host load averages",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 369,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "label_replace((node_load1),\"metric\",\"node_load1\",\"__name__\",\".*\") or label_replace((node_load5),\"metric\",\"node_load5\",\"__name__\",\".*\") or label_replace((node_load15),\"metric\",\"node_load15\",\"__name__\",\".*\")",
+          "legendFormat": "{{instance}} {{metric}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 85,
+      "type": "timeseries",
+      "title": "Host disk I/O busy seconds per second",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 376,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(node_disk_io_time_seconds_total{device=~\"sd.*|vd.*|nvme.*\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} {{device}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "No verified data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 86,
+      "type": "row",
+      "title": "Execution evidence: batch timings and stage health",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 383,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 87,
+      "type": "text",
+      "title": "How to read this stage",
+      "gridPos": {
+        "x": 0,
+        "y": 384,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Sanitized logs contain stage names, counts, durations and error classes. No job text, account profiles or credentials are shipped. Use the time picker to inspect a stalled interval."
+      }
+    },
+    {
+      "id": 88,
+      "type": "logs",
+      "title": "Pipeline stage snapshots and publication execution events",
+      "gridPos": {
+        "x": 0,
+        "y": 387,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"runr/e2e\"} | json",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

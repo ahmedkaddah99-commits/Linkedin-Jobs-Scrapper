@@ -1,0 +1,246 @@
+{
+  "checked_at": 1791825910.7450285,
+  "panels": [
+    {
+      "panel": "Published catalog / app query / function-indexed / current matching facts",
+      "status": "success",
+      "series": 5
+    },
+    {
+      "panel": "Net published and app-query change in selected time range",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Telemetry validity: 1 healthy / 0 failed",
+      "status": "success",
+      "series": 12
+    },
+    {
+      "panel": "Telemetry age by stage",
+      "status": "success",
+      "series": 12
+    },
+    {
+      "panel": "Manifest input, eligible source tasks and blocked entities",
+      "status": "success",
+      "series": 26
+    },
+    {
+      "panel": "Latest LinkedIn durable run: scan and detail outcomes",
+      "status": "success",
+      "series": 8
+    },
+    {
+      "panel": "Detail-attempt window truncated: 1 means partial coverage",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Employer company scan state and coverage across time",
+      "status": "success",
+      "series": 10
+    },
+    {
+      "panel": "Collector failure / partial status",
+      "status": "success",
+      "series": 6
+    },
+    {
+      "panel": "Effective collector and normal publisher limits",
+      "status": "success",
+      "series": 6
+    },
+    {
+      "panel": "Source jobs: stored / recent-date / expired-date / unknown-date",
+      "status": "success",
+      "series": 8
+    },
+    {
+      "panel": "Retired source identities by reason",
+      "status": "success",
+      "series": 4
+    },
+    {
+      "panel": "Latest physical cleanup batch and pass-completion evidence",
+      "status": "success",
+      "series": 8
+    },
+    {
+      "panel": "Age of cleanup receipts",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Importer checkpoints over time",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Bootstrap complete and time since checkpoint advance",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Checkpoint age",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Backfill waiting for a lock",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Delivery and large-company chunks per selected interval",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Input job rows processed in the selected time range",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Mean delivery transaction duration",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Canonical jobs by lifecycle",
+      "status": "success",
+      "series": 5
+    },
+    {
+      "panel": "Publication queue by current status",
+      "status": "success",
+      "series": 4
+    },
+    {
+      "panel": "Current rejected-job reason occurrences",
+      "status": "success",
+      "series": 3
+    },
+    {
+      "panel": "Current publication membership across time",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Publication batches per sample interval",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Mean publication batch duration",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Lifecycle expiry and physical deletion: latest receipt",
+      "status": "success",
+      "series": 3
+    },
+    {
+      "panel": "Current published-job enrichment queue across time",
+      "status": "success",
+      "series": 6
+    },
+    {
+      "panel": "Current published jobs with indexed functions",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Current-version description records in publication",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Enrichment failure reasons among current published versions",
+      "status": "success",
+      "series": 6
+    },
+    {
+      "panel": "AI calls today by ledger state",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "Recorded AI cost, reserved amounts and configured daily ceiling",
+      "status": "success",
+      "series": 5
+    },
+    {
+      "panel": "Installed enrichment limits",
+      "status": "success",
+      "series": 4
+    },
+    {
+      "panel": "Current published jobs with matching facts",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Published membership versus serving repository query",
+      "status": "success",
+      "series": 2
+    },
+    {
+      "panel": "VPS filesystem: total / used / free",
+      "status": "success",
+      "series": 3
+    },
+    {
+      "panel": "Database files, allocated disk, WAL and reusable pages",
+      "status": "success",
+      "series": 12
+    },
+    {
+      "panel": "Worker memory usage / peak / enforced ceiling",
+      "status": "success",
+      "series": 25
+    },
+    {
+      "panel": "Worker memory usage as percentage of its enforced limit",
+      "status": "success",
+      "series": 4
+    },
+    {
+      "panel": "Worker measured CPU cores / configured core ceiling",
+      "status": "success",
+      "series": 20
+    },
+    {
+      "panel": "Service presence, state, failures and exit codes",
+      "status": "success",
+      "series": 52
+    },
+    {
+      "panel": "Tasks and enforced task ceilings",
+      "status": "success",
+      "series": 17
+    },
+    {
+      "panel": "Host CPU busy percentage",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Host RAM usage percentage",
+      "status": "success",
+      "series": 1
+    },
+    {
+      "panel": "Host load averages",
+      "status": "success",
+      "series": 3
+    },
+    {
+      "panel": "Host disk I/O busy seconds per second",
+      "status": "success",
+      "series": 1
+    }
+  ],
+  "log_streams": 1
+}
