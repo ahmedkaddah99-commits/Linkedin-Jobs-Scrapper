@@ -88,6 +88,9 @@ fi
 # again as soon as the copies finish.
 snapshot_root="$state_root/publisher-snapshots"
 mkdir -p "$snapshot_root"
+# The publisher lock is held: no other publisher can own these transport copies.
+# Recover snapshots abandoned by SIGKILL/reboot before allocating another pair.
+find "$snapshot_root" -mindepth 1 -maxdepth 1 -type d -name 'run-*' -exec rm -rf -- {} +
 snapshot_dir="$(mktemp -d "$snapshot_root/run-XXXXXXXX")"
 cleanup_snapshot() {
   if [ -n "${snapshot_dir:-}" ] && [ -d "$snapshot_dir" ]; then
@@ -95,6 +98,8 @@ cleanup_snapshot() {
   fi
 }
 trap cleanup_snapshot EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 snapshot_receipt="$receipt_root/publisher-source-snapshots-latest.jsonl"
 : > "$snapshot_receipt"
 "$python_bin" scripts/snapshot_producer_states.py --source "$linkedin_state_db" \
