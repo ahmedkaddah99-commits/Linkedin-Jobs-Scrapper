@@ -2419,7 +2419,10 @@ class StateStore:
                     json.dumps(detail or {}),
                 ),
             )
+            from backend.acquisition.job_role_policy import title_matches
             for card in cards:
+                if not title_matches(card.title):
+                    continue
                 self.connection.execute(
                     "INSERT OR REPLACE INTO search_cards(run_id, company_scan_id, linkedin_company_id, linkedin_job_id, card_json) VALUES (?, ?, ?, ?, ?)",
                     (run_id, company_scan_id, linkedin_company_id, card.linkedin_job_id, json.dumps(card.__dict__)),
@@ -3685,8 +3688,6 @@ class CatalogRunner:
         assert self.store is not None
         from backend.acquisition.job_role_policy import title_matches
         if not title_matches(card.title):
-            self._persist_exclusion(context.group.linkedin_company_id, card.linkedin_job_id,
-                                    "owner_role_policy_excluded", card.__dict__)
             self._increment("role_policy_excluded")
             return
         decision = evaluate_ownership(
@@ -4183,8 +4184,7 @@ class CatalogRunner:
         location_classification, location_reason = classify_germany_location(detail.location or card.location)
         from backend.acquisition.job_role_policy import exceeds_experience_limit
         if exceeds_experience_limit(detail.description):
-            self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class="owner_experience_limit", detail=detail.__dict__)
-            self._persist_exclusion(company_id, job_id, "owner_experience_limit", detail.__dict__)
+            self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class="owner_experience_limit", detail={})
             return
         if location_classification not in {
             LOCATION_GERMANY_CONFIRMED,

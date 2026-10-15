@@ -680,7 +680,8 @@ def _job_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
 
 def _is_accepted_job_page(job: Mapping[str, Any], provider: str) -> bool:
     title = _first_value(job, ("title", "job_title", "text"))
-    if not title:
+    from backend.acquisition.job_role_policy import accepts_record
+    if not title or not accepts_record({**job, "title": title}):
         return False
     if (provider not in NATIVE_ATS_CONNECTORS or employer_page_needs_verification(job)) and generic_employer_non_job_reason(job):
         return False
@@ -1983,6 +1984,8 @@ class EmployerState:
         generation_id: str = "",
         source_version: str = "",
     ) -> None:
+        from backend.acquisition.job_role_policy import accepts_record
+        result.jobs = [job for job in result.jobs if accepts_record(job)]
         company_key = result.company.canonical_company_id or result.company.website_url
         result.outcome = result.resolved_outcome()
         with self.connection:

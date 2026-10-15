@@ -3760,10 +3760,10 @@ class SqliteAcquisitionStore(_SqliteStore):
         from backend.application.employer_acquisition_policy import excluded_company_ids
         excluded = excluded_company_ids()
         from backend.acquisition.title_collar import classify_title
-        from backend.acquisition.job_role_policy import title_matches
+        from backend.acquisition.job_role_policy import title_matches, exceeds_experience_limit
         for raw_row in candidate_rows:
             row = _dict_row(raw_row) if hasattr(raw_row, "keys") else dict(raw_row)
-            if not title_matches(row.get("title")):
+            if not title_matches(row.get("title")) or exceeds_experience_limit(row.get("version_description")):
                 rejected.append({"canonical_job_id": str(row.get("canonical_job_id") or ""), "external_job_id": str(row.get("source_job_id") or ""), "title": str(row.get("title") or ""), "target_id": "publication", "task_id": "publication", "reasons": [{"code": "owner_role_policy_excluded", "fields": ["title"]}], "status": "rejected"})
                 continue
             if classify_title(row.get("title")) == "blue":

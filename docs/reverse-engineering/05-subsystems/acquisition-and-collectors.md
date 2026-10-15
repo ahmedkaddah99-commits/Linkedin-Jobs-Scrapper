@@ -527,3 +527,20 @@ scope and evidence live in `data/audit/blue_employer_cleanup_2026-10-09/`.
 3. WS3-G5: add a script classification header/manifest (RUNTIME/NET-OPS/AUDIT) and move DEV tooling out of `scripts/` ownership.
 4. WS3-G4: retire or slim `master_linkedin_jobs_url_catalog.py`.
 5. Execute T01, T04, T11 reviews as written in the ticket candidates.
+
+## Owner role scope and historical purge (2026-10-16)
+
+`data/job_role_policy.json` is the shared German/English title allowlist and
+exclusion policy. `backend/acquisition/job_role_policy.py` applies it before
+LinkedIn detail queueing and employer persistence, then checks explicit required
+experience above two years. Unknown experience is allowed; preferred experience
+is not treated as mandatory. Publication repeats the checks. Title-only matching
+cannot promise coverage of every novel synonym.
+
+The offline `scripts/rebuild_role_filtered_database.py` preserves producer rowids,
+filters jobs and dependent history, retains only current catalog publication
+membership, and requires SQLite integrity and foreign-key checks before producing
+a completion receipt. Stop all writers and timers before use; replace the source
+only after reading the receipt and checking the retained records. Customer profile
+and document tables are preserved. Resume the previously enabled schedules after
+replacement. Keep the installed keyword file byte-identical to the committed file.

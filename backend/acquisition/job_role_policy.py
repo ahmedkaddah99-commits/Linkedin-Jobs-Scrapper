@@ -28,10 +28,26 @@ def rejection_reason(title: str) -> str:
     return "owner_role_policy_excluded" if not title_matches(title) else ""
 
 def exceeds_experience_limit(text: str, *, max_years: int = 2) -> bool:
-    value = str(text or '').casefold()
-    patterns = [
-        r"(?:at least|minimum|min\.?|over|more than|mehr als|mindestens|über)\s*(\d+)\s*(?:years?|jahre?n?)",
-        r"(\d+)\s*\+\s*(?:years?|jahre?n?)",
-        r"(\d+)\s*(?:years?|jahre?n?)\s*(?:of|professional|full[- ]?time|beruf|vollzeit|erfahrung)",
-    ]
-    return any(int(m.group(1)) > max_years for p in patterns for m in re.finditer(p, value))
+    """Require experience context; do not confuse company age/benefits with requirements."""
+    import html
+    value = html.unescape(re.sub(r"<[^>]+>", " ", str(text or ""))).casefold()
+    value = value.translate(str.maketrans({"\u00e4": "ae", "\u00f6": "oe", "\u00fc": "ue", "\u00df": "ss", "\u2013": "-", "\u2014": "-"}))
+    numbers = {"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10,"ein":1,"eine":1,"einem":1,"zwei":2,"drei":3,"vier":4,"fuenf":5,"sechs":6,"sieben":7,"acht":8,"neun":9,"zehn":10}
+    value = re.sub(r"\b("+"|".join(numbers)+r")\b", lambda m: str(numbers[m[0]]), value)
+    for sentence in re.split(r"[.!?;\n]", value):
+        if not re.search(r"experience|erfahrung|berufspraxis|berufstaetigkeit", sentence):
+            continue
+        if re.search(r"preferred|desirable|idealerweise|wuenschenswert|von vorteil|a plus|internship|praktik", sentence):
+            continue
+        for m in re.finditer(r"(?P<prefix>more than|over|mehr als|ueber)?\s*(?P<low>\d+)\s*(?:[-/]|to|bis)?\s*(?P<high>\d+)?\s*\+?\s*(?:years?|jahr(?:e|en)?|jaehrig\w*)", sentence):
+            # Required lower bound: 2-3 years can accept someone with two years.
+            n = int(m['low'])
+            if n > max_years or (m['prefix'] and n >= max_years):
+                return True
+    return False
+
+
+def accepts_record(record):
+    title = record.get('job_title') or record.get('title') or record.get('title_raw') or ''
+    description = record.get('description_text') or record.get('description') or record.get('full_description') or record.get('description_html') or ''
+    return title_matches(title) and not exceeds_experience_limit(description)

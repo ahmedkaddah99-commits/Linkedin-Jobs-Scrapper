@@ -1,36 +1,29 @@
 {
-  "version": "ahmed-business-entry-level-v1",
+  "version": "ahmed-business-entry-level-v3",
   "max_full_time_experience_years": 2,
   "included_title_patterns": [
-    "\\b(business|bi)\\s*(analyst|intelligence)\\b",
-    "\\bdata analyst\\b",
-    "\\b(strategy|strategic)\\b",
-    "\\b(transformation|innovation|digital transformation)\\b",
-    "\\b(product|project|program|portfolio)\\s*(management|manager|owner|analyst|coordinator|specialist)?\\b",
-    "\\b(operations|operational)\\b",
-    "\\b(process|business process|requirements|solution)\\s*(analyst|consultant|specialist|engineer)?\\b",
-    "\\b(management|business)\\s*consult(ant|ing)\\b",
-    "\\b(technology|it|ai|genai|erp|sap|odoo)\\s*(consultant|analyst|specialist)\\b",
-    "\\b(business development|partnerships|partner|commercial)\\b",
-    "\\b(customer success|account)\\s*(specialist|associate|manager)\\b",
-    "\\b(pmo|change management|continuous improvement|process improvement)\\b",
-    "\\b(supply chain|procurement|purchasing)\\s*(analyst|specialist|associate|coordinator)\\b",
-    "\\b(geschaefts|gesch?fts|business)\\s*(analyst|entwicklung|entwickler|development)\\b",
-    "\\b(unternehmensberatung|strategie|strategischer|transformation|innovation)\\b",
-    "\\b(produkt|projekt|programm|portfolio)\\s*(manager|management|owner|analyst|koordinator|spezialist|berater)?\\b",
-    "\\b(operations|betrieb|prozess|anforderungs|loesungs|l?sungs)\\s*(analyst|berater|spezialist|manager|koordinator)?\\b",
-    "\\b(partnerschaften|partner|vertrieb|kundenentwicklung|geschaeftsentwicklung|gesch?ftsentwicklung)\\b",
-    "\\b(kunden|account)\\s*(erfolg|betreuung|manager|spezialist|berater)\\b",
-    "\\b(einkauf|beschaffung|lieferkette)\\s*(analyst|spezialist|assistent|koordinator)?\\b"
+    "\\b(?:business|bi|data|daten|geschaefts)[ -]?(?:analyst\\w*|analysis|analyse|intelligence)\\b",
+    "\\b(?:strategy|strategic|strategie\\w*|transformation\\w*|innovation\\w*|digitalisierung\\w*)\\b",
+    "\\b(?:product|produkt|project|projekt|program|programm|portfolio)[ -]?(?:manager\\w*|management|owner|analyst\\w*|coordinator|koordinator\\w*|specialist|spezialist\\w*|assisten\\w*|referent\\w*|mitarbeiter\\w*)\\b",
+    "\\b(?:operations|operational|betriebsorganisation|prozessmanagement|prozessoptimierung|prozessberater\\w*|prozessanalyst\\w*|process improvement|business process|requirements (?:analyst|engineer|manager)|anforderungsmanager\\w*|anforderungsanalyst\\w*)\\b",
+    "\\b(?:management|business|technology|it|ai|genai|erp|sap|odoo|digital)[ -]?(?:consultant|consulting|analyst\\w*|specialist|berater\\w*|beratung)\\b",
+    "\\b(?:unternehmensberater\\w*|unternehmensberatung|organisationsberater\\w*|organisationsentwicklung|business development|geschaeftsentwickl\\w*|corporate development|partnerships?|partnerschaften|partnermanager\\w*|partner management|commercial)\\b",
+    "\\b(?:customer success|account|key account)[ -]?(?:specialist|associate|manager|executive|management)\\b",
+    "\\b(?:kundenbetreuer\\w*|kundenberater\\w*|kundenbetreuung|vertriebsmitarbeiter\\w*|vertriebsmanager\\w*|vertriebsassisten\\w*|sales (?:development|operations|representative|manager|associate|consultant)|business development representative)\\b",
+    "\\b(?:pmo|change management|change manager|continuous improvement|operational excellence|business excellence|agile coach|scrum master)\\b",
+    "\\b(?:supply chain|procurement|purchasing|logistik|einkaufs?)[ -]?(?:analyst\\w*|specialist|associate|coordinator|manager\\w*|spezialist\\w*|assisten\\w*|sachbearbeiter\\w*)\\b",
+    "\\b(?:einkaeufer\\w*|beschaffungsmanager\\w*|sachbearbeiter\\w* (?:einkauf|beschaffung)|gruenderassisten\\w*|founders? associate|venture builder|entrepreneur in residence)\\b"
   ],
   "excluded_title_patterns": [
-    "\\b(marketing|brand|content|social media|seo|copywriter|creative|graphic|recruit|talent acquisition|hr business partner)\\b",
-    "\\b(finance|financial|accounting|accountant|controller|audit|tax|treasury|investment|trading|banking)\\b",
-    "\\b(senior|sr\\.?|lead|principal|staff|head of|director|vice president|vp|chief|executive)\\b",
-    "\\b(3\\+|[3-9]|1[0-9])\\s*years?\\b",
-    "\\b(internship|intern)\\b",
-    "\\b(praktikum|marketing|werbung|redaktion|personal|recruiting|talent acquisition)\\b",
-    "\\b(finanz|finanzen|buchhaltung|buchhalter|controlling|pruefung|pr?fung|steuer|investment|handel|bank)\\b",
-    "\\b(leitend|teamleiter|bereichsleiter|geschaeftsfuehrer|gesch?ftsf?hrer|vorstand)\\b"
+    "\\b(?:recruit\\w*|talent acquisition|personal\\w*|hr|human resources|financ\\w*|finanz\\w*|accounting|accountant\\w*|controll\\w*|audit\\w*|tax\\w*|treasury|investment\\w*|trading|banking|buchhalt\\w*|steuer\\w*|wirtschaftspruef\\w*)\\b",
+    "\\b(?:marketing|brand|content|social media|seo|copywriter|creative|graphic|werbung|redaktion\\w*|kreativ\\w*|grafik\\w*)\\b",
+    "\\b(?:senior|sr|lead|principal|staff|head of|director|vice president|vp|chief|leitend\\w*|teamleit\\w*|bereichsleit\\w*|geschaeftsfuehrer\\w*|vorstand\\w*|direktor\\w*)\\b",
+    "\\b(?:internship|intern|praktik\\w*|werkstudent\\w*|ausbildung|apprentice\\w*)\\b",
+    "\\b(?:software engineer|software developer|entwickler|mechanical|electrical|bauingenieur|pflege|arzt|aerzt\\w*)\\b"
+  ],
+  "notes": [
+    "Whole normalized titles; English and German variants. Exclusions override inclusions.",
+    "Unknown experience is allowed; explicit required experience above two years is excluded. Preferred experience is not a requirement.",
+    "Title keywords cannot guarantee semantic coverage of every novel title."
   ]
 }
