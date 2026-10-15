@@ -86,9 +86,9 @@ def rebuild(source, output, kind):
         if typ in ('index','trigger','view'):
             log({'creating':name}); dst.execute(sql)
     dst.commit()
-    result=dst.execute('PRAGMA integrity_check').fetchall()
+    result=dst.execute('PRAGMA main.integrity_check').fetchall()
     if result!=[('ok',)]: raise RuntimeError(str(result[:10]))
-    violations=dst.execute('PRAGMA foreign_key_check').fetchall()
+    violations=dst.execute('PRAGMA main.foreign_key_check').fetchall()
     if violations: raise RuntimeError(str(violations[:10]))
     receipt.update(integrity='ok',foreign_key_violations=0,finished=time.time(),bytes=output.stat().st_size)
     output.with_suffix(output.suffix+'.receipt.json').write_text(json.dumps(receipt,indent=2))
