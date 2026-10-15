@@ -12,7 +12,8 @@ def load_policy(path: str = str(DEFAULT_POLICY_PATH)):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 def normalize_title(title: str) -> str:
-    return re.sub(r"[^a-z0-9+#]+", " ", str(title or "").casefold()).strip()
+    text = str(title or "").casefold().translate(str.maketrans({'ä':'ae','ö':'oe','ü':'ue','ß':'ss'}))
+    return re.sub(r"[^a-z0-9+#]+", " ", text).strip()
 
 def title_matches(title: str, *, policy_path: str | None = None) -> bool:
     text = normalize_title(title)
@@ -25,3 +26,12 @@ def title_matches(title: str, *, policy_path: str | None = None) -> bool:
 
 def rejection_reason(title: str) -> str:
     return "owner_role_policy_excluded" if not title_matches(title) else ""
+
+def exceeds_experience_limit(text: str, *, max_years: int = 2) -> bool:
+    value = str(text or '').casefold()
+    patterns = [
+        r"(?:at least|minimum|min\.?|over|more than|mehr als|mindestens|über)\s*(\d+)\s*(?:years?|jahre?n?)",
+        r"(\d+)\s*\+\s*(?:years?|jahre?n?)",
+        r"(\d+)\s*(?:years?|jahre?n?)\s*(?:of|professional|full[- ]?time|beruf|vollzeit|erfahrung)",
+    ]
+    return any(int(m.group(1)) > max_years for p in patterns for m in re.finditer(p, value))

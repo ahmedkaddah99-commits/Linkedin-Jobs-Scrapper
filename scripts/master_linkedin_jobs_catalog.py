@@ -4181,6 +4181,11 @@ class CatalogRunner:
             )
             return
         location_classification, location_reason = classify_germany_location(detail.location or card.location)
+        from backend.acquisition.job_role_policy import exceeds_experience_limit
+        if exceeds_experience_limit(detail.description):
+            self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class="owner_experience_limit", detail=detail.__dict__)
+            self._persist_exclusion(company_id, job_id, "owner_experience_limit", detail.__dict__)
+            return
         if location_classification not in {
             LOCATION_GERMANY_CONFIRMED,
             LOCATION_REMOTE_GERMANY_ELIGIBLE,

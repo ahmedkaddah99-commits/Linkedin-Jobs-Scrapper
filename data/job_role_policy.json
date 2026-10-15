@@ -2,17 +2,35 @@
   "version": "ahmed-business-entry-level-v1",
   "max_full_time_experience_years": 2,
   "included_title_patterns": [
-    "\\b(business|bi)\\s*(analyst|intelligence)\\b", "\\bdata analyst\\b", "\\b(strategy|strategic)\\b",
-    "\\b(transformation|innovation|digital transformation)\\b", "\\b(product|project|program|portfolio)\\s*(management|manager|owner|analyst|coordinator|specialist)?\\b",
-    "\\b(operations|operational)\\b", "\\b(process|business process|requirements|solution)\\s*(analyst|consultant|specialist|engineer)?\\b",
-    "\\b(management|business)\\s*consult(ant|ing)\\b", "\\b(technology|it|ai|genai|erp|sap|odoo)\\s*(consultant|analyst|specialist)\\b",
-    "\\b(business development|partnerships|partner|commercial)\\b", "\\b(customer success|account)\\s*(specialist|associate|manager)\\b",
-    "\\b(pmo|change management|continuous improvement|process improvement)\\b", "\\b(supply chain|procurement|purchasing)\\s*(analyst|specialist|associate|coordinator)\\b"
+    "\\b(business|bi)\\s*(analyst|intelligence)\\b",
+    "\\bdata analyst\\b",
+    "\\b(strategy|strategic)\\b",
+    "\\b(transformation|innovation|digital transformation)\\b",
+    "\\b(product|project|program|portfolio)\\s*(management|manager|owner|analyst|coordinator|specialist)?\\b",
+    "\\b(operations|operational)\\b",
+    "\\b(process|business process|requirements|solution)\\s*(analyst|consultant|specialist|engineer)?\\b",
+    "\\b(management|business)\\s*consult(ant|ing)\\b",
+    "\\b(technology|it|ai|genai|erp|sap|odoo)\\s*(consultant|analyst|specialist)\\b",
+    "\\b(business development|partnerships|partner|commercial)\\b",
+    "\\b(customer success|account)\\s*(specialist|associate|manager)\\b",
+    "\\b(pmo|change management|continuous improvement|process improvement)\\b",
+    "\\b(supply chain|procurement|purchasing)\\s*(analyst|specialist|associate|coordinator)\\b",
+    "\\b(geschaefts|gesch?fts|business)\\s*(analyst|entwicklung|entwickler|development)\\b",
+    "\\b(unternehmensberatung|strategie|strategischer|transformation|innovation)\\b",
+    "\\b(produkt|projekt|programm|portfolio)\\s*(manager|management|owner|analyst|koordinator|spezialist|berater)?\\b",
+    "\\b(operations|betrieb|prozess|anforderungs|loesungs|l?sungs)\\s*(analyst|berater|spezialist|manager|koordinator)?\\b",
+    "\\b(partnerschaften|partner|vertrieb|kundenentwicklung|geschaeftsentwicklung|gesch?ftsentwicklung)\\b",
+    "\\b(kunden|account)\\s*(erfolg|betreuung|manager|spezialist|berater)\\b",
+    "\\b(einkauf|beschaffung|lieferkette)\\s*(analyst|spezialist|assistent|koordinator)?\\b"
   ],
   "excluded_title_patterns": [
     "\\b(marketing|brand|content|social media|seo|copywriter|creative|graphic|recruit|talent acquisition|hr business partner)\\b",
     "\\b(finance|financial|accounting|accountant|controller|audit|tax|treasury|investment|trading|banking)\\b",
     "\\b(senior|sr\\.?|lead|principal|staff|head of|director|vice president|vp|chief|executive)\\b",
-    "\\b(3\\+|[3-9]|1[0-9])\\s*years?\\b", "\\b(internship|intern)\\b"
+    "\\b(3\\+|[3-9]|1[0-9])\\s*years?\\b",
+    "\\b(internship|intern)\\b",
+    "\\b(praktikum|marketing|werbung|redaktion|personal|recruiting|talent acquisition)\\b",
+    "\\b(finanz|finanzen|buchhaltung|buchhalter|controlling|pruefung|pr?fung|steuer|investment|handel|bank)\\b",
+    "\\b(leitend|teamleiter|bereichsleiter|geschaeftsfuehrer|gesch?ftsf?hrer|vorstand)\\b"
   ]
 }
