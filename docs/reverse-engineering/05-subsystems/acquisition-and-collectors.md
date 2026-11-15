@@ -2,6 +2,11 @@
 
 # Acquisition and collectors (WS-3 primary)
 
+## Source-title admission (2026-11-15)
+
+Recurring employer collection and focus validation now defer unfamiliar source
+titles to grounded function classification. See [the title-admission report](../../reports/employer-title-admission-2026-11-15.md) for scope, safeguards and verification.
+
 ## Deterministic title-only collar audit (2026-10-08)
 
 `scripts/snapshot_title_collar_audit.py` captures title-only records from the

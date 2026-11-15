@@ -105,6 +105,7 @@ subsystems:
       - backend/acquisition/producer_adapters.py
     documentation:
       - docs/reverse-engineering/05-subsystems/acquisition-and-collectors.md
+      - docs/reports/employer-title-admission-2026-11-15.md
       - docs/reverse-engineering/05-subsystems/publication-and-catalog.md
       - docs/reverse-engineering/05-subsystems/company-identity-enrichment-and-logos.md
       - docs/reverse-engineering/05-subsystems/applicant-intelligence.md
