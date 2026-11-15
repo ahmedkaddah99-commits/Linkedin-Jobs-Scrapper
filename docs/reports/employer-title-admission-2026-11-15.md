@@ -27,3 +27,29 @@ The new regression traverses the actual PUMA collector with unrelated unfamiliar
 titles and confirms every eligible listing reaches its full detail request.
 Deployed operational evidence is retained under
 `/srv/runr/ops/employer-title-admission-20261115/`.
+
+## Live acceptance
+
+Code commit `444496a148cda3878613f434efbe006468ddb15c` was pushed and
+activated at 17:23:31 UTC. Worker and API releases retain their previous deployed
+bases and install a hash-verified archive of the four changed runtime files.
+Effective systemd overrides select the new releases; previous releases and
+configuration evidence remain available for rollback.
+
+The fresh owner-filtered PUMA check enumerated 79 current listings, excluded six
+student titles, and extracted 73/73 remaining full descriptions and application
+destinations with zero failed details. Import completed at 17:29:18 UTC through
+the normal repository and immutable source archive path. The collector timer was
+resumed after the existing batch released its lock.
+
+At 17:32:54 UTC the serving API release's customer-feed repository returned 14
+published PUMA jobs, up from four before deployment. R44332 is present, classified
+as Product Manager with a current validated description. Newly visible functions
+also include customer service, e-commerce planning and fleet management. No title
+or eligibility gate was bypassed to publish the example. API readiness and all
+three affected recurring timers were verified healthy. The owner stopped desktop
+automation with Escape; final acceptance used background VPS and feed checks.
+
+Other employers receive the same admission change in their subsequent continuous
+rounds. A successful source check is not a promise that every listing qualifies;
+unsupported classifications retain their review state.
